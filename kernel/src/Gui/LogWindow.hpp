@@ -58,6 +58,9 @@ namespace Gui {
         // Clear all log entries
         void Clear();
 
+        // Optimized render for the last added line
+        void PaintLastLine();
+
         // Get number of visible lines based on panel height
         int GetVisibleLineCount() const;
 
@@ -70,6 +73,9 @@ namespace Gui {
 
         // Copy string with length limit
         void CopyString(char* dest, const char* src, int maxLen);
+
+        // Helper to draw a single entry at specific Y
+        void DrawEntry(const LogEntry& entry, int y, int contentX, int contentW);
     };
 
     // Global log window instance (created by DebugGui)

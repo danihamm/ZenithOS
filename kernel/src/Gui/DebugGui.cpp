@@ -68,7 +68,7 @@ namespace Gui {
 
         s_logWindow->AddLine(component, level, message);
 
-        g_wm.Update();
+        s_logWindow->PaintLastLine();
     }
 
     void UpdateTime(uint16_t year, uint8_t month, uint8_t day,

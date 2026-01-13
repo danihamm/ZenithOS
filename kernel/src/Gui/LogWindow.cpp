@@ -178,96 +178,131 @@ namespace Gui {
             const LogEntry& entry = m_lines[idx];
             if (!entry.used) continue;
 
-            int x = contentX + 4;
-
-            if (entry.type == LogEntryType::Normal) {
-                // Draw component name
-                DrawString(x, y, entry.component, Colors::Cyan, Colors::Surface);
-                x += 12 * FONT_WIDTH;  // Fixed width for component
-
-                // Draw separator
-                DrawString(x, y, ": [", Colors::TextDim, Colors::Surface);
-                x += 3 * FONT_WIDTH;
-
-                // Draw level with color
-                uint32_t levelColor = GetLevelColor(entry.level);
-                const char* levelPrefix = GetLevelPrefix(entry.level);
-                DrawString(x, y, levelPrefix, levelColor, Colors::Surface);
-                x += 5 * FONT_WIDTH;  // Fixed width for level
-
-                // Draw closing bracket and message
-                DrawString(x, y, "] ", Colors::TextDim, Colors::Surface);
-                x += 2 * FONT_WIDTH;
-
-                // Draw message text
-                DrawString(x, y, entry.text, Colors::Text, Colors::Surface);
-            } 
-            else {
-                // Render Table Row
-                // Determine layout
-                int colCount = 1;
-                for (int k = 0; entry.text[k] != '\0'; k++) {
-                    if (entry.text[k] == COLUMN_SEPARATOR) colCount++;
-                }
-
-                // "Inline" width calculation: Fixed width per column to keep it compact but aligned
-                constexpr int MIN_COL_WIDTH = 100;
-                
-                // Calculate offset to match standard log entry text start
-                // Component(12) + ": ["(3) + Level(5) + "] "(2) = 22 chars
-                int indentOffset = (12 + 3 + 5 + 2) * FONT_WIDTH; 
-                
-                int colWidth = MIN_COL_WIDTH;
-                int tableWidth = colCount * colWidth;
-                int startX = contentX + 4 + indentOffset;
-                
-                // Ensure we don't overflow the remaining space
-                int maxTableWidth = contentW - 8 - indentOffset;
-                if (tableWidth > maxTableWidth) {
-                    tableWidth = maxTableWidth;
-                    colWidth = tableWidth / colCount;
-                }
-
-                // Determine border colors - Solid white
-                uint32_t borderColor = Colors::Text; 
-
-                // Draw Table Borders
-                // Top line for Header
-                if (entry.type == LogEntryType::TableHeader) {
-                    DrawHLine(startX, y - 2, tableWidth, borderColor);
-                }
-                
-                // Bottom line for everyone
-                DrawHLine(startX, y + FONT_HEIGHT + 2, tableWidth, borderColor);
-
-                // Draw columns
-                int currentX = startX;
-                int charIdx = 0;
-                
-                // Draw Left vertical line
-                DrawVLine(currentX, y - 2, FONT_HEIGHT + 5, borderColor);
-
-                for (int c = 0; c < colCount; c++) {
-                    char colBuffer[MAX_TEXT_LENGTH];
-                    int bufIdx = 0;
-                    
-                    while (entry.text[charIdx] != '\0' && entry.text[charIdx] != COLUMN_SEPARATOR) {
-                        colBuffer[bufIdx++] = entry.text[charIdx++];
-                    }
-                    colBuffer[bufIdx] = '\0';
-                    if (entry.text[charIdx] == COLUMN_SEPARATOR) charIdx++;
-
-                    // Draw text
-                    DrawStringTransparent(currentX + 4, y, colBuffer, Colors::Text);
-
-                    // Draw Right vertical line for this column
-                    DrawVLine(currentX + colWidth, y - 2, FONT_HEIGHT + 5, borderColor);
-                    
-                    currentX += colWidth;
-                }
-            }
+            DrawEntry(entry, y, contentX, contentW);
 
             y += FONT_HEIGHT + 4; // Spacing for row height
+        }
+
+        m_lastRenderedCount = m_count;
+    }
+
+    void LogWindow::DrawEntry(const LogEntry& entry, int y, int contentX, int contentW) {
+        int x = contentX + 4;
+
+        if (entry.type == LogEntryType::Normal) {
+            // Draw component name
+            DrawString(x, y, entry.component, Colors::Cyan, Colors::Surface);
+            x += 12 * FONT_WIDTH;  // Fixed width for component
+
+            // Draw separator
+            DrawString(x, y, ": [", Colors::TextDim, Colors::Surface);
+            x += 3 * FONT_WIDTH;
+
+            // Draw level with color
+            uint32_t levelColor = GetLevelColor(entry.level);
+            const char* levelPrefix = GetLevelPrefix(entry.level);
+            DrawString(x, y, levelPrefix, levelColor, Colors::Surface);
+            x += 5 * FONT_WIDTH;  // Fixed width for level
+
+            // Draw closing bracket and message
+            DrawString(x, y, "] ", Colors::TextDim, Colors::Surface);
+            x += 2 * FONT_WIDTH;
+
+            // Draw message text
+            DrawString(x, y, entry.text, Colors::Text, Colors::Surface);
+        } else {
+            // Render Table Row
+            // Determine layout
+            int colCount = 1;
+            for (int k = 0; entry.text[k] != '\0'; k++) {
+                if (entry.text[k] == COLUMN_SEPARATOR) colCount++;
+            }
+
+            // "Inline" width calculation: Fixed width per column to keep it compact but aligned
+            constexpr int MIN_COL_WIDTH = 100;
+            
+            // Calculate offset to match standard log entry text start
+            // Component(12) + ": ["(3) + Level(5) + "] "(2) = 22 chars
+            int indentOffset = (12 + 3 + 5 + 2) * FONT_WIDTH; 
+            
+            int colWidth = MIN_COL_WIDTH;
+            int tableWidth = colCount * colWidth;
+            int startX = contentX + 4 + indentOffset;
+            
+            // Ensure we don't overflow the remaining space
+            int maxTableWidth = contentW - 8 - indentOffset;
+            if (tableWidth > maxTableWidth) {
+                tableWidth = maxTableWidth;
+                colWidth = tableWidth / colCount;
+            }
+
+            // Determine border colors - Solid white
+            uint32_t borderColor = Colors::Text; 
+
+            // Draw Table Borders
+            // Top line for Header
+            if (entry.type == LogEntryType::TableHeader) {
+                DrawHLine(startX, y - 2, tableWidth, borderColor);
+            }
+            
+            // Bottom line for everyone
+            DrawHLine(startX, y + FONT_HEIGHT + 2, tableWidth, borderColor);
+
+            // Draw columns
+            int currentX = startX;
+            int charIdx = 0;
+            
+            // Draw Left vertical line
+            DrawVLine(currentX, y - 2, FONT_HEIGHT + 5, borderColor);
+
+            for (int c = 0; c < colCount; c++) {
+                char colBuffer[MAX_TEXT_LENGTH];
+                int bufIdx = 0;
+                
+                while (entry.text[charIdx] != '\0' && entry.text[charIdx] != COLUMN_SEPARATOR) {
+                    colBuffer[bufIdx++] = entry.text[charIdx++];
+                }
+                colBuffer[bufIdx] = '\0';
+                if (entry.text[charIdx] == COLUMN_SEPARATOR) charIdx++;
+
+                // Draw text
+                DrawStringTransparent(currentX + 4, y, colBuffer, Colors::Text);
+
+                // Draw Right vertical line for this column
+                DrawVLine(currentX + colWidth, y - 2, FONT_HEIGHT + 5, borderColor);
+                
+                currentX += colWidth;
+            }
+        }
+    }
+
+    void LogWindow::PaintLastLine() {
+        int contentX = GetContentX();
+        int contentY = GetContentY();
+        int contentW = GetContentWidth();
+        int contentH = GetContentHeight();
+        
+        int titleBarHeight = FONT_HEIGHT + 8;
+        int logY = contentY + titleBarHeight + 4;
+        int logHeight = contentH - titleBarHeight - 8;
+        int visibleLines = logHeight / (FONT_HEIGHT + 2);
+
+        // Check if we need to scroll. If we do, we must fall back to full window render
+        // to shift everything up. But Render() doesn't clear full screen, just the window background.
+        if (m_count > visibleLines) {
+            Render();
+            return;
+        }
+        
+        int rowHeight = FONT_HEIGHT + 4;
+        int lastIdx = m_head - 1;
+        if (lastIdx < 0) lastIdx += MAX_LINES;
+
+        int lineY = logY + (m_count - 1) * rowHeight;
+        
+        const LogEntry& entry = m_lines[lastIdx];
+        if (entry.used) {
+            DrawEntry(entry, lineY, contentX, contentW);
         }
 
         m_lastRenderedCount = m_count;

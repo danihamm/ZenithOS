@@ -18,16 +18,16 @@ ifeq ($(filter $(ARCH),aarch64 loongarch64 riscv64 x86_64),)
 endif
 
 # User controllable C compiler command.
-CC := cc
+CC := x86_64-elf-gcc
 
 # User controllable C++ compiler command.
-CXX := c++
+CXX := x86_64-elf-g++
 
 # User controllable Objective C compiler command.
-OBJC := g++
+OBJC := x86_64-elf-gcc
 
 # User controllable archiver command.
-AR := ar
+AR := x86_64-elf-ar
 
 # User controllable C flags.
 CFLAGS := -g -O2 -pipe

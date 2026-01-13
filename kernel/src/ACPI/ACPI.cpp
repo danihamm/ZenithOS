@@ -74,8 +74,6 @@ namespace Hal {
         table.AddRow({"OEM", oemCstr});
         table.Submit();
 
-        Gui::Log(Gui::LogLevel::Info, "ACPI", "Parsing ACPI tables");
-
         std::uint64_t nextTableAddress;
         
         if (xsdp->Revision >= 2) {
