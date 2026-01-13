@@ -1,25 +1,26 @@
-# OS220
-Research project aiming to create a modern kernel and operating system in C++
+# ZenithOS
+A research project kernel and operating system in C++.
 
-### Kernel
-- [x] Global Descriptor Table
-- [x] Output via Flanterm by mintsuki
-- [x] Memory map scanning
-- [x] Kernel-mode heap allocator
-- [x] ISR handling (interrupts)
-- [x] Exception handling
-- [x] Virtual memory paging
-- [ ] UEFI runtime service support
-- [ ] ACPI & AML support
-- [ ] PCI-e
-- [ ] HPET timer
-- [ ] Object manager
-- [ ] Ramdisk
-- [ ] Scheduler
+## Quickstart
+To build the kernel, run `make` in the root directory. An ISO file will be generated in the root directory of this tree.
 
-### Kernel C++ library
-- [x] new/delete operators
-- [x] String stream (`cstringstream`)
-- [x] Console output stream via `operator<<` (`kout`, `kerr`)
-- [x] Vector/array class
-- [ ] String class
+In order to run directly through QEMU, run `make run`.
+
+## System architecture
+ZenithOS is a 64-bit x86-64 kernel and operating system. It can run on both UEFI and legacy BIOS systems, but it is only tested on UEFI systems.
+
+### Kernel code (src/) directory structure
+| Dir. name | Description |
+| --------- | ----------- |
+| ACPI      | ACPI-related components |
+| Common    | Kernel panic routines  |
+| CppLib    | Kernel C++ library (inc. new/delete implementation, string functions, spinlock, vectors, string stream)
+| Efi       | EFI-related definitions |
+| Gui       | GUI components |
+| Hal       | Low-level architecture code (interrupts, etc) |
+| Io        | I/O port implementations
+| Libraries | Shared string/memory routines + housing for external libraries |
+| Memory    | Kernel memory components (inc. kernel heap, page frame allocation, virtual memory/paging)
+| Platform  | Misc platform code
+| Terminal  | Obsolete terminal implementation based on Flanterm
+| Timekeeping | Time-related code
