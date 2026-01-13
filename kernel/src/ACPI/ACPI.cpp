@@ -1,11 +1,10 @@
 #include "ACPI.hpp"
-#include <Terminal/Terminal.hpp>
+#include <Gui/DebugGui.hpp>
+#include <Gui/LogTable.hpp>
 #include <CppLib/Stream.hpp>
 #include <CppLib/Vector.hpp>
 #include <Libraries/String.hpp>
 #include <Memory/HHDM.hpp>
-
-using namespace Kt;
 
 namespace Hal {
     kcp::vector<const char*>* ACPITables;
@@ -52,20 +51,30 @@ namespace Hal {
     }
 
     void ACPI::HandleRSDT(CommonSDTHeader* sdtHeader) {
-        KernelLogStream(ERROR, "ACPI") << "Unimplemented - HandleRSDT";
+        Gui::Log(Gui::LogLevel::Error, "ACPI", "Unimplemented - HandleRSDT");
     }
 
     ACPI::ACPI(XSDP* xsdp) {
         if (xsdp->TestChecksum() != true) {
-            KernelLogStream(ERROR, "ACPI") << "Checksum failed for SDT!";
+            Gui::Log(Gui::LogLevel::Error, "ACPI", "Checksum failed for SDT!");
             return;
         }
 
-        KernelLogStream(OK, "ACPI") << "Checksum passed for SDT";
+        Gui::Log(Gui::LogLevel::Ok, "ACPI", "Checksum passed for SDT");
 
+        Gui::LogTable table;
 
-        KernelLogStream(INFO, "ACPI") << "OEM ID: " << xsdp->GetOEMID();
-        KernelLogStream(INFO, "ACPI") << "ACPI version: " << xsdp->Revision;
+        kcp::cstringstream ver; ver << xsdp->Revision; const char* acpiRevCstr = ver.c_str();
+        const char* oemCstr = xsdp->GetOEMID();
+
+        table.AddColumn("Title");
+        table.AddColumn("Value");
+
+        table.AddRow({"ACPI rev.", acpiRevCstr});
+        table.AddRow({"OEM", oemCstr});
+        table.Submit();
+
+        Gui::Log(Gui::LogLevel::Info, "ACPI", "Parsing ACPI tables");
 
         std::uint64_t nextTableAddress;
         

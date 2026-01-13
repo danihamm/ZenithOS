@@ -8,6 +8,7 @@
 #include <Memory/Heap.hpp>
 #include <Terminal/Terminal.hpp>
 #include <Libraries/String.hpp>
+#include <Gui/DebugGui.hpp>
 
 kcp::cstringstream::cstringstream()
 {
@@ -25,7 +26,7 @@ kcp::cstringstream& kcp::cstringstream::operator<<(char c) {
 
     if (this->string == nullptr)
     {
-        Kt::KernelLogStream(Kt::ERROR, "kcp::cstringstream") << "Character streaming failed due to failed allocation.";
+        Gui::Log(Gui::LogLevel::Error, "kcp::cstringstream", "Character streaming failed due to failed allocation.");
         return *this;
     }
     

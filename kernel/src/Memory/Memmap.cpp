@@ -1,5 +1,4 @@
 #include "Memmap.hpp"
-#include <Terminal/Terminal.hpp>
 #include <Common/Panic.hpp>
 
 #include "Heap.hpp"

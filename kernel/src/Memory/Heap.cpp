@@ -9,7 +9,7 @@
 #include "HHDM.hpp"
 
 #include <Libraries/Memory.hpp>
-#include <Terminal/Terminal.hpp>
+#include <Gui/DebugGui.hpp>
 #include <Common/Panic.hpp>
 #include <Platform/Util.hpp>
 
@@ -51,6 +51,10 @@ namespace Memory
     HeapAllocator::HeapAllocator()
     {
         InsertPagesToFreelist(0x32);
+        m_totalBlocks = 1;  // Start with 1 large block
+        m_freeBlocks = 1;
+        m_totalFreeMemory = 0x1000 * 0x32;
+        m_largestFreeBlock = 0x1000 * 0x32;
     }
 
     void* HeapAllocator::Request(size_t size) {
@@ -79,7 +83,15 @@ namespace Memory
                     auto newBlockSize = locatedBlockSize - sizeNeeded;
 
                     InsertToFreelist(rest, newBlockSize);
+                    // Block was split, so we still have same number of free blocks
+                    // (removed one, added one back)
+                } else {
+                    // Entire block consumed
+                    m_freeBlocks--;
                 }
+                
+                m_totalFreeMemory -= sizeNeeded;  // Track actual memory used including header
+                m_totalAllocated += sizeNeeded;   // Track cumulative allocations
                 
                 Lock.Release();
                 return block;
@@ -91,9 +103,19 @@ namespace Memory
             Lock.Release();
         }
 
-        // First pass allocation failed
-        size_t pagesNeeded = size / 0x1000;
+        // First pass allocation failed - need more memory
+        size_t pagesNeeded = (size / 0x1000) + 1;
+        size_t allocatedSize = pagesNeeded * 0x1000;
         InsertPagesToFreelist(pagesNeeded);
+        
+        // Added new pages as one large free block
+        m_freeBlocks++;
+        m_totalFreeMemory += allocatedSize;
+        if (allocatedSize > m_largestFreeBlock) {
+            m_largestFreeBlock = allocatedSize;
+        }
+
+        m_totalAllocated += allocatedSize;
 
         return Request(size);
     }
@@ -124,6 +146,13 @@ namespace Memory
         void* actualBlock = (void*)header;
 
         InsertToFreelist(actualBlock, size);
+        m_freeBlocks++;
+        m_totalFreeMemory += actualSize;  // Include header in free memory
+        
+        // Update largest free block if needed
+        if (actualSize > m_largestFreeBlock) {
+            m_largestFreeBlock = actualSize;
+        }
 
         Lock.Release();
     }
@@ -134,7 +163,7 @@ namespace Memory
         size_t i{0};
 
         while (current != nullptr) {
-            Kt::KernelLogStream(Kt::DEBUG, "HeapAllocator") << base::dec << i << " " << current->size << " bytes & address 0x" << base::hex << (uint64_t)current;
+            Gui::GuiLogStream(Gui::LogLevel::Debug, "HeapAllocator") << Gui::base::dec() << i << " " << current->size << " bytes & address 0x" << Gui::base::hex() << (uint64_t)current;
             current = current->next;
             i++;
         }

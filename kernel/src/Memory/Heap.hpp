@@ -19,6 +19,13 @@ namespace Memory {
 
         Node head{};
 
+        /* Heap statistics values */
+        size_t m_totalBlocks = 0;
+        size_t m_freeBlocks = 0;
+        size_t m_totalFreeMemory = 0;
+        size_t m_largestFreeBlock = 0;
+        size_t m_totalAllocated = 0;  // Total bytes allocated since boot
+
         Header* GetHeader(void* block);
         void InsertToFreelist(void* ptr, std::size_t size);
         void InsertPageToFreelist();
@@ -30,6 +37,14 @@ namespace Memory {
         void Free(void *pagePtr);
         void Walk();
         size_t GetAllocatedBlockSize(void* ptr);
+
+        /* Heap statistics getter/setters */
+        size_t GetTotalBlocks() const { return m_totalBlocks; }
+        size_t GetFreeBlocks() const { return m_freeBlocks; }
+        size_t GetTotalFreeMemory() const { return m_totalFreeMemory; }
+        size_t GetLargestFreeBlock() const { return m_largestFreeBlock; }
+        size_t GetTotalAllocated() const { return m_totalAllocated; }
+        
     };
 
     extern HeapAllocator* g_heap;

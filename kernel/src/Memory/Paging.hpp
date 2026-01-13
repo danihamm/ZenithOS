@@ -1,7 +1,7 @@
 #pragma once
 #include <limine.h>
 #include <cstdint>
-#include <Terminal/Terminal.hpp>
+#include <Gui/DebugGui.hpp>
 
 namespace Memory::VMM {
     struct PageTableEntry {
@@ -45,7 +45,7 @@ namespace Memory::VMM {
 
         VirtualAddress(std::uint64_t newAddress) {
             if (newAddress % 0x1000 != 0) {
-                Kt::KernelLogStream(Kt::WARNING, "VMM") << "VirtualAddress object created with non-aligned value.";
+                Gui::Log(Gui::LogLevel::Warning, "VMM", "VirtualAddress object created with non-aligned value.");
             }
 
             address = newAddress;

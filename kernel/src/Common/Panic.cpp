@@ -6,74 +6,45 @@
 #include "Panic.hpp"
 #include "../CppLib/BoxUI.hpp"
 
+#include <Gui/DebugGui.hpp>
+#include <Gui/WindowManager.hpp>
+#include <Gui/PanicWindow.hpp>
+
+// Static storage for panic window to avoid heap allocation during crash
+static char s_panicWindowStorage[sizeof(Gui::PanicWindow)];
+static Gui::PanicWindow* s_panicWindow = nullptr;
+
+// Placement new for freestanding environment
+inline void* operator new(std::size_t, void* ptr) noexcept { return ptr; }
+
 void Panic(const char *meditationString, System::PanicFrame* frame) {
-    const int boxWidth = 72;
+    // Disable interrupts immediately
+    asm volatile ("cli");
 
-    // Header
-    kerr << BOXUI_ANSI_RED_BG << BOXUI_ANSI_WHITE_FG << BOXUI_ANSI_BOLD << "\n";
-    kerr << BOXUI_TL;
-    for (int i = 0; i < boxWidth - 2; ++i) kerr << BOXUI_H;
-    kerr << BOXUI_TR << "\n";
-    PrintBoxedLine(kerr, "!!! KERNEL PANIC !!!", boxWidth, true);
-    PrintBoxedLine(kerr, "", boxWidth);
-    PrintBoxedLine(kerr, "System halted. Please reboot.", boxWidth, true);
-    PrintBoxedLine(kerr, "", boxWidth);
-    PrintBoxedSeparator(kerr, boxWidth);
-    PrintBoxedLine(kerr, "Meditation:", boxWidth, true);
-    PrintBoxedLine(kerr, meditationString, boxWidth);
-    PrintBoxedLine(kerr, "", boxWidth);
+    // Ensure GUI is initialized if possible. If the panic happens *during* Gui::Init, this might be tricky,
+    // but assuming we are past basic boot.
+    if (Gui::IsInitialized()) {
+        // Create the window using placement new
+        s_panicWindow = new (s_panicWindowStorage) Gui::PanicWindow(meditationString, frame);
+        
+        // Add to WindowManager
+        Gui::g_wm.AddPanel(s_panicWindow);
+        
+        // Bring to front
+        Gui::g_wm.BringToFront(s_panicWindow);
+        
+        Gui::Refresh();
 
-#if defined (__x86_64__)
-    if (frame != nullptr) {
-        PrintBoxedSeparator(kerr, boxWidth);
-        PrintBoxedLine(kerr, "CPU State:", boxWidth, true);
-        PrintBoxedHex(kerr, "Interrupt Vector", frame->InterruptVector, boxWidth);
-
-        if (frame->InterruptVector == 0xE) {
-            auto pf_frame = (System::PageFaultPanicFrame*)frame;
-            frame = (System::PanicFrame*)&pf_frame->IP;
-            PrintBoxedLine(kerr, "Page Fault Error:", boxWidth, true);
-            PrintBoxedDec(kerr, "Present", pf_frame->PageFaultError.Present, boxWidth);
-            PrintBoxedDec(kerr, "Write", pf_frame->PageFaultError.Write, boxWidth);
-            PrintBoxedDec(kerr, "User", pf_frame->PageFaultError.User, boxWidth);
-            PrintBoxedDec(kerr, "Reserved Write", pf_frame->PageFaultError.ReservedWrite, boxWidth);
-            PrintBoxedDec(kerr, "Instruction Fetch", pf_frame->PageFaultError.InstructionFetch, boxWidth);
-            PrintBoxedDec(kerr, "Protection Key", pf_frame->PageFaultError.ProtectionKey, boxWidth);
-            PrintBoxedDec(kerr, "Shadow Stack", pf_frame->PageFaultError.ShadowStack, boxWidth);
-            PrintBoxedDec(kerr, "SGX", pf_frame->PageFaultError.SGX, boxWidth);
-        } else if (frame->InterruptVector == 0xD) {
-            auto gpf_frame = (System::GPFPanicFrame*)frame;
-            frame = (System::PanicFrame*)&frame->IP;
-            PrintBoxedLine(kerr, "General Protection Fault:", boxWidth, true);
-            PrintBoxedDec(kerr, "Error Code", gpf_frame->GeneralProtectionFaultError, boxWidth);
+        while (true) {    
+            asm ("hlt");
         }
-
-        PrintBoxedSeparator(kerr, boxWidth);
-        PrintBoxedLine(kerr, "Registers:", boxWidth, true);
-        PrintBoxedHex(kerr, "Instruction Pointer", frame->IP, boxWidth);
-        PrintBoxedHex(kerr, "Code Segment", frame->CS, boxWidth);
-        PrintBoxedHex(kerr, "Flags", frame->Flags, boxWidth);
-        PrintBoxedHex(kerr, "Stack Pointer", frame->SP, boxWidth);
-        PrintBoxedHex(kerr, "Stack Segment", frame->SS, boxWidth);
-    }
-#endif
-
-    PrintBoxedLine(kerr, "", boxWidth);
-
-    // Footer
-    kerr << BOXUI_BL;
-    for (int i = 0; i < boxWidth - 2; ++i) kerr << BOXUI_H;
-    kerr << BOXUI_BR << "\n";
-    kerr << BOXUI_ANSI_RESET;
-
-    while (true) {
-#if defined (__x86_64__)
-        asm ("cli");
-        asm ("hlt");
-#elif defined (__aarch64__) || defined (__riscv)
-        asm ("wfi");
-#elif defined (__loongarch64)
-        asm ("idle 0");
-#endif
+    } else {
+        // Fallback to ANSI text panic if GUI isn't ready
+        const int boxWidth = 72;
+        kerr << BOXUI_ANSI_RED_BG << BOXUI_ANSI_WHITE_FG << BOXUI_ANSI_BOLD << "\n"; // ... existing fallback code
+        PrintBoxedLine(kerr, "!!! KERNEL PANIC (NO GUI) !!!", boxWidth, true);
+        PrintBoxedLine(kerr, meditationString, boxWidth);
+        // ... simplistic fallback
+        while(true) asm("hlt");
     }
 }

@@ -5,10 +5,10 @@
 */
 
 #include "GDT.hpp"
-#include "../Terminal/Terminal.hpp"
+#include <Gui/DebugGui.hpp>
+
 
 namespace Hal {
-    using namespace Kt;
 
     GDTPointer gdtPointer{};
     BasicGDT kernelGDT{};
@@ -38,6 +38,6 @@ namespace Hal {
         LoadGDT(&gdtPointer);
         ReloadSegments();
 
-        KernelLogStream(DEBUG, "Hal") << "Set new GDT (0x" << base::hex << (uint64_t)&kernelGDT << ")";
+        Gui::GuiLogStream(Gui::LogLevel::Debug, "Hal") << "Set new GDT (0x" << Gui::base::hex() << (uint64_t)&kernelGDT << ")";
     }
 };

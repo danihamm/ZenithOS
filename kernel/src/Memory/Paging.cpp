@@ -2,6 +2,7 @@
 #include <Memory/PageFrameAllocator.hpp>
 #include <Common/Panic.hpp>
 #include <Memory/HHDM.hpp>
+#include <Gui/DebugGui.hpp>
 
 namespace Memory::VMM {
     extern "C" uint64_t KernelStartSymbol;
@@ -16,7 +17,7 @@ namespace Memory::VMM {
 
     void Paging::Init(std::uint64_t kernelBaseVirt, std::uint64_t kernelSize, limine_memmap_response* memMap) {
         // Map kernel
-        Kt::KernelLogStream(Kt::DEBUG, "VMM") << "Paging::Init called with kernelBaseVirt as 0x" << base::hex << kernelBaseVirt;
+        Gui::GuiLogStream(Gui::LogLevel::Debug, "VMM") << "Paging::Init called with kernelBaseVirt as 0x" << Gui::base::hex() << kernelBaseVirt;
 
         for (std::uint64_t pageAddr = kernelBaseVirt; pageAddr < (kernelBaseVirt + kernelSize); pageAddr += 0x1000) {
             Map(GetPhysKernelAddress(pageAddr), pageAddr);
@@ -33,7 +34,7 @@ namespace Memory::VMM {
         }
 
         LoadCR3(PML4);
-        Kt::KernelLogStream(Kt::OK, "VMM") << "Switched CR3";
+        Gui::Log(Gui::LogLevel::Ok, "VMM", "Switched CR3");
     }
 
     PageTable* Paging::HandleLevel(VirtualAddress virtualAddress, PageTable* table, const size_t level) {

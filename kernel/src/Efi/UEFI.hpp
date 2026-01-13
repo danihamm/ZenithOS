@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <Memory/HHDM.hpp>
 #include <Timekeeping/Time.hpp>
+#include <Gui/DebugGui.hpp>
 
 namespace Efi {
     typedef void* EFI_HANDLE;
@@ -270,13 +271,12 @@ namespace Efi {
     };
     
     inline void Init(SystemTable* ST) {
-        Kt::KernelLogStream(Kt::OK, "UEFI") << "ST Minor Revision: " << ST->Header.Revision.MinorRevision;
-        Kt::KernelLogStream(Kt::OK, "UEFI") << "ST Major Revision: " << ST->Header.Revision.MajorRevision;
+        Gui::Log(Gui::LogLevel::Ok, "UEFI", "System Table found");
 
         RuntimeServicesTable* RT = (RuntimeServicesTable*)Memory::HHDM(ST->RuntimeServices);
 
         if (ST->RuntimeServices != nullptr) {
-            Kt::KernelLogStream(Kt::OK, "UEFI") << "EFI Runtime Service API is available.";
+            Gui::Log(Gui::LogLevel::Ok, "UEFI", "Runtime Services available");
 
             EFI_TIME Time;
             EFI_TIME_CAPABILITIES TimeCapabilities;

@@ -8,6 +8,8 @@
 #include <cstddef>
 #include <limine.h>
 #include <Hal/GDT.hpp>
+#include <Gui/DebugGui.hpp>
+#include <Gui/LogTable.hpp>
 #include <Terminal/Terminal.hpp>
 #include <Libraries/String.hpp>
 #include <Efi/UEFI.hpp>
@@ -29,16 +31,15 @@
 #include <ACPI/ACPI.hpp>
 #include <CppLib/BoxUI.hpp>
 
-using namespace Kt;
-
 namespace Memory {
     HeapAllocator* g_heap;
     PageFrameAllocator* g_pfa;
     uint64_t HHDMBase;
 };
 
-KernelOutStream kout{};
-KernelErrorStream kerr{};
+// Terminal streams (kept for panic/error handling fallback)
+Kt::KernelOutStream kout{};
+Kt::KernelErrorStream kerr{};
 
 // Extern declarations for global constructors array.
 extern void (*__init_array[])();
@@ -64,6 +65,7 @@ extern "C" void kmain() {
     
     limine_framebuffer *framebuffer{framebuffer_request.response->framebuffers[0]};
 
+    // Initialize Flanterm for panic/error fallback (will be overwritten by GUI)
     Kt::Initialize(
         (uint32_t*)framebuffer->address,
         framebuffer->width,
@@ -77,42 +79,62 @@ extern "C" void kmain() {
         framebuffer->blue_mask_shift
     );
 
+    // Initialize debug GUI (overwrites Flanterm display)
+    Gui::Init(framebuffer);
+
 
 #if defined (__x86_64__)
+    Gui::Log(Gui::LogLevel::Info, "HAL", "Initializing GDT");
     Hal::PrepareGDT();
     Hal::BridgeLoadGDT();
+    Gui::Log(Gui::LogLevel::Ok, "HAL", "GDT loaded");
 #endif
 
     uint64_t hhdm_offset = hhdm_request.response->offset;
     Memory::HHDMBase = hhdm_offset;
 
     if (memmap_request.response != nullptr) {
-        Kt::KernelLogStream(OK, "Mem") << "Creating PageFrameAllocator";
+        Gui::Log(Gui::LogLevel::Ok, "Memory", "Creating PageFrameAllocator");
 
         Memory::PageFrameAllocator pmm(Memory::Scan(memmap_request.response));
         Memory::g_pfa = &pmm;
 
-        Kt::KernelLogStream(OK, "Mem") << "Creating HeapAllocator";
+        Gui::Log(Gui::LogLevel::Ok, "Memory", "Creating HeapAllocator");
         Memory::HeapAllocator heap{};
         Memory::g_heap = &heap;
 
-        heap.Walk();
-
+        Gui::Log(Gui::LogLevel::Ok, "Memory", "HeapAllocator initialized");
     } else {
-        Panic("System memory map missing!", nullptr);
+        Gui::Log(Gui::LogLevel::Error, "Boot", "System memory map missing!");
+        Hal::Halt();
     }
 
 
 #if defined (__x86_64__)
+    Gui::Log(Gui::LogLevel::Info, "HAL", "Initializing IDT");
     Hal::IDTInitialize();
+    Gui::Log(Gui::LogLevel::Ok, "HAL", "IDT loaded");
 
+    Gui::Log(Gui::LogLevel::Info, "Memory", "Initializing paging");
     Memory::VMM::Paging g_paging{};
     g_paging.Init((uint64_t)&KernelStartSymbol, ((uint64_t)&KernelEndSymbol - (uint64_t)&KernelStartSymbol), memmap_request.response);
-
+    Gui::Log(Gui::LogLevel::Ok, "Memory", "Paging initialized");
 #endif
+
+    Gui::Log(Gui::LogLevel::Info, "ACPI", "Parsing ACPI tables");
     Hal::ACPI g_acpi((Hal::ACPI::XSDP*)Memory::HHDM(rsdp_request.response->address));
+    Gui::Log(Gui::LogLevel::Ok, "ACPI", "ACPI tables parsed");
+
+    Gui::Log(Gui::LogLevel::Info, "UEFI", "Initializing UEFI runtime");
     Efi::SystemTable* ST = (Efi::SystemTable*)Memory::HHDM(system_table_request.response->address);
     Efi::Init(ST);
+    Gui::Log(Gui::LogLevel::Ok, "UEFI", "UEFI runtime initialized");
+
+    Gui::Log(Gui::LogLevel::Ok, "Boot", "Kernel initialization complete");
+
+    /* Panic stimulation test */
+    int* a = (int*)0x0000c;
+    *a = 0x11;
 
     Hal::Halt();
 }

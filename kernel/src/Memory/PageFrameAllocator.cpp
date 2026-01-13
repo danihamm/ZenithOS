@@ -7,7 +7,7 @@
 #include "PageFrameAllocator.hpp"
 #include "HHDM.hpp"
 #include <Libraries/Memory.hpp>
-#include <Terminal/Terminal.hpp>
+#include <Gui/DebugGui.hpp>
 #include <CppLib/Spinlock.hpp>
 #include <Common/Panic.hpp>
 
@@ -23,7 +23,7 @@ namespace Memory {
         head.next->size = section.size;
         head.next->next = nullptr;
 
-        Kt::KernelLogStream(Kt::DEBUG, "PageFrameAllocator") << "New pool size: " << section.size;
+        Gui::GuiLogStream(Gui::LogLevel::Debug, "PageFrameAllocator") << "New pool size: " << section.size;
     }
 
     void* PageFrameAllocator::Allocate() {

@@ -53,9 +53,6 @@ namespace Kt {
         );
 
         g_terminal_width = width;
-
-        UpdatePanelBar("Initializing...");
-        kout << "\n\n\n";
     }
 
     void Putchar(char c) {

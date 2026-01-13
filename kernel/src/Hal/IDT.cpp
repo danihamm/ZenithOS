@@ -11,6 +11,7 @@
 #include <Platform/Registers.hpp>
 #include <CppLib/Stream.hpp>
 #include <Memory/PageFrameAllocator.hpp>
+#include <Gui/DebugGui.hpp>
 
 namespace Hal {
     constexpr auto InterruptGate = 0x8E;
@@ -110,17 +111,17 @@ namespace Hal {
 
     void IDTInitialize() {
         IDT = (InterruptDescriptor*)Memory::g_pfa->Allocate();
-        Kt::KernelLogStream(Kt::DEBUG, "IDT") << "Allocated IDT at " << base::hex << (uint64_t)IDT;
+        Gui::GuiLogStream(Gui::LogLevel::Debug, "IDT") << "Allocated IDT at " << Gui::base::hex() << (uint64_t)IDT;
         IDTR.Limit = 0x0FF;
         IDTR.Base = (uint64_t)IDT;
-        Kt::KernelLogStream(Kt::DEBUG, "IDT") << "Set IDTR Base to " << base::hex << IDTR.Base << " and Limit to " << base::hex << IDTR.Limit;
+        Gui::GuiLogStream(Gui::LogLevel::Debug, "IDT") << "Set IDTR Base to " << Gui::base::hex() << IDTR.Base << " and Limit to " << Gui::base::hex() << IDTR.Limit;
 
         SetHandler<0, 31>::run();
 
-        Kt::KernelLogStream(Kt::OK, "Hal") << "Created exception interrupt vectors";
+        Gui::Log(Gui::LogLevel::Ok, "Hal", "Created exception interrupt vectors");
 
         LoadIDT(IDTR);
 
-        Kt::KernelLogStream(Kt::OK, "Hal") << "Loaded new IDT";
+        Gui::Log(Gui::LogLevel::Ok, "Hal", "Loaded new IDT");
     }
 };
