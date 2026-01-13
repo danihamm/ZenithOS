@@ -1,6 +1,8 @@
 # ZenithOS
 A research project kernel and operating system in C++.
 
+![Screenshot of ZenithOS](https://i.imgur.com/STTKTJG.png)
+
 ## Quickstart
 To build the kernel, run `make` in the root directory. An ISO file will be generated in the root directory of this tree.
 
