@@ -132,9 +132,5 @@ extern "C" void kmain() {
 
     Gui::Log(Gui::LogLevel::Ok, "Boot", "Kernel initialization complete");
 
-    /* Panic stimulation test */
-    int* a = (int*)0x0000c;
-    *a = 0x11;
-
     Hal::Halt();
 }
