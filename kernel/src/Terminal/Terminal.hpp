@@ -15,7 +15,7 @@ using namespace kcp;
 
 namespace Kt
 {
-    constexpr char newline = '\n';
+    constexpr const char *newline = "\r\n";
 
     namespace screen
     {

@@ -49,7 +49,8 @@ namespace Kt {
             NULL, NULL,
             NULL, 0, 0, 1,
             0, 0,
-            0
+            0,
+            FLANTERM_FB_ROTATE_0
         );
 
         g_terminal_width = width;
