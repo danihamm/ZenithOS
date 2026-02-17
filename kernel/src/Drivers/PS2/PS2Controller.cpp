@@ -153,7 +153,7 @@ namespace Drivers::PS2 {
         SendCommand(CmdReadConfig);
         config = ReadData();
 
-        config |= ConfigPort1Interrupt;
+        config |= ConfigPort1Interrupt | ConfigPort1Translation;
         if (g_DualChannel) {
             config |= ConfigPort2Interrupt;
         }

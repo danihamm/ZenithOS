@@ -66,5 +66,12 @@ if command -v nmcli &>/dev/null; then
     nmcli device set "$TAP" managed no 2>/dev/null || true
 fi
 
+# Configure DNS on the bridge so systemd-resolved keeps working
+if command -v resolvectl &>/dev/null && [ -n "$GW" ]; then
+    resolvectl dns "$BRIDGE" "$GW" 2>/dev/null || true
+    resolvectl domain "$BRIDGE" '~.' 2>/dev/null || true
+    echo "Configured DNS on $BRIDGE via $GW"
+fi
+
 echo "Network bridge setup complete: $PHYS -> $BRIDGE <- $TAP"
 ip -4 addr show dev "$BRIDGE" | head -3

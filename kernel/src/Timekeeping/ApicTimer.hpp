@@ -17,6 +17,9 @@ namespace Timekeeping {
     // Get elapsed milliseconds since timer initialization
     uint64_t GetMilliseconds();
 
+    // Enable scheduler tick (called after scheduler is initialized)
+    void EnableSchedulerTick();
+
     // Busy-wait sleep for the given number of milliseconds
     void Sleep(uint64_t ms);
 };

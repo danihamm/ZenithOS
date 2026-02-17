@@ -8,6 +8,7 @@ section .text ; Text/code section
 
 global ReloadSegments
 global LoadGDT
+global LoadTR
 
 LoadGDT:
     lgdt [rdi] ; Run LGDT on the contents of 1st C parameter
@@ -28,4 +29,9 @@ ReloadSegments:
     mov gs, ax
     mov ss, ax
 
+    ret
+
+LoadTR:
+    mov ax, 0x28 ; TSS selector
+    ltr ax
     ret

@@ -26,4 +26,13 @@ namespace Net::Icmp {
     // Handle an incoming ICMP packet (called by IPv4 layer)
     void OnPacketReceived(uint32_t srcIp, const uint8_t* data, uint16_t length);
 
+    // Send an ICMP echo request to the given IP address
+    void SendEchoRequest(uint32_t destIp, uint16_t identifier, uint16_t sequence);
+
+    // Check if a reply was received for the given identifier/sequence
+    bool HasReply(uint16_t identifier, uint16_t sequence);
+
+    // Reset the reply tracker (call before sending a new ping)
+    void ResetReply();
+
 }

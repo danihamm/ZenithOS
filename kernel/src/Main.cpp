@@ -37,7 +37,10 @@
 #include <Net/Net.hpp>
 #include <CppLib/BoxUI.hpp>
 #include <Graphics/Cursor.hpp>
-
+#include <Fs/Ramdisk.hpp>
+#include <Fs/Vfs.hpp>
+#include <Sched/Scheduler.hpp>
+#include <Api/Syscall.hpp>
 using namespace Kt;
 
 namespace Memory {
@@ -95,21 +98,19 @@ extern "C" void kmain() {
     uint64_t hhdm_offset = hhdm_request.response->offset;
     Memory::HHDMBase = hhdm_offset;
 
-    if (memmap_request.response != nullptr) {
-        Kt::KernelLogStream(OK, "Mem") << "Creating PageFrameAllocator";
-
-        Memory::PageFrameAllocator pmm(Memory::Scan(memmap_request.response));
-        Memory::g_pfa = &pmm;
-
-        Kt::KernelLogStream(OK, "Mem") << "Creating HeapAllocator";
-        Memory::HeapAllocator heap{};
-        Memory::g_heap = &heap;
-
-        heap.Walk();
-
-    } else {
+    if (memmap_request.response == nullptr) {
         Panic("System memory map missing!", nullptr);
     }
+
+    Kt::KernelLogStream(OK, "Mem") << "Creating PageFrameAllocator";
+    Memory::PageFrameAllocator pmm(Memory::Scan(memmap_request.response));
+    Memory::g_pfa = &pmm;
+
+    Kt::KernelLogStream(OK, "Mem") << "Creating HeapAllocator";
+    Memory::HeapAllocator heap{};
+    Memory::g_heap = &heap;
+
+    heap.Walk();
 
 
 #if defined (__x86_64__)
@@ -142,7 +143,48 @@ extern "C" void kmain() {
     Efi::SystemTable* ST = (Efi::SystemTable*)Memory::HHDM(system_table_request.response->address);
     Efi::Init(ST);
 
+    // Initialize ramdisk from Limine modules
+    if (module_request.response != nullptr && module_request.response->module_count > 0) {
+        Kt::KernelLogStream(OK, "Modules") << "Found " << (uint64_t)module_request.response->module_count << " module(s)";
+        for (uint64_t i = 0; i < module_request.response->module_count; i++) {
+            limine_file* mod = module_request.response->modules[i];
+            const char* modString = mod->string;
+
+            // Find "ramdisk" module by its string
+            if (modString != nullptr &&
+                modString[0] == 'r' && modString[1] == 'a' && modString[2] == 'm' &&
+                modString[3] == 'd' && modString[4] == 'i' && modString[5] == 's' &&
+                modString[6] == 'k' && modString[7] == '\0') {
+                Kt::KernelLogStream(OK, "Modules") << "Ramdisk module at " << kcp::hex << (uint64_t)mod->address << kcp::dec << ", size=" << mod->size;
+                Fs::Ramdisk::Initialize(mod->address, mod->size);
+            }
+        }
+    } else {
+        Kt::KernelLogStream(WARNING, "Modules") << "No modules loaded (ramdisk unavailable)";
+    }
+
+    // Initialize VFS and register ramdisk as drive 0
+    Fs::Vfs::Initialize();
+
+    static Fs::Vfs::FsDriver ramdiskDriver = {
+        Fs::Ramdisk::Open,
+        Fs::Ramdisk::Read,
+        Fs::Ramdisk::GetSize,
+        Fs::Ramdisk::Close,
+        Fs::Ramdisk::ReadDir
+    };
+    Fs::Vfs::RegisterDrive(0, &ramdiskDriver);
+
     Graphics::Cursor::Initialize(framebuffer);
+
+    Hal::LoadTSS();
+    Zenith::InitializeSyscalls();
+
+    Sched::Initialize();
+    Sched::Spawn("0:/shell.elf");
+
+    // Enable preemptive scheduling via the APIC timer
+    Timekeeping::EnableSchedulerTick();
 
     // Main loop: update cursor position and halt until next interrupt
     for (;;) {

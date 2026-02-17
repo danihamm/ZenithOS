@@ -60,11 +60,17 @@ namespace Kt {
     }
 
     void Putchar(char c) {
+        if (c == '\n') {
+            flanterm_write(ctx, "\r\n", 2);
+            return;
+        }
         flanterm_write(ctx, &c, 1);
     }
 
     void Print(const char *text) {
-        flanterm_write(ctx, text, Lib::strlen(text));
+        for (size_t i = 0; text[i] != '\0'; i++) {
+            Putchar(text[i]);
+        }
     }
 
 };

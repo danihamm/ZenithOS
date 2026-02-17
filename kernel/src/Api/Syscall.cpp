@@ -1,0 +1,280 @@
+/*
+    * Syscall.cpp
+    * SYSCALL/SYSRET setup and number-based dispatch
+    * Copyright (c) 2025 Daniel Hammer
+*/
+
+#include "Syscall.hpp"
+#include <Terminal/Terminal.hpp>
+#include <Fs/Vfs.hpp>
+#include <Memory/Heap.hpp>
+#include <Memory/PageFrameAllocator.hpp>
+#include <Memory/Paging.hpp>
+#include <Memory/HHDM.hpp>
+#include <Timekeeping/ApicTimer.hpp>
+#include <Sched/Scheduler.hpp>
+#include <Libraries/Memory.hpp>
+#include <Libraries/String.hpp>
+#include <Drivers/PS2/Keyboard.hpp>
+#include <Net/Icmp.hpp>
+#include <Net/ByteOrder.hpp>
+#include <Hal/MSR.hpp>
+#include <Hal/GDT.hpp>
+
+// Assembly entry point
+extern "C" void SyscallEntry();
+
+namespace Zenith {
+
+    // ---- Syscall implementations ----
+
+    static void Sys_Exit(int exitCode) {
+        (void)exitCode;
+        Sched::ExitProcess();
+    }
+
+    static void Sys_Yield() {
+        Sched::Schedule();
+    }
+
+    static void Sys_SleepMs(uint64_t ms) {
+        Timekeeping::Sleep(ms);
+    }
+
+    static int Sys_GetPid() {
+        return Sched::GetCurrentPid();
+    }
+
+    static void Sys_Print(const char* text) {
+        Kt::Print(text);
+    }
+
+    static void Sys_Putchar(char c) {
+        Kt::Putchar(c);
+    }
+
+    static int Sys_Open(const char* path) {
+        return Fs::Vfs::VfsOpen(path);
+    }
+
+    static int Sys_Read(int handle, uint8_t* buffer, uint64_t offset, uint64_t size) {
+        return Fs::Vfs::VfsRead(handle, buffer, offset, size);
+    }
+
+    static uint64_t Sys_GetSize(int handle) {
+        return Fs::Vfs::VfsGetSize(handle);
+    }
+
+    static void Sys_Close(int handle) {
+        Fs::Vfs::VfsClose(handle);
+    }
+
+    static int Sys_ReadDir(const char* path, const char** outNames, int maxEntries) {
+        // Get entries from VFS into a kernel-local array
+        const char* kernelNames[64];
+        int max = maxEntries;
+        if (max > 64) max = 64;
+        int count = Fs::Vfs::VfsReadDir(path, kernelNames, max);
+        if (count <= 0) return count;
+
+        // Allocate a user-accessible page for string data via process heap
+        auto* proc = Sched::GetCurrentProcessPtr();
+        if (proc == nullptr) return -1;
+
+        void* page = Memory::g_pfa->AllocateZeroed();
+        if (page == nullptr) return -1;
+        uint64_t physAddr = Memory::SubHHDM((uint64_t)page);
+        uint64_t userVa = proc->heapNext;
+        proc->heapNext += 0x1000;
+        Memory::VMM::Paging::MapUserIn(proc->pml4Phys, physAddr, userVa);
+
+        // Copy strings into the user page and write pointers to outNames
+        uint64_t offset = 0;
+        uint8_t* pageBuf = (uint8_t*)Memory::HHDM(physAddr);
+        int copied = 0;
+        for (int i = 0; i < count; i++) {
+            int len = Lib::strlen(kernelNames[i]) + 1;
+            if (offset + len > 0x1000) break;
+            memcpy(pageBuf + offset, kernelNames[i], len);
+            outNames[i] = (const char*)(userVa + offset);
+            offset += len;
+            copied++;
+        }
+
+        return copied;
+    }
+
+    static uint64_t Sys_Alloc(uint64_t size) {
+        auto* proc = Sched::GetCurrentProcessPtr();
+        if (proc == nullptr) return 0;
+
+        // Round up to page boundary
+        size = (size + 0xFFF) & ~0xFFFULL;
+        if (size == 0) size = 0x1000;
+
+        uint64_t userVa = proc->heapNext;
+        uint64_t numPages = size / 0x1000;
+
+        for (uint64_t i = 0; i < numPages; i++) {
+            void* page = Memory::g_pfa->AllocateZeroed();
+            if (page == nullptr) return 0;
+            uint64_t physAddr = Memory::SubHHDM((uint64_t)page);
+            Memory::VMM::Paging::MapUserIn(proc->pml4Phys, physAddr, userVa + i * 0x1000);
+        }
+
+        proc->heapNext += size;
+        return userVa;
+    }
+
+    static void Sys_Free(uint64_t) {
+        // No-op for now (pages leak). Proper freeing can come later.
+    }
+
+    static uint64_t Sys_GetTicks() {
+        return Timekeeping::GetTicks();
+    }
+
+    static uint64_t Sys_GetMilliseconds() {
+        return Timekeeping::GetMilliseconds();
+    }
+
+    static void Sys_GetInfo(SysInfo* outInfo) {
+        if (outInfo == nullptr) return;
+
+        // Copy strings into fixed-size arrays (user-accessible)
+        const char* name = "ZenithOS";
+        const char* ver = "0.1.0";
+        for (int i = 0; name[i]; i++) outInfo->osName[i] = name[i];
+        outInfo->osName[8] = '\0';
+        for (int i = 0; ver[i]; i++) outInfo->osVersion[i] = ver[i];
+        outInfo->osVersion[5] = '\0';
+
+        outInfo->apiVersion = 2;
+        outInfo->maxProcesses = Sched::MaxProcesses;
+    }
+
+    static bool Sys_IsKeyAvailable() {
+        return Drivers::PS2::Keyboard::IsKeyAvailable();
+    }
+
+    static void Sys_GetKey(KeyEvent* outEvent) {
+        if (outEvent == nullptr) return;
+        auto k = Drivers::PS2::Keyboard::GetKey();
+        outEvent->scancode = k.Scancode;
+        outEvent->ascii    = k.Ascii;
+        outEvent->pressed  = k.Pressed;
+        outEvent->shift    = k.Shift;
+        outEvent->ctrl     = k.Ctrl;
+        outEvent->alt      = k.Alt;
+    }
+
+    static char Sys_GetChar() {
+        return Drivers::PS2::Keyboard::GetChar();
+    }
+
+    static uint16_t g_pingSeq = 0;
+    static constexpr uint16_t PING_ID = 0x2E01; // "ZE"
+
+    static int32_t Sys_Ping(uint32_t ipAddr, uint32_t timeoutMs) {
+        uint16_t seq = g_pingSeq++;
+
+        Net::Icmp::ResetReply();
+        Net::Icmp::SendEchoRequest(ipAddr, PING_ID, seq);
+
+        uint64_t start = Timekeeping::GetMilliseconds();
+        while (!Net::Icmp::HasReply(PING_ID, seq)) {
+            if (Timekeeping::GetMilliseconds() - start >= timeoutMs) {
+                return -1;
+            }
+            Sched::Schedule();
+        }
+
+        return (int32_t)(Timekeeping::GetMilliseconds() - start);
+    }
+
+    // ---- Dispatch ----
+
+    extern "C" int64_t SyscallDispatch(SyscallFrame* frame) {
+        switch (frame->syscall_nr) {
+            case SYS_EXIT:
+                Sys_Exit((int)frame->arg1);
+                return 0;
+            case SYS_YIELD:
+                Sys_Yield();
+                return 0;
+            case SYS_SLEEP_MS:
+                Sys_SleepMs(frame->arg1);
+                return 0;
+            case SYS_GETPID:
+                return (int64_t)Sys_GetPid();
+            case SYS_PRINT:
+                Sys_Print((const char*)frame->arg1);
+                return 0;
+            case SYS_PUTCHAR:
+                Sys_Putchar((char)frame->arg1);
+                return 0;
+            case SYS_OPEN:
+                return (int64_t)Sys_Open((const char*)frame->arg1);
+            case SYS_READ:
+                return (int64_t)Sys_Read((int)frame->arg1, (uint8_t*)frame->arg2,
+                                         frame->arg3, frame->arg4);
+            case SYS_GETSIZE:
+                return (int64_t)Sys_GetSize((int)frame->arg1);
+            case SYS_CLOSE:
+                Sys_Close((int)frame->arg1);
+                return 0;
+            case SYS_READDIR:
+                return (int64_t)Sys_ReadDir((const char*)frame->arg1,
+                                            (const char**)frame->arg2,
+                                            (int)frame->arg3);
+            case SYS_ALLOC:
+                return (int64_t)Sys_Alloc(frame->arg1);
+            case SYS_FREE:
+                Sys_Free(frame->arg1);
+                return 0;
+            case SYS_GETTICKS:
+                return (int64_t)Sys_GetTicks();
+            case SYS_GETMILLISECONDS:
+                return (int64_t)Sys_GetMilliseconds();
+            case SYS_GETINFO:
+                Sys_GetInfo((SysInfo*)frame->arg1);
+                return 0;
+            case SYS_ISKEYAVAILABLE:
+                return (int64_t)Sys_IsKeyAvailable();
+            case SYS_GETKEY:
+                Sys_GetKey((KeyEvent*)frame->arg1);
+                return 0;
+            case SYS_GETCHAR:
+                return (int64_t)Sys_GetChar();
+            case SYS_PING:
+                return (int64_t)Sys_Ping((uint32_t)frame->arg1, (uint32_t)frame->arg2);
+            default:
+                return -1;
+        }
+    }
+
+    // ---- SYSCALL MSR initialization ----
+
+    void InitializeSyscalls() {
+        // Enable SYSCALL/SYSRET in EFER
+        uint64_t efer = Hal::ReadMSR(Hal::IA32_EFER);
+        efer |= 1;  // SCE bit (Syscall Enable)
+        Hal::WriteMSR(Hal::IA32_EFER, efer);
+
+        // STAR: kernel CS in [47:32], sysret base in [63:48]
+        // SYSCALL: CS=0x08, SS=0x10
+        // SYSRET:  CS=0x10+16=0x20|RPL3=0x23, SS=0x10+8=0x18|RPL3=0x1B
+        uint64_t star = (0x0010ULL << 48) | (0x0008ULL << 32);
+        Hal::WriteMSR(Hal::IA32_STAR, star);
+
+        // LSTAR: SYSCALL entry point
+        Hal::WriteMSR(Hal::IA32_LSTAR, (uint64_t)SyscallEntry);
+
+        // FMASK: mask IF on SYSCALL entry (bit 9 = IF)
+        Hal::WriteMSR(Hal::IA32_FMASK, 0x200);
+
+        Kt::KernelLogStream(Kt::OK, "Syscall") << "SYSCALL/SYSRET initialized (LSTAR="
+            << kcp::hex << (uint64_t)SyscallEntry << kcp::dec << ", 20 syscalls)";
+    }
+
+}

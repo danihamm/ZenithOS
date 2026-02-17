@@ -15,8 +15,38 @@ using namespace Kt;
 
 namespace Net::Icmp {
 
+    // Reply tracking for outgoing pings
+    static volatile bool    g_replyReceived = false;
+    static volatile uint16_t g_replyId  = 0;
+    static volatile uint16_t g_replySeq = 0;
+
     void Initialize() {
         KernelLogStream(OK, "Net") << "ICMP initialized";
+    }
+
+    void ResetReply() {
+        g_replyReceived = false;
+    }
+
+    bool HasReply(uint16_t identifier, uint16_t sequence) {
+        return g_replyReceived
+            && g_replyId  == identifier
+            && g_replySeq == sequence;
+    }
+
+    void SendEchoRequest(uint32_t destIp, uint16_t identifier, uint16_t sequence) {
+        uint8_t packet[sizeof(Header)];
+        Header* hdr = (Header*)packet;
+
+        hdr->Type       = TYPE_ECHO_REQUEST;
+        hdr->Code       = 0;
+        hdr->Checksum   = 0;
+        hdr->Identifier = Htons(identifier);
+        hdr->Sequence   = Htons(sequence);
+
+        hdr->Checksum = Ipv4::Checksum(packet, sizeof(Header));
+
+        Ipv4::Send(destIp, Ipv4::PROTO_ICMP, packet, sizeof(Header));
     }
 
     void OnPacketReceived(uint32_t srcIp, const uint8_t* data, uint16_t length) {
@@ -54,6 +84,10 @@ namespace Net::Icmp {
             replyHdr->Checksum = Ipv4::Checksum(reply, length);
 
             Ipv4::Send(srcIp, Ipv4::PROTO_ICMP, reply, length);
+        } else if (hdr->Type == TYPE_ECHO_REPLY && hdr->Code == 0) {
+            g_replyId  = Ntohs(hdr->Identifier);
+            g_replySeq = Ntohs(hdr->Sequence);
+            g_replyReceived = true;
         }
     }
 

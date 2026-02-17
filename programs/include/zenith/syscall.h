@@ -1,0 +1,157 @@
+/*
+    * syscall.h
+    * ZenithOS program-side syscall wrappers using SYSCALL instruction
+    * Copyright (c) 2025 Daniel Hammer
+*/
+
+#pragma once
+#include <Api/Syscall.hpp>
+
+namespace zenith {
+
+    // ---- Raw SYSCALL wrappers ----
+
+    // The SYSCALL handler does not restore RDI, RSI, RDX, R10, R8, R9
+    // (they are skipped on the return path).  We move arguments into the
+    // correct registers inside the asm block and list ALL argument
+    // registers in the clobber list.  This guarantees the compiler
+    // reloads every argument on each call — GCC cannot optimise away
+    // clobbers, unlike "+r" outputs whose dead values it may discard.
+
+    inline int64_t syscall0(uint64_t nr) {
+        int64_t ret;
+        asm volatile("syscall" : "=a"(ret) : "a"(nr)
+            : "rcx", "r11", "rdi", "rsi", "rdx", "r8", "r9", "r10", "memory");
+        return ret;
+    }
+
+    inline int64_t syscall1(uint64_t nr, uint64_t a1) {
+        int64_t ret;
+        asm volatile(
+            "mov %[a1], %%rdi\n\t"
+            "syscall"
+            : "=a"(ret)
+            : "a"(nr), [a1] "r"(a1)
+            : "rcx", "r11", "rdi", "rsi", "rdx", "r8", "r9", "r10", "memory");
+        return ret;
+    }
+
+    inline int64_t syscall2(uint64_t nr, uint64_t a1, uint64_t a2) {
+        int64_t ret;
+        asm volatile(
+            "mov %[a1], %%rdi\n\t"
+            "mov %[a2], %%rsi\n\t"
+            "syscall"
+            : "=a"(ret)
+            : "a"(nr), [a1] "r"(a1), [a2] "r"(a2)
+            : "rcx", "r11", "rdi", "rsi", "rdx", "r8", "r9", "r10", "memory");
+        return ret;
+    }
+
+    inline int64_t syscall3(uint64_t nr, uint64_t a1, uint64_t a2, uint64_t a3) {
+        int64_t ret;
+        asm volatile(
+            "mov %[a1], %%rdi\n\t"
+            "mov %[a2], %%rsi\n\t"
+            "mov %[a3], %%rdx\n\t"
+            "syscall"
+            : "=a"(ret)
+            : "a"(nr), [a1] "r"(a1), [a2] "r"(a2), [a3] "r"(a3)
+            : "rcx", "r11", "rdi", "rsi", "rdx", "r8", "r9", "r10", "memory");
+        return ret;
+    }
+
+    inline int64_t syscall4(uint64_t nr, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4) {
+        int64_t ret;
+        asm volatile(
+            "mov %[a1], %%rdi\n\t"
+            "mov %[a2], %%rsi\n\t"
+            "mov %[a3], %%rdx\n\t"
+            "mov %[a4], %%r10\n\t"
+            "syscall"
+            : "=a"(ret)
+            : "a"(nr), [a1] "r"(a1), [a2] "r"(a2), [a3] "r"(a3), [a4] "r"(a4)
+            : "rcx", "r11", "rdi", "rsi", "rdx", "r8", "r9", "r10", "memory");
+        return ret;
+    }
+
+    inline int64_t syscall5(uint64_t nr, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5) {
+        int64_t ret;
+        asm volatile(
+            "mov %[a1], %%rdi\n\t"
+            "mov %[a2], %%rsi\n\t"
+            "mov %[a3], %%rdx\n\t"
+            "mov %[a4], %%r10\n\t"
+            "mov %[a5], %%r8\n\t"
+            "syscall"
+            : "=a"(ret)
+            : "a"(nr), [a1] "r"(a1), [a2] "r"(a2), [a3] "r"(a3), [a4] "r"(a4), [a5] "r"(a5)
+            : "rcx", "r11", "rdi", "rsi", "rdx", "r8", "r9", "r10", "memory");
+        return ret;
+    }
+
+    inline int64_t syscall6(uint64_t nr, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
+        int64_t ret;
+        asm volatile(
+            "mov %[a1], %%rdi\n\t"
+            "mov %[a2], %%rsi\n\t"
+            "mov %[a3], %%rdx\n\t"
+            "mov %[a4], %%r10\n\t"
+            "mov %[a5], %%r8\n\t"
+            "mov %[a6], %%r9\n\t"
+            "syscall"
+            : "=a"(ret)
+            : "a"(nr), [a1] "r"(a1), [a2] "r"(a2), [a3] "r"(a3), [a4] "r"(a4), [a5] "r"(a5), [a6] "r"(a6)
+            : "rcx", "r11", "rdi", "rsi", "rdx", "r8", "r9", "r10", "memory");
+        return ret;
+    }
+
+    // ---- Typed wrappers ----
+
+    // Process
+    [[noreturn]] inline void exit(int code = 0) {
+        syscall1(Zenith::SYS_EXIT, (uint64_t)code);
+        __builtin_unreachable();
+    }
+
+    inline void yield() { syscall0(Zenith::SYS_YIELD); }
+    inline void sleep_ms(uint64_t ms) { syscall1(Zenith::SYS_SLEEP_MS, ms); }
+    inline int getpid() { return (int)syscall0(Zenith::SYS_GETPID); }
+
+    // Console
+    inline void print(const char* text) { syscall1(Zenith::SYS_PRINT, (uint64_t)text); }
+    inline void putchar(char c) { syscall1(Zenith::SYS_PUTCHAR, (uint64_t)c); }
+
+    // File I/O
+    inline int open(const char* path) { return (int)syscall1(Zenith::SYS_OPEN, (uint64_t)path); }
+    inline int read(int handle, uint8_t* buf, uint64_t off, uint64_t size) {
+        return (int)syscall4(Zenith::SYS_READ, (uint64_t)handle, (uint64_t)buf, off, size);
+    }
+    inline uint64_t getsize(int handle) { return (uint64_t)syscall1(Zenith::SYS_GETSIZE, (uint64_t)handle); }
+    inline void close(int handle) { syscall1(Zenith::SYS_CLOSE, (uint64_t)handle); }
+    inline int readdir(const char* path, const char** names, int max) {
+        return (int)syscall3(Zenith::SYS_READDIR, (uint64_t)path, (uint64_t)names, (uint64_t)max);
+    }
+
+    // Memory
+    inline void* alloc(uint64_t size) { return (void*)syscall1(Zenith::SYS_ALLOC, size); }
+    inline void free(void* ptr) { syscall1(Zenith::SYS_FREE, (uint64_t)ptr); }
+
+    // Timekeeping
+    inline uint64_t get_ticks() { return (uint64_t)syscall0(Zenith::SYS_GETTICKS); }
+    inline uint64_t get_milliseconds() { return (uint64_t)syscall0(Zenith::SYS_GETMILLISECONDS); }
+
+    // System
+    inline void get_info(Zenith::SysInfo* info) { syscall1(Zenith::SYS_GETINFO, (uint64_t)info); }
+
+    // Keyboard
+    inline bool is_key_available() { return (bool)syscall0(Zenith::SYS_ISKEYAVAILABLE); }
+    inline void getkey(Zenith::KeyEvent* out) { syscall1(Zenith::SYS_GETKEY, (uint64_t)out); }
+    inline char getchar() { return (char)syscall0(Zenith::SYS_GETCHAR); }
+
+    // Networking
+    inline int32_t ping(uint32_t ip, uint32_t timeoutMs = 3000) {
+        return (int32_t)syscall2(Zenith::SYS_PING, (uint64_t)ip, (uint64_t)timeoutMs);
+    }
+
+}

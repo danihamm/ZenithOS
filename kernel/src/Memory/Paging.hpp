@@ -35,7 +35,7 @@ namespace Memory::VMM {
         std::uint8_t NX : 1;
     };
 
-    
+
     struct PageTable {
         PageTableEntry entries[512];
     } __attribute__((packed)) __attribute__((aligned(0x1000)));
@@ -79,20 +79,31 @@ namespace Memory::VMM {
 
             else if (level == 1)
                 return GetPageIndex();
+
+            return 0;
         }
     };
 
     class Paging {
+        PageTable* HandleLevel(VirtualAddress virtualAddress, PageTable* table, size_t level);
+        PageTable* HandleLevelUser(VirtualAddress virtualAddress, PageTable* table, size_t level);
+public:
         PageTable* PML4{};
 
-        PageTable* HandleLevel(VirtualAddress virtualAddress, PageTable* table, size_t level);
-public:
         Paging();
         void Init(std::uint64_t kernelBaseVirt, std::uint64_t kernelSize, limine_memmap_response* memMap);
         void Map(std::uint64_t physicalAddress, std::uint64_t virtualAddress);
         void MapMMIO(std::uint64_t physicalAddress, std::uint64_t virtualAddress);
+        void MapUser(std::uint64_t physicalAddress, std::uint64_t virtualAddress);
         static std::uint64_t GetPhysAddr(std::uint64_t PML4, std::uint64_t virtualAddress, bool use40BitL1 = false);
         std::uint64_t GetPhysAddr(std::uint64_t virtualAddress);
+
+        // Create a new PML4 with kernel-half (entries 256-511) copied from g_paging.
+        // Returns the physical address of the new PML4.
+        static std::uint64_t CreateUserPML4();
+
+        // Map a page into an arbitrary PML4 (specified by physical address) with User bit set.
+        static void MapUserIn(std::uint64_t pml4Phys, std::uint64_t physicalAddress, std::uint64_t virtualAddress);
     };
 
     extern Paging* g_paging;

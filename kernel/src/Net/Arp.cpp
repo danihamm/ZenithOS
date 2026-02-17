@@ -7,6 +7,7 @@
 #include "Arp.hpp"
 #include <Net/ByteOrder.hpp>
 #include <Net/Ethernet.hpp>
+#include <Net/Ipv4.hpp>
 #include <Net/NetConfig.hpp>
 #include <Drivers/Net/E1000.hpp>
 #include <Libraries/Memory.hpp>
@@ -91,8 +92,9 @@ namespace Net::Arp {
         uint32_t senderIp = pkt->SenderIp; // Already in network byte order in struct
         uint32_t targetIp = pkt->TargetIp;
 
-        // Cache the sender's IP->MAC mapping
+        // Cache the sender's IP->MAC mapping, then flush any packets waiting on it
         CacheInsert(senderIp, pkt->SenderMac);
+        Ipv4::FlushPending();
 
         uint16_t op = Ntohs(pkt->Operation);
 

@@ -10,6 +10,7 @@
 #include <Io/IoPort.hpp>
 #include <Terminal/Terminal.hpp>
 #include <CppLib/Stream.hpp>
+#include <Sched/Scheduler.hpp>
 
 using namespace Kt;
 
@@ -34,9 +35,15 @@ namespace Timekeeping {
     static volatile uint64_t g_tickCount = 0;
     static uint32_t g_ticksPerMs = 0;
 
-    // Timer IRQ handler: increment tick count
+    static bool g_schedEnabled = false;
+
+    // Timer IRQ handler: increment tick count and drive scheduler
     static void TimerHandler(uint8_t) {
         g_tickCount = g_tickCount + 1;
+
+        if (g_schedEnabled) {
+            Sched::Tick();
+        }
     }
 
     // Use PIT channel 2 to create a precise delay for calibration.
@@ -126,6 +133,10 @@ namespace Timekeeping {
 
     uint64_t GetMilliseconds() {
         return g_tickCount;  // 1 tick = 1 ms at 1000 Hz
+    }
+
+    void EnableSchedulerTick() {
+        g_schedEnabled = true;
     }
 
     void Sleep(uint64_t ms) {

@@ -80,19 +80,19 @@ namespace Memory
 
                     InsertToFreelist(rest, newBlockSize);
                 }
-                
+
                 Lock.Release();
                 return block;
             }
 
             prev = current;
             current = current->next;
-
-            Lock.Release();
         }
 
-        // First pass allocation failed
-        size_t pagesNeeded = size / 0x1000;
+        Lock.Release();
+
+        // First pass allocation failed -- grow the heap
+        size_t pagesNeeded = (sizeNeeded + 0xFFF) / 0x1000;
         InsertPagesToFreelist(pagesNeeded);
 
         return Request(size);
@@ -102,7 +102,9 @@ namespace Memory
         auto new_block = Request(size);
 
         if (ptr != nullptr && new_block != nullptr) {
-            memcpy(new_block, ptr, size);
+            size_t oldSize = GetAllocatedBlockSize(ptr);
+            size_t copySize = (oldSize < size) ? oldSize : size;
+            memcpy(new_block, ptr, copySize);
             Free(ptr);
         }
 
@@ -123,7 +125,7 @@ namespace Memory
         auto actualSize = size + sizeof(Header);
         void* actualBlock = (void*)header;
 
-        InsertToFreelist(actualBlock, size);
+        InsertToFreelist(actualBlock, actualSize);
 
         Lock.Release();
     }

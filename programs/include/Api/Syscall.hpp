@@ -1,0 +1,51 @@
+/*
+    * Syscall.hpp
+    * ZenithOS syscall definitions for userspace programs
+    * Copyright (c) 2025 Daniel Hammer
+*/
+
+#pragma once
+#include <cstdint>
+#include <cstddef>
+
+namespace Zenith {
+
+    // Syscall numbers
+    static constexpr uint64_t SYS_EXIT            = 0;
+    static constexpr uint64_t SYS_YIELD           = 1;
+    static constexpr uint64_t SYS_SLEEP_MS        = 2;
+    static constexpr uint64_t SYS_GETPID          = 3;
+    static constexpr uint64_t SYS_PRINT           = 4;
+    static constexpr uint64_t SYS_PUTCHAR          = 5;
+    static constexpr uint64_t SYS_OPEN            = 6;
+    static constexpr uint64_t SYS_READ            = 7;
+    static constexpr uint64_t SYS_GETSIZE         = 8;
+    static constexpr uint64_t SYS_CLOSE           = 9;
+    static constexpr uint64_t SYS_READDIR         = 10;
+    static constexpr uint64_t SYS_ALLOC           = 11;
+    static constexpr uint64_t SYS_FREE            = 12;
+    static constexpr uint64_t SYS_GETTICKS        = 13;
+    static constexpr uint64_t SYS_GETMILLISECONDS = 14;
+    static constexpr uint64_t SYS_GETINFO         = 15;
+    static constexpr uint64_t SYS_ISKEYAVAILABLE  = 16;
+    static constexpr uint64_t SYS_GETKEY          = 17;
+    static constexpr uint64_t SYS_GETCHAR         = 18;
+    static constexpr uint64_t SYS_PING            = 19;
+
+    struct SysInfo {
+        char osName[32];
+        char osVersion[32];
+        uint32_t    apiVersion;
+        uint32_t    maxProcesses;
+    };
+
+    struct KeyEvent {
+        uint8_t scancode;
+        char    ascii;
+        bool    pressed;
+        bool    shift;
+        bool    ctrl;
+        bool    alt;
+    };
+
+}

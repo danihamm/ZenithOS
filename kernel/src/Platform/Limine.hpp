@@ -59,6 +59,15 @@ namespace {
         .response = nullptr
     };
 
+    __attribute__((used, section(".limine_requests")))
+    volatile limine_module_request module_request = {
+        .id = LIMINE_MODULE_REQUEST,
+        .revision = 1,
+        .response = nullptr,
+        .internal_module_count = 0,
+        .internal_modules = nullptr
+    };
+
     }
     
     // Finally, define the start and end markers for the Limine requests.
