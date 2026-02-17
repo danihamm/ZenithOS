@@ -111,7 +111,7 @@ namespace Hal {
     void IDTInitialize() {
         IDT = (InterruptDescriptor*)Memory::g_pfa->Allocate();
         Kt::KernelLogStream(Kt::DEBUG, "IDT") << "Allocated IDT at " << base::hex << (uint64_t)IDT;
-        IDTR.Limit = 0x0FF;
+        IDTR.Limit = (256 * sizeof(InterruptDescriptor)) - 1;
         IDTR.Base = (uint64_t)IDT;
         Kt::KernelLogStream(Kt::DEBUG, "IDT") << "Set IDTR Base to " << base::hex << IDTR.Base << " and Limit to " << base::hex << IDTR.Limit;
 
@@ -122,5 +122,9 @@ namespace Hal {
         LoadIDT(IDTR);
 
         Kt::KernelLogStream(Kt::OK, "Hal") << "Loaded new IDT";
+    }
+
+    void IDTReload() {
+        LoadIDT(IDTR);
     }
 };

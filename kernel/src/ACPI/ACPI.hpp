@@ -42,5 +42,10 @@ namespace Hal {
         static bool TestChecksum(CommonSDTHeader* header);
 
         CommonSDTHeader* FindNextTable(CommonSDTHeader* table);
+
+        CommonSDTHeader* GetXSDT() { return m_xsdt; }
+
+    private:
+        CommonSDTHeader* m_xsdt = nullptr;
     };
 };

@@ -4,8 +4,10 @@
 #include <Memory/HHDM.hpp>
 
 namespace Memory::VMM {
+    Paging* g_paging = nullptr;
+
     extern "C" uint64_t KernelStartSymbol;
-    
+
     std::uint64_t GetPhysKernelAddress(std::uint64_t virtualAddress) {
         return Paging::GetPhysAddr(GetCR3(), (std::uint64_t)virtualAddress, true);
     }
@@ -68,6 +70,27 @@ namespace Memory::VMM {
 
         pageEntry->Present = true;
         pageEntry->Writable = true;
+
+        pageEntry->Address = physicalAddress >> 12;
+    }
+
+    void Paging::MapMMIO(std::uint64_t physicalAddress, std::uint64_t virtualAddress) {
+        if (virtualAddress % 0x1000 != 0 || physicalAddress % 0x1000 != 0) {
+            Panic("Value that isn't page-aligned passed as address to Paging::MapMMIO!", nullptr);
+        }
+
+        VirtualAddress virtualAddressObj(virtualAddress);
+
+        auto PML3 = HandleLevel(virtualAddressObj, PML4, 4);
+        auto PML2 = HandleLevel(virtualAddressObj, PML3, 3);
+        auto PML1 = HandleLevel(virtualAddressObj, PML2, 2);
+
+        PageTableEntry* pageEntry = (PageTableEntry*)Memory::HHDM(&PML1->entries[virtualAddressObj.GetPageIndex()]);
+
+        pageEntry->Present = true;
+        pageEntry->Writable = true;
+        pageEntry->CacheDisabled = true;
+        pageEntry->WriteThrough = true;
 
         pageEntry->Address = physicalAddress >> 12;
     }

@@ -6,6 +6,7 @@
 
 #pragma once
 #include <cstdint>
+#include <cstddef>
 
 namespace Hal {
     struct InterruptDescriptor {
@@ -24,4 +25,6 @@ namespace Hal {
     }__attribute__((packed));
 
     void IDTInitialize();
+    void IDTEncodeInterrupt(std::size_t i, void* handler, uint8_t type_attr);
+    void IDTReload();
 };

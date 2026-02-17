@@ -71,7 +71,8 @@ namespace Hal {
         
         if (xsdp->Revision >= 2) {
             nextTableAddress = xsdp->XSDTAddress;
-            HandleXSDT((CommonSDTHeader*)Memory::HHDM(nextTableAddress));
+            m_xsdt = (CommonSDTHeader*)Memory::HHDM(nextTableAddress);
+            HandleXSDT(m_xsdt);
         }
         else
         {

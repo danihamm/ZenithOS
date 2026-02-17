@@ -27,6 +27,10 @@
 #include <Io/IoPort.hpp>
 #include <Memory/Paging.hpp>
 #include <ACPI/ACPI.hpp>
+#include <Hal/Apic/ApicInit.hpp>
+#include <Drivers/PS2/PS2Controller.hpp>
+#include <Drivers/PS2/Keyboard.hpp>
+#include <Drivers/PS2/Mouse.hpp>
 #include <CppLib/BoxUI.hpp>
 
 using namespace Kt;
@@ -107,10 +111,22 @@ extern "C" void kmain() {
     Hal::IDTInitialize();
 
     Memory::VMM::Paging g_paging{};
+    Memory::VMM::g_paging = &g_paging;
     g_paging.Init((uint64_t)&KernelStartSymbol, ((uint64_t)&KernelEndSymbol - (uint64_t)&KernelStartSymbol), memmap_request.response);
 
 #endif
     Hal::ACPI g_acpi((Hal::ACPI::XSDP*)Memory::HHDM(rsdp_request.response->address));
+
+#if defined (__x86_64__)
+    if (g_acpi.GetXSDT() != nullptr) {
+        Hal::ApicInitialize(g_acpi.GetXSDT());
+
+        Drivers::PS2::Initialize();
+        Drivers::PS2::Keyboard::Initialize();
+        Drivers::PS2::Mouse::Initialize();
+    }
+#endif
+
     Efi::SystemTable* ST = (Efi::SystemTable*)Memory::HHDM(system_table_request.response->address);
     Efi::Init(ST);
 
