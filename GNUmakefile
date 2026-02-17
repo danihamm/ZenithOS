@@ -31,18 +31,24 @@ run-hdd: run-hdd-$(ARCH)
 
 .PHONY: run-x86_64
 run-x86_64: $(IMAGE_NAME).iso
+	sudo ./scripts/net-setup.sh
 	qemu-system-$(ARCH) \
 		-M q35 \
 		-bios /usr/share/ovmf/OVMF.fd \
 		-cdrom $(IMAGE_NAME).iso \
+		-device e1000,netdev=net0,mac=52:54:00:68:00:99 \
+		-netdev tap,id=net0,ifname=tap0,script=no,downscript=no \
 		$(QEMUFLAGS)
 
 .PHONY: run-hdd-x86_64
 run-hdd-x86_64: $(IMAGE_NAME).hdd
+	sudo ./scripts/net-setup.sh
 	qemu-system-$(ARCH) \
 		-M q35 \
 		-bios /usr/share/ovmf/OVMF.fd \
 		-hda $(IMAGE_NAME).hdd \
+		-device e1000,netdev=net0,mac=52:54:00:68:00:99 \
+		-netdev tap,id=net0,ifname=tap0,script=no,downscript=no \
 		$(QEMUFLAGS)
 
 .PHONY: run-aarch64
@@ -126,17 +132,23 @@ run-hdd-loongarch64: $(IMAGE_NAME).hdd
 
 .PHONY: run-bios
 run-bios: $(IMAGE_NAME).iso
+	sudo ./scripts/net-setup.sh
 	qemu-system-$(ARCH) \
 		-M q35 \
 		-cdrom $(IMAGE_NAME).iso \
 		-boot d \
+		-device e1000,netdev=net0,mac=52:54:00:68:00:99 \
+		-netdev tap,id=net0,ifname=tap0,script=no,downscript=no \
 		$(QEMUFLAGS)
 
 .PHONY: run-hdd-bios
 run-hdd-bios: $(IMAGE_NAME).hdd
+	sudo ./scripts/net-setup.sh
 	qemu-system-$(ARCH) \
 		-M q35 \
 		-hda $(IMAGE_NAME).hdd \
+		-device e1000,netdev=net0,mac=52:54:00:68:00:99 \
+		-netdev tap,id=net0,ifname=tap0,script=no,downscript=no \
 		$(QEMUFLAGS)
 
 .PHONY: toolchain

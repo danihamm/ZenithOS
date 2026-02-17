@@ -33,6 +33,8 @@
 #include <Drivers/PS2/PS2Controller.hpp>
 #include <Drivers/PS2/Keyboard.hpp>
 #include <Drivers/PS2/Mouse.hpp>
+#include <Drivers/Net/E1000.hpp>
+#include <Net/Net.hpp>
 #include <CppLib/BoxUI.hpp>
 #include <Graphics/Cursor.hpp>
 
@@ -131,6 +133,9 @@ extern "C" void kmain() {
         Drivers::PS2::Initialize();
         Drivers::PS2::Keyboard::Initialize();
         Drivers::PS2::Mouse::Initialize();
+
+        Drivers::Net::E1000::Initialize();
+        Net::Initialize();
     }
 #endif
 
