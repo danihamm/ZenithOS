@@ -139,6 +139,10 @@ run-hdd-bios: $(IMAGE_NAME).hdd
 		-hda $(IMAGE_NAME).hdd \
 		$(QEMUFLAGS)
 
+.PHONY: toolchain
+toolchain:
+	./toolchain/build-toolchain.sh
+
 limine/limine:
 	rm -rf limine
 	git clone https://github.com/limine-bootloader/limine.git --branch=v9.x-binary --depth=1

@@ -17,17 +17,27 @@ ifeq ($(filter $(ARCH),aarch64 loongarch64 riscv64 x86_64),)
     $(error Architecture $(ARCH) not supported)
 endif
 
+# Auto-detect x86_64-elf cross compiler from toolchain/local/.
+ifeq ($(ARCH),x86_64)
+    TOOLCHAIN_PREFIX := $(shell cd .. && pwd)/toolchain/local/bin/x86_64-elf-
+    ifneq ($(wildcard $(TOOLCHAIN_PREFIX)gcc),)
+        CC  := $(TOOLCHAIN_PREFIX)gcc
+        CXX := $(TOOLCHAIN_PREFIX)g++
+        AR  := $(TOOLCHAIN_PREFIX)ar
+    endif
+endif
+
 # User controllable C compiler command.
-CC := cc
+CC  ?= cc
 
 # User controllable C++ compiler command.
-CXX := c++
+CXX ?= c++
 
 # User controllable Objective C compiler command.
 OBJC := g++
 
 # User controllable archiver command.
-AR := ar
+AR  ?= ar
 
 # User controllable C flags.
 CFLAGS := -g -O2 -pipe
