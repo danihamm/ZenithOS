@@ -32,6 +32,7 @@
 #include <Drivers/PS2/Keyboard.hpp>
 #include <Drivers/PS2/Mouse.hpp>
 #include <CppLib/BoxUI.hpp>
+#include <Graphics/Cursor.hpp>
 
 using namespace Kt;
 
@@ -130,5 +131,11 @@ extern "C" void kmain() {
     Efi::SystemTable* ST = (Efi::SystemTable*)Memory::HHDM(system_table_request.response->address);
     Efi::Init(ST);
 
-    Hal::Halt();
+    Graphics::Cursor::Initialize(framebuffer);
+
+    // Main loop: update cursor position and halt until next interrupt
+    for (;;) {
+        Graphics::Cursor::Update();
+        asm volatile ("hlt");
+    }
 }
