@@ -37,6 +37,8 @@ namespace Zenith {
     static constexpr uint64_t SYS_WAITPID         = 23;
     static constexpr uint64_t SYS_TERMSIZE        = 24;
     static constexpr uint64_t SYS_GETARGS         = 25;
+    static constexpr uint64_t SYS_RESET           = 26;
+    static constexpr uint64_t SYS_SHUTDOWN        = 27;
 
     struct FbInfo {
         uint64_t width;

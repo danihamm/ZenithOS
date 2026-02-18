@@ -326,6 +326,12 @@ namespace Zenith {
                 return (int64_t)Sys_TermSize();
             case SYS_GETARGS:
                 return (int64_t)Sys_GetArgs((char*)frame->arg1, frame->arg2);
+            case SYS_RESET:
+                /* Unimplemented */
+                return -1;
+            case SYS_SHUTDOWN:
+                /* Unimplemented */
+                return -1;
             default:
                 return -1;
         }

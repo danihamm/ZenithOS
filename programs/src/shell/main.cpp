@@ -96,6 +96,8 @@ static void cmd_help() {
     zenith::print("  ping <ip>     Send ICMP echo requests\n");
     zenith::print("  uptime        Show uptime in milliseconds\n");
     zenith::print("  clear         Clear the screen\n");
+    zenith::print("  reset         Reboot the system\n");
+    zenith::print("  shutdown      Shut down the system\n");
     zenith::print("  exit          Exit the shell\n");
 }
 
@@ -430,6 +432,12 @@ static void process_command(const char* line) {
         cmd_uptime();
     } else if (streq(line, "clear")) {
         cmd_clear();
+    } else if (streq(line, "reset")) {
+        zenith::print("Rebooting...\n");
+        zenith::reset();
+    } else if (streq(line, "shutdown")) {
+        zenith::print("Shutting down...\n");
+        zenith::shutdown();
     } else if (streq(line, "exit")) {
         zenith::print("Goodbye.\n");
         zenith::exit(0);

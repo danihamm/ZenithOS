@@ -176,4 +176,15 @@ namespace zenith {
         if (rows) *rows = (int)(r >> 32);
     }
 
+    // Power management
+    [[noreturn]] inline void reset() {
+        syscall0(Zenith::SYS_RESET);
+        __builtin_unreachable();
+    }
+
+    [[noreturn]] inline void shutdown() {
+        syscall0(Zenith::SYS_SHUTDOWN);
+        __builtin_unreachable();
+    }
+
 }

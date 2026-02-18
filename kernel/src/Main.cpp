@@ -203,9 +203,8 @@ extern "C" void kmain() {
     // Enable preemptive scheduling via the APIC timer
     Timekeeping::EnableSchedulerTick();
 
-    // Main loop: update cursor position and halt until next interrupt
+    // Main loop: halt until next interrupt
     for (;;) {
-        Graphics::Cursor::Update();
         asm volatile ("hlt");
     }
 }

@@ -1,6 +1,6 @@
 /*
     * Cursor.hpp
-    * Simple framebuffer mouse cursor
+    * Framebuffer information storage
     * Copyright (c) 2025 Daniel Hammer
 */
 
@@ -11,7 +11,6 @@
 namespace Graphics::Cursor {
 
     void Initialize(limine_framebuffer* framebuffer);
-    void Update();
 
     uint32_t* GetFramebufferBase();
     uint64_t  GetFramebufferWidth();
