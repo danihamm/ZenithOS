@@ -174,7 +174,7 @@ extern "C" void _start() {
         handle = zenith::open(path);
         if (handle >= 0) foundSection = section;
     } else {
-        for (int s = 1; s <= 3; s++) {
+        for (int s = 1; s <= 9; s++) {
             const char* prefix = "0:/man/";
             int p = 0;
             while (prefix[p]) { path[p] = prefix[p]; p++; }
