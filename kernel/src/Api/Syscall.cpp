@@ -256,6 +256,23 @@ namespace Zenith {
         return (rows << 32) | (cols & 0xFFFFFFFF);
     }
 
+    static void Sys_Reset() { 
+        /*
+            Triple fault for now; TODO: implement UEFI runtime function for clean reboot.
+
+            We implement the triple fault by loading a null IDT into the IDT register,
+            and then immediately triggering an interrupt.
+
+            This technique should pretty much work across the board but it's of course
+            better to use the UEFI runtime API as it has a method for this purpose,
+            along with shutdown.
+        */
+       
+        struct [[gnu::packed]] { uint16_t limit; uint64_t base; } nullIdt = {0, 0};
+        asm volatile("lidt %0; int $0x03" :: "m"(nullIdt));
+        __builtin_unreachable();
+    }
+
     // ---- Dispatch ----
 
     extern "C" int64_t SyscallDispatch(SyscallFrame* frame) {
@@ -327,8 +344,8 @@ namespace Zenith {
             case SYS_GETARGS:
                 return (int64_t)Sys_GetArgs((char*)frame->arg1, frame->arg2);
             case SYS_RESET:
-                /* Unimplemented */
-                return -1;
+                Sys_Reset();
+                return 0;
             case SYS_SHUTDOWN:
                 /* Unimplemented */
                 return -1;
