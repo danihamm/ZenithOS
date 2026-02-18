@@ -1,0 +1,137 @@
+.TH SYSCALLS 2
+.SH NAME
+    syscalls - overview of ZenithOS system calls
+
+.SH DESCRIPTION
+    ZenithOS provides 26 system calls (numbers 0-25) for userspace
+    programs. Syscalls use the x86-64 SYSCALL instruction with the
+    following register convention:
+
+        RAX   Syscall number (in) / return value (out)
+        RDI   Argument 1
+        RSI   Argument 2
+        RDX   Argument 3
+        R10   Argument 4
+        R8    Argument 5
+        R9    Argument 6
+
+    Include <zenith/syscall.h> for typed wrappers in the zenith::
+    namespace.
+
+.SH PROCESS MANAGEMENT
+.B SYS_EXIT (0)
+    Terminate the calling process.
+        void zenith::exit(int code = 0);
+
+.B SYS_YIELD (1)
+    Yield the remainder of the time slice.
+        void zenith::yield();
+
+.B SYS_SLEEP_MS (2)
+    Sleep for at least the given number of milliseconds.
+        void zenith::sleep_ms(uint64_t ms);
+
+.B SYS_GETPID (3)
+    Return the PID of the calling process.
+        int zenith::getpid();
+
+.B SYS_SPAWN (20)
+    Spawn a new process from an ELF binary on the VFS.
+        int zenith::spawn(const char* path, const char* args = nullptr);
+
+.B SYS_WAITPID (23)
+    Block until the given process has exited.
+        void zenith::waitpid(int pid);
+
+.SH CONSOLE I/O
+.B SYS_PRINT (4)
+    Write a null-terminated string to the terminal.
+        void zenith::print(const char* text);
+
+.B SYS_PUTCHAR (5)
+    Write a single character to the terminal.
+        void zenith::putchar(char c);
+
+.SH FILE I/O
+.B SYS_OPEN (6)
+    Open a file. Returns a handle or negative on error.
+        int zenith::open(const char* path);
+
+.B SYS_READ (7)
+    Read bytes from a file at a given offset.
+        int zenith::read(int h, uint8_t* buf, uint64_t off, uint64_t sz);
+
+.B SYS_GETSIZE (8)
+    Get the size of an open file in bytes.
+        uint64_t zenith::getsize(int handle);
+
+.B SYS_CLOSE (9)
+    Close a file handle.
+        void zenith::close(int handle);
+
+.B SYS_READDIR (10)
+    List directory entries (max 64 per call).
+        int zenith::readdir(const char* path, const char** names, int max);
+
+.SH MEMORY
+.B SYS_ALLOC (11)
+    Map zeroed pages into the process address space.
+        void* zenith::alloc(uint64_t size);
+
+.B SYS_FREE (12)
+    Reserved (currently a no-op).
+        void zenith::free(void* ptr);
+
+.SH TIMEKEEPING
+.B SYS_GETTICKS (13)
+    Get APIC timer ticks since boot.
+        uint64_t zenith::get_ticks();
+
+.B SYS_GETMILLISECONDS (14)
+    Get milliseconds elapsed since boot.
+        uint64_t zenith::get_milliseconds();
+
+.SH SYSTEM
+.B SYS_GETINFO (15)
+    Get OS name, version, and configuration.
+        void zenith::get_info(Zenith::SysInfo* info);
+
+.SH KEYBOARD
+.B SYS_ISKEYAVAILABLE (16)
+    Check if a key event is pending (non-blocking).
+        bool zenith::is_key_available();
+
+.B SYS_GETKEY (17)
+    Get the next key event (press or release).
+        void zenith::getkey(Zenith::KeyEvent* out);
+
+.B SYS_GETCHAR (18)
+    Block until a printable character is typed.
+        char zenith::getchar();
+
+.SH NETWORKING
+.B SYS_PING (19)
+    Send an ICMP echo request and wait for reply.
+        int32_t zenith::ping(uint32_t ip, uint32_t timeoutMs);
+
+.SH FRAMEBUFFER
+.B SYS_FBINFO (21)
+    Get framebuffer dimensions and format.
+        void zenith::fb_info(Zenith::FbInfo* info);
+
+.B SYS_FBMAP (22)
+    Map the framebuffer into process memory at 0x50000000.
+        void* zenith::fb_map();
+
+.SH TERMINAL
+.B SYS_TERMSIZE (24)
+    Get terminal dimensions (columns and rows).
+        void zenith::termsize(int* cols, int* rows);
+
+.SH ARGUMENTS
+.B SYS_GETARGS (25)
+    Get the argument string passed to this process at spawn time.
+        int zenith::getargs(char* buf, uint64_t maxLen);
+
+.SH SEE ALSO
+    spawn(2), file(2), framebuffer(2), malloc(3)

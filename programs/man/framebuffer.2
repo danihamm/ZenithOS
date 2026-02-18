@@ -1,0 +1,62 @@
+.TH FRAMEBUFFER 2
+.SH NAME
+    fb_info, fb_map - direct framebuffer access
+
+.SH SYNOPSIS
+.BI     void zenith::fb_info(Zenith::FbInfo* info);
+.BI     void* zenith::fb_map();
+
+.SH DESCRIPTION
+    These syscalls allow userspace programs to access the linear
+    framebuffer directly for graphical output.
+
+.SS fb_info
+    Fills in an FbInfo structure with the framebuffer geometry:
+
+        Zenith::FbInfo fb;
+        zenith::fb_info(&fb);
+        // fb.width, fb.height, fb.pitch, fb.bpp
+
+    The pitch is the number of bytes per scanline (may be larger
+    than width * 4 due to alignment). bpp is always 32.
+
+.SS fb_map
+    Maps the physical framebuffer into the process address space at
+    a fixed virtual address (0x50000000) and returns that address.
+
+        uint32_t* pixels = (uint32_t*)zenith::fb_map();
+
+    Each pixel is a 32-bit value in 0xAARRGGBB format (blue in the
+    low byte). Writing to this memory directly updates the screen.
+
+.SH PIXEL FORMAT
+        Bits 31-24:  Alpha (unused, typically 0xFF)
+        Bits 23-16:  Red
+        Bits 15-8:   Green
+        Bits 7-0:    Blue
+
+    Example: red = 0x00FF0000, green = 0x0000FF00, blue = 0x000000FF
+
+.SH EXAMPLE
+    Fill the screen with blue:
+
+        Zenith::FbInfo fb;
+        zenith::fb_info(&fb);
+        uint32_t* pixels = (uint32_t*)zenith::fb_map();
+
+        for (uint64_t y = 0; y < fb.height; y++) {
+            uint32_t* row = (uint32_t*)((uint8_t*)pixels + y * fb.pitch);
+            for (uint64_t x = 0; x < fb.width; x++) {
+                row[x] = 0x000000FF;
+            }
+        }
+
+.SH NOTES
+    After mapping, the cursor overlay is not composited. Programs
+    that use the framebuffer take full control of screen output.
+
+    Only one mapping per process is supported. Calling fb_map()
+    multiple times returns the same address.
+
+.SH SEE ALSO
+    syscalls(2), malloc(3)

@@ -1,0 +1,74 @@
+.TH FILE 2
+.SH NAME
+    open, read, getsize, close, readdir - file I/O system calls
+
+.SH SYNOPSIS
+.BI     int zenith::open(const char* path);
+.BI     int zenith::read(int handle, uint8_t* buf, uint64_t offset, uint64_t size);
+.BI     uint64_t zenith::getsize(int handle);
+.BI     void zenith::close(int handle);
+.BI     int zenith::readdir(const char* path, const char** names, int max);
+
+.SH DESCRIPTION
+    ZenithOS provides a simple read-only Virtual File System (VFS)
+    backed by the boot ramdisk. Files are accessed via paths in the
+    format "<drive>:/<name>", where drive 0 is the ramdisk.
+
+.SS open
+    Opens a file and returns a non-negative handle on success, or a
+    negative value on error (file not found, no free handles).
+
+        int h = zenith::open("0:/shell.elf");
+
+.SS read
+    Reads up to 'size' bytes starting at 'offset' into 'buf'.
+    Returns the number of bytes actually read, or negative on error.
+    There is no implicit file position -- the offset is explicit on
+    every call.
+
+        uint8_t buf[512];
+        int n = zenith::read(h, buf, 0, 512);
+
+.SS getsize
+    Returns the total size in bytes of the file.
+
+        uint64_t sz = zenith::getsize(h);
+
+.SS close
+    Closes the file handle and frees kernel resources.
+
+        zenith::close(h);
+
+.SS readdir
+    Lists entries in a directory. Up to 'max' entry names (max 64)
+    are written to the 'names' array. The kernel allocates a user-
+    accessible page for the string data automatically.
+
+        const char* entries[64];
+        int count = zenith::readdir("0:/", entries, 64);
+
+.SH READING PATTERN
+    The standard pattern for reading a file:
+
+        int h = zenith::open("0:/myfile.txt");
+        uint64_t size = zenith::getsize(h);
+        uint8_t buf[512];
+        uint64_t off = 0;
+        while (off < size) {
+            uint64_t chunk = size - off;
+            if (chunk > 511) chunk = 511;
+            int n = zenith::read(h, buf, off, chunk);
+            if (n <= 0) break;
+            buf[n] = '\0';
+            zenith::print((const char*)buf);
+            off += n;
+        }
+        zenith::close(h);
+
+.SH NOTES
+    The filesystem is read-only. There are no write or create calls.
+    All files live on the ramdisk which is loaded at boot from a
+    USTAR tar archive.
+
+.SH SEE ALSO
+    syscalls(2), spawn(2), malloc(3)

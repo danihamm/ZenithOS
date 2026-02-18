@@ -166,3 +166,9 @@ namespace Kt
 };
 
 extern Kt::KernelErrorStream kerr;
+
+// Forward-declare flanterm context for syscall access
+struct flanterm_context;
+namespace Kt {
+    extern flanterm_context *ctx;
+}

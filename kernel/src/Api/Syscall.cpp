@@ -20,6 +20,8 @@
 #include <Net/ByteOrder.hpp>
 #include <Hal/MSR.hpp>
 #include <Hal/GDT.hpp>
+#include <Graphics/Cursor.hpp>
+#include "../Libraries/flanterm/src/flanterm.h"
 
 // Assembly entry point
 extern "C" void SyscallEntry();
@@ -175,6 +177,47 @@ namespace Zenith {
     static uint16_t g_pingSeq = 0;
     static constexpr uint16_t PING_ID = 0x2E01; // "ZE"
 
+    static void Sys_FbInfo(FbInfo* out) {
+        if (out == nullptr) return;
+        out->width    = Graphics::Cursor::GetFramebufferWidth();
+        out->height   = Graphics::Cursor::GetFramebufferHeight();
+        out->pitch    = Graphics::Cursor::GetFramebufferPitch();
+        out->bpp      = 32;
+        out->userAddr = 0;
+    }
+
+    static void Sys_WaitPid(int pid) {
+        while (Sched::IsAlive(pid)) {
+            Sched::Schedule();  // yield until the process exits
+        }
+    }
+
+    static uint64_t Sys_FbMap() {
+        auto* proc = Sched::GetCurrentProcessPtr();
+        if (proc == nullptr) return 0;
+
+        uint32_t* fbBase = Graphics::Cursor::GetFramebufferBase();
+        if (fbBase == nullptr) return 0;
+
+        uint64_t fbPhys = Memory::SubHHDM((uint64_t)fbBase);
+        uint64_t fbSize = Graphics::Cursor::GetFramebufferHeight()
+                        * Graphics::Cursor::GetFramebufferPitch();
+        uint64_t numPages = (fbSize + 0xFFF) / 0x1000;
+
+        // Map at a fixed user VA
+        constexpr uint64_t userVa = 0x50000000ULL;
+
+        for (uint64_t i = 0; i < numPages; i++) {
+            Memory::VMM::Paging::MapUserIn(
+                proc->pml4Phys,
+                fbPhys + i * 0x1000,
+                userVa + i * 0x1000
+            );
+        }
+
+        return userVa;
+    }
+
     static int32_t Sys_Ping(uint32_t ipAddr, uint32_t timeoutMs) {
         uint16_t seq = g_pingSeq++;
 
@@ -190,6 +233,27 @@ namespace Zenith {
         }
 
         return (int32_t)(Timekeeping::GetMilliseconds() - start);
+    }
+
+    static int Sys_Spawn(const char* path, const char* args) {
+        return Sched::Spawn(path, args);
+    }
+
+    static int Sys_GetArgs(char* buf, uint64_t maxLen) {
+        auto* proc = Sched::GetCurrentProcessPtr();
+        if (proc == nullptr || buf == nullptr || maxLen == 0) return -1;
+        int i = 0;
+        for (; i < (int)maxLen - 1 && proc->args[i]; i++) {
+            buf[i] = proc->args[i];
+        }
+        buf[i] = '\0';
+        return i;
+    }
+
+    static uint64_t Sys_TermSize() {
+        size_t cols = 0, rows = 0;
+        flanterm_get_dimensions(Kt::ctx, &cols, &rows);
+        return (rows << 32) | (cols & 0xFFFFFFFF);
     }
 
     // ---- Dispatch ----
@@ -248,6 +312,20 @@ namespace Zenith {
                 return (int64_t)Sys_GetChar();
             case SYS_PING:
                 return (int64_t)Sys_Ping((uint32_t)frame->arg1, (uint32_t)frame->arg2);
+            case SYS_SPAWN:
+                return (int64_t)Sys_Spawn((const char*)frame->arg1, (const char*)frame->arg2);
+            case SYS_WAITPID:
+                Sys_WaitPid((int)frame->arg1);
+                return 0;
+            case SYS_FBINFO:
+                Sys_FbInfo((FbInfo*)frame->arg1);
+                return 0;
+            case SYS_FBMAP:
+                return (int64_t)Sys_FbMap();
+            case SYS_TERMSIZE:
+                return (int64_t)Sys_TermSize();
+            case SYS_GETARGS:
+                return (int64_t)Sys_GetArgs((char*)frame->arg1, frame->arg2);
             default:
                 return -1;
         }
@@ -274,7 +352,7 @@ namespace Zenith {
         Hal::WriteMSR(Hal::IA32_FMASK, 0x200);
 
         Kt::KernelLogStream(Kt::OK, "Syscall") << "SYSCALL/SYSRET initialized (LSTAR="
-            << kcp::hex << (uint64_t)SyscallEntry << kcp::dec << ", 20 syscalls)";
+            << kcp::hex << (uint64_t)SyscallEntry << kcp::dec << ", 26 syscalls)";
     }
 
 }

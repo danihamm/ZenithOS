@@ -117,6 +117,9 @@ namespace zenith {
     inline void yield() { syscall0(Zenith::SYS_YIELD); }
     inline void sleep_ms(uint64_t ms) { syscall1(Zenith::SYS_SLEEP_MS, ms); }
     inline int getpid() { return (int)syscall0(Zenith::SYS_GETPID); }
+    inline int spawn(const char* path, const char* args = nullptr) {
+        return (int)syscall2(Zenith::SYS_SPAWN, (uint64_t)path, (uint64_t)args);
+    }
 
     // Console
     inline void print(const char* text) { syscall1(Zenith::SYS_PRINT, (uint64_t)text); }
@@ -152,6 +155,25 @@ namespace zenith {
     // Networking
     inline int32_t ping(uint32_t ip, uint32_t timeoutMs = 3000) {
         return (int32_t)syscall2(Zenith::SYS_PING, (uint64_t)ip, (uint64_t)timeoutMs);
+    }
+
+    // Process management
+    inline void waitpid(int pid) { syscall1(Zenith::SYS_WAITPID, (uint64_t)pid); }
+
+    // Framebuffer
+    inline void fb_info(Zenith::FbInfo* info) { syscall1(Zenith::SYS_FBINFO, (uint64_t)info); }
+    inline void* fb_map() { return (void*)syscall0(Zenith::SYS_FBMAP); }
+
+    // Arguments
+    inline int getargs(char* buf, uint64_t maxLen) {
+        return (int)syscall2(Zenith::SYS_GETARGS, (uint64_t)buf, maxLen);
+    }
+
+    // Terminal
+    inline void termsize(int* cols, int* rows) {
+        uint64_t r = (uint64_t)syscall0(Zenith::SYS_TERMSIZE);
+        if (cols) *cols = (int)(r & 0xFFFFFFFF);
+        if (rows) *rows = (int)(r >> 32);
     }
 
 }

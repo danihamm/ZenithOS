@@ -1,0 +1,69 @@
+.TH SPAWN 2
+.SH NAME
+    spawn, waitpid - create and wait for processes
+
+.SH SYNOPSIS
+.BI     int zenith::spawn(const char* path, const char* args = nullptr);
+.BI     void zenith::waitpid(int pid);
+.BI     int zenith::getargs(char* buf, uint64_t maxLen);
+
+.SH DESCRIPTION
+
+.SS spawn
+    Loads the ELF64 binary at the given VFS path and creates a new
+    process. The path must include the drive prefix, for example:
+
+        int pid = zenith::spawn("0:/hello.elf");
+
+    An optional second argument passes a string to the child:
+
+        int pid = zenith::spawn("0:/man.elf", "intro");
+
+    The new process gets its own PML4 page table, a 16 KiB stack
+    (at 0x7FFFFEF000-0x7FFFFFF000), and begins executing at the
+    ELF entry point (_start).
+
+    Returns the new process's PID on success, or -1 on failure.
+    Failure occurs when there are no free process slots (max 16),
+    the file cannot be found, or the ELF is invalid.
+
+.SS waitpid
+    Blocks the calling process until the process with the given PID
+    has exited. Internally, this yields the CPU in a loop:
+
+        zenith::waitpid(pid);
+
+    This is how the shell implements foreground process execution --
+    it spawns a child and waits for it to complete before showing
+    the next prompt.
+
+.SH EXAMPLES
+    Spawn a program and wait for it:
+
+        int pid = zenith::spawn("0:/hello.elf");
+        if (pid < 0) {
+            zenith::print("spawn failed\n");
+        } else {
+            zenith::waitpid(pid);
+            zenith::print("child exited\n");
+        }
+
+.SS getargs
+    Copies the argument string into buf (up to maxLen bytes, always
+    null-terminated). Returns the number of characters copied, or
+    -1 on error.
+
+        char args[256];
+        zenith::getargs(args, sizeof(args));
+
+    The argument string is set by the parent when calling spawn().
+    If no arguments were provided, the buffer will be empty.
+
+.SH NOTES
+    The _start() entry point receives no argc/argv. Use getargs()
+    to retrieve the argument string passed by the parent process.
+
+    Process exit codes are not yet collected by waitpid.
+
+.SH SEE ALSO
+    syscalls(2), file(2)

@@ -1,0 +1,49 @@
+.TH INTRO 1
+.SH NAME
+    intro - introduction to ZenithOS userspace
+
+.SH DESCRIPTION
+    ZenithOS is a hobbyist 64-bit operating system written in C++20.
+    Userspace programs run in Ring 3, are loaded as static ELF64
+    binaries, and communicate with the kernel through the x86-64
+    SYSCALL/SYSRET mechanism.
+
+    Programs are compiled with a freestanding cross-compiler and
+    linked at virtual address 0x400000. There is no standard C
+    library for C++ programs -- all system interaction goes through
+    the zenith:: syscall wrappers.
+
+.SH GETTING STARTED
+    To write a new program, create a directory under programs/src/
+    with a main.cpp file. The entry point is:
+
+        extern "C" void _start() { ... }
+
+    There is no argc/argv. Include <zenith/syscall.h> for the full
+    typed syscall API. Include <zenith/heap.h> for malloc/mfree.
+
+    Build with:
+
+        cd programs && make
+
+    The resulting ELF binary appears in programs/bin/.
+
+.SH SHELL
+    The built-in shell is the primary way to interact with ZenithOS.
+    Type 'help' at the shell prompt for a list of commands. Use
+    'man shell' for detailed shell documentation.
+
+.SH MAN PAGES
+    The following man pages are available:
+
+        intro(1)        This page
+        shell(1)        Shell commands reference
+        man(1)          The man command itself
+        syscalls(2)     Overview of all syscalls
+        spawn(2)        Process spawning
+        file(2)         File I/O syscalls
+        framebuffer(2)  Framebuffer access
+        malloc(3)       Memory allocation
+
+.SH SEE ALSO
+    shell(1), syscalls(2), malloc(3)

@@ -7,3 +7,6 @@ qemu.log
 toolchain/local/
 toolchain/build/
 toolchain/src/
+programs/bin/
+programs/obj/
+programs/src/doom/obj/

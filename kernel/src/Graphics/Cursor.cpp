@@ -162,4 +162,9 @@ namespace Graphics::Cursor {
         g_OldY = newY;
     }
 
+    uint32_t* GetFramebufferBase()   { return g_FbBase; }
+    uint64_t  GetFramebufferWidth()  { return g_FbWidth; }
+    uint64_t  GetFramebufferHeight() { return g_FbHeight; }
+    uint64_t  GetFramebufferPitch()  { return g_FbPitch; }
+
 };

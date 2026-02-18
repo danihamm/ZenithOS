@@ -1,0 +1,54 @@
+.TH SHELL 1
+.SH NAME
+    shell - ZenithOS interactive command shell
+
+.SH DESCRIPTION
+    The ZenithOS shell is a simple command interpreter that runs as
+    the first userspace process. It provides basic file inspection,
+    process management, networking, and documentation access.
+
+.SH COMMANDS
+
+.SS help
+    Display a list of available commands.
+
+.SS info
+    Show the OS name, version, and syscall API version number.
+
+.SS man <topic>
+    Open a manual page in the fullscreen pager. See man(1).
+
+.SS ls
+    List all files on the ramdisk (drive 0:/).
+
+.SS cat <file>
+    Print the contents of a ramdisk file to the terminal.
+    Example: cat hello.elf
+
+.SS run <file>
+    Spawn a new process from an ELF binary on the ramdisk and wait
+    for it to exit. The shell blocks until the child process
+    terminates.
+    Example: run hello.elf
+
+.SS ping <ip>
+    Send 4 ICMP echo requests to the given IP address and display
+    round-trip times. Timeout is 3 seconds per request.
+    Example: ping 10.0.2.2
+
+.SS uptime
+    Display the system uptime in minutes, seconds, and milliseconds.
+
+.SS clear
+    Clear the terminal screen.
+
+.SS exit
+    Terminate the shell process.
+
+.SH INPUT
+    The shell reads input character by character using SYS_GETCHAR.
+    Backspace is supported. Lines are limited to 255 characters.
+    There is no command history or tab completion.
+
+.SH SEE ALSO
+    man(1), intro(1), syscalls(2)

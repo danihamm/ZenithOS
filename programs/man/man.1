@@ -1,0 +1,47 @@
+.TH MAN 1
+.SH NAME
+    man - display manual pages
+
+.SH SYNOPSIS
+.BI     man topic
+.BI     man section topic
+
+.SH DESCRIPTION
+    The man command displays manual pages from the ramdisk in a
+    fullscreen pager. Pages are stored as plain text files with
+    simple formatting directives.
+
+    If no section is specified, sections 1, 2, and 3 are searched
+    in order. If a section number is given, only that section is
+    checked.
+
+.SH KEY BINDINGS
+
+.B Navigation
+    j, Down Arrow     Scroll down one line
+    k, Up Arrow       Scroll up one line
+    Space, Page Down  Scroll down one page
+    b, Page Up        Scroll up one page
+    g, Home           Go to top
+    G, End            Go to bottom
+    q                 Quit
+
+.SH SECTIONS
+    1   User commands (shell built-ins)
+    2   System calls (kernel interface)
+    3   Library functions (userspace libraries)
+
+.SH FILES
+    Man pages are stored on the ramdisk at:
+
+        0:/man/<topic>.<section>
+
+    For example, man intro reads 0:/man/intro.1
+
+.SH EXAMPLES
+    man intro          View the introduction
+    man 2 syscalls     View syscall overview (section 2)
+    man malloc         View malloc documentation
+
+.SH SEE ALSO
+    intro(1), shell(1), syscalls(2)

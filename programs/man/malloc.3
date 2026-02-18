@@ -1,0 +1,57 @@
+.TH MALLOC 3
+.SH NAME
+    malloc, mfree, realloc - userspace heap allocation
+
+.SH SYNOPSIS
+.BI     void* zenith::malloc(uint64_t size);
+.BI     void zenith::mfree(void* ptr);
+.BI     void* zenith::realloc(void* ptr, uint64_t size);
+
+.SH DESCRIPTION
+    The userspace heap provides dynamic memory allocation on top of
+    the kernel's page-mapping syscall (SYS_ALLOC). Include the
+    header <zenith/heap.h> to use these functions.
+
+.SS malloc
+    Allocates 'size' bytes from the free list. Returns a 16-byte
+    aligned pointer, or nullptr on failure. When the free list is
+    empty, it requests more pages from the kernel via SYS_ALLOC
+    (minimum 16 KiB growth, initial seed of 64 KiB).
+
+        char* buf = (char*)zenith::malloc(1024);
+
+.SS mfree
+    Returns the block to the userspace free list. No syscall is
+    made -- the memory stays mapped and is immediately reusable.
+    Passing nullptr is a safe no-op.
+
+        zenith::mfree(buf);
+
+.SS realloc
+    Resizes the allocation to 'size' bytes. Allocates a new block,
+    copies the smaller of old/new sizes, and frees the old block.
+    If ptr is nullptr, behaves like malloc.
+
+        buf = (char*)zenith::realloc(buf, 2048);
+
+.SH IMPLEMENTATION
+    The allocator uses a linked free-list with first-fit search.
+    Blocks larger than needed are split. The allocation header is
+    16 bytes (magic + size). All allocations are 16-byte aligned.
+
+    The heap grows by requesting pages from the kernel via
+    SYS_ALLOC. These pages are never returned to the kernel (since
+    SYS_FREE is currently a no-op), but mfree makes them available
+    for future malloc calls within the process.
+
+.SH LOW-LEVEL PAGE API
+    For large allocations or when direct page control is needed:
+
+        void* zenith::alloc(uint64_t size);  // SYS_ALLOC
+        void  zenith::free(void* ptr);       // SYS_FREE (no-op)
+
+    alloc() maps zeroed pages starting at 0x40000000 and growing
+    upward. Size is rounded up to 4 KiB page boundaries.
+
+.SH SEE ALSO
+    syscalls(2), file(2)

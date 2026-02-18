@@ -38,10 +38,11 @@ namespace Sched {
         uint64_t kernelStackTop;  // Top of kernel stack (for TSS RSP0 / SYSCALL)
         uint64_t userStackTop;    // User-space stack top
         uint64_t heapNext;        // Simple bump allocator for user heap
+        char args[256];           // Command-line arguments (set by parent via Spawn)
     };
 
     void Initialize();
-    void Spawn(const char* vfsPath);
+    int Spawn(const char* vfsPath, const char* args = nullptr);
     void Schedule();
 
     // Called from the APIC timer handler on every tick.
@@ -55,5 +56,8 @@ namespace Sched {
 
     // Called by terminated processes to mark themselves done
     void ExitProcess();
+
+    // Check if a process is still alive (Ready or Running)
+    bool IsAlive(int pid);
 
 }

@@ -176,38 +176,65 @@ namespace Drivers::PS2::Keyboard {
             return;
         }
 
-        // Handle modifier keys
+        // Handle modifier keys (update state, but still push event to buffer)
+        bool isModifier = false;
         switch (keycode) {
             case ScLeftShift:
                 g_Modifiers.LeftShift = !released;
-                return;
+                isModifier = true;
+                break;
             case ScRightShift:
                 g_Modifiers.RightShift = !released;
-                return;
+                isModifier = true;
+                break;
             case ScLeftCtrl:
                 g_Modifiers.LeftCtrl = !released;
-                return;
+                isModifier = true;
+                break;
             case ScLeftAlt:
                 g_Modifiers.LeftAlt = !released;
-                return;
+                isModifier = true;
+                break;
             case ScCapsLock:
                 if (!released) {
                     g_Modifiers.CapsLock = !g_Modifiers.CapsLock;
                 }
-                return;
+                isModifier = true;
+                break;
             case ScNumLock:
                 if (!released) {
                     g_Modifiers.NumLock = !g_Modifiers.NumLock;
                 }
-                return;
+                isModifier = true;
+                break;
             case ScScrollLock:
                 if (!released) {
                     g_Modifiers.ScrollLock = !g_Modifiers.ScrollLock;
                 }
-                return;
+                isModifier = true;
+                break;
             default:
                 break;
         }
+
+        // Modifiers still need events in the buffer (for apps like doom)
+        // but lock keys (caps/num/scroll) don't need buffer events
+        if (isModifier && keycode != ScCapsLock && keycode != ScNumLock && keycode != ScScrollLock) {
+            KeyEvent event = {
+                .Scancode = scancode,
+                .Ascii    = 0,
+                .Pressed  = !released,
+                .Shift    = g_Modifiers.LeftShift || g_Modifiers.RightShift,
+                .Ctrl     = g_Modifiers.LeftCtrl || g_Modifiers.RightCtrl,
+                .Alt      = g_Modifiers.LeftAlt || g_Modifiers.RightAlt,
+                .CapsLock = g_Modifiers.CapsLock
+            };
+            g_BufferLock.Acquire();
+            BufferPush(event);
+            g_BufferLock.Release();
+            return;
+        }
+        if (isModifier) return;
 
         // Translate scancode to ASCII
         char ascii = 0;

@@ -75,6 +75,7 @@ namespace Sched {
             processTable[i].kernelStackTop = 0;
             processTable[i].userStackTop = 0;
             processTable[i].heapNext = 0;
+            processTable[i].args[0] = '\0';
         }
 
         currentPid = -1;
@@ -85,7 +86,7 @@ namespace Sched {
             << " process slots, " << (uint64_t)TimeSliceMs << " ms time slice)";
     }
 
-    void Spawn(const char* vfsPath) {
+    int Spawn(const char* vfsPath, const char* args) {
         int slot = -1;
         for (int i = 0; i < MaxProcesses; i++) {
             if (processTable[i].state == ProcessState::Free) {
@@ -96,7 +97,7 @@ namespace Sched {
 
         if (slot < 0) {
             Kt::KernelLogStream(Kt::ERROR, "Sched") << "No free process slots";
-            return;
+            return -1;
         }
 
         // Create per-process PML4 with kernel-half copied
@@ -106,20 +107,20 @@ namespace Sched {
         uint64_t entry = ElfLoad(vfsPath, pml4Phys);
         if (entry == 0) {
             Kt::KernelLogStream(Kt::ERROR, "Sched") << "Failed to load ELF: " << vfsPath;
-            return;
+            return -1;
         }
 
         // Allocate kernel stack (used during syscalls and interrupts)
         void* firstPage = Memory::g_pfa->AllocateZeroed();
         if (firstPage == nullptr) {
             Kt::KernelLogStream(Kt::ERROR, "Sched") << "Out of memory for kernel stack";
-            return;
+            return -1;
         }
         void* stackMem = Memory::g_pfa->ReallocConsecutive(firstPage, StackPages);
         if (stackMem == nullptr) {
             Kt::KernelLogStream(Kt::ERROR, "Sched") << "Failed to allocate contiguous kernel stack";
             Memory::g_pfa->Free(firstPage);
-            return;
+            return -1;
         }
 
         uint8_t* kernelStackBase = (uint8_t*)stackMem;
@@ -132,7 +133,7 @@ namespace Sched {
             void* page = Memory::g_pfa->AllocateZeroed();
             if (page == nullptr) {
                 Kt::KernelLogStream(Kt::ERROR, "Sched") << "Out of memory for user stack";
-                return;
+                return -1;
             }
             uint64_t physAddr = Memory::SubHHDM((uint64_t)page);
             Memory::VMM::Paging::MapUserIn(pml4Phys, physAddr, userStackBase + i * 0x1000);
@@ -145,7 +146,7 @@ namespace Sched {
             void* stubPage = Memory::g_pfa->AllocateZeroed();
             if (stubPage == nullptr) {
                 Kt::KernelLogStream(Kt::ERROR, "Sched") << "Out of memory for exit stub";
-                return;
+                return -1;
             }
             uint64_t stubPhys = Memory::SubHHDM((uint64_t)stubPage);
             Memory::VMM::Paging::MapUserIn(pml4Phys, stubPhys, ExitStubAddr);
@@ -189,11 +190,17 @@ namespace Sched {
         proc.userStackTop = UserStackTop - 8;  // account for pushed exit stub return address
         proc.heapNext = UserHeapBase;
 
-        Kt::KernelLogStream(Kt::OK, "Sched") << "Spawned process " << (uint64_t)proc.pid
-            << " (" << vfsPath << ") entry=" << kcp::hex << entry
-            << " kstack=" << (uint64_t)kernelStackBase << "-" << kernelStackTop
-            << " ustack=" << userStackBase << "-" << UserStackTop
-            << " pml4=" << pml4Phys << kcp::dec;
+        // Copy arguments string into process
+        proc.args[0] = '\0';
+        if (args != nullptr) {
+            int i = 0;
+            for (; i < 255 && args[i]; i++) {
+                proc.args[i] = args[i];
+            }
+            proc.args[i] = '\0';
+        }
+
+        return proc.pid;
     }
 
     void Schedule() {
@@ -271,8 +278,6 @@ namespace Sched {
             return;
         }
 
-        Kt::KernelLogStream(Kt::OK, "Sched") << "Process " << (uint64_t)processTable[currentPid].pid << " terminated";
-
         processTable[currentPid].state = ProcessState::Terminated;
 
         int next = -1;
@@ -303,6 +308,12 @@ namespace Sched {
         for (;;) {
             asm volatile("hlt");
         }
+    }
+
+    bool IsAlive(int pid) {
+        if (pid < 0 || pid >= MaxProcesses) return false;
+        return processTable[pid].state == ProcessState::Ready
+            || processTable[pid].state == ProcessState::Running;
     }
 
 }

@@ -31,6 +31,20 @@ namespace Zenith {
     static constexpr uint64_t SYS_GETKEY          = 17;
     static constexpr uint64_t SYS_GETCHAR         = 18;
     static constexpr uint64_t SYS_PING            = 19;
+    static constexpr uint64_t SYS_SPAWN           = 20;
+    static constexpr uint64_t SYS_FBINFO          = 21;
+    static constexpr uint64_t SYS_FBMAP           = 22;
+    static constexpr uint64_t SYS_WAITPID         = 23;
+    static constexpr uint64_t SYS_TERMSIZE        = 24;
+    static constexpr uint64_t SYS_GETARGS         = 25;
+
+    struct FbInfo {
+        uint64_t width;
+        uint64_t height;
+        uint64_t pitch;      // bytes per scanline
+        uint64_t bpp;        // bits per pixel (32)
+        uint64_t userAddr;   // filled by SYS_FBMAP (0 until mapped)
+    };
 
     struct SysInfo {
         char osName[32];

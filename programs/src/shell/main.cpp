@@ -44,15 +44,17 @@ static void print_int(uint64_t n) {
 }
 
 static void prompt() {
-    zenith::print("zenith> ");
+    zenith::print("% ");
 }
 
 static void cmd_help() {
     zenith::print("Available commands:\n");
     zenith::print("  help          Show this help message\n");
     zenith::print("  info          Show system information\n");
+    zenith::print("  man <topic>   View manual pages\n");
     zenith::print("  ls            List ramdisk files\n");
     zenith::print("  cat <file>    Display file contents\n");
+    zenith::print("  run <file>    Spawn a new process from an ELF file\n");
     zenith::print("  ping <ip>     Send ICMP echo requests\n");
     zenith::print("  uptime        Show uptime in milliseconds\n");
     zenith::print("  clear         Clear the screen\n");
@@ -223,11 +225,52 @@ static void cmd_ping(const char* arg) {
     }
 }
 
-static void cmd_clear() {
-    // Print enough newlines to scroll past visible content
-    for (int i = 0; i < 50; i++) {
-        zenith::putchar('\n');
+static void cmd_run(const char* arg) {
+    arg = skip_spaces(arg);
+    if (*arg == '\0') {
+        zenith::print("Usage: run <filename>\n");
+        return;
     }
+
+    // Build path "0:/<filename>"
+    char path[128];
+    const char* prefix = "0:/";
+    int i = 0;
+    while (prefix[i]) { path[i] = prefix[i]; i++; }
+    int j = 0;
+    while (arg[j] && i < 126) { path[i++] = arg[j++]; }
+    path[i] = '\0';
+
+    int pid = zenith::spawn(path);
+    if (pid < 0) {
+        zenith::print("Error: failed to spawn '");
+        zenith::print(arg);
+        zenith::print("'\n");
+    } else {
+        zenith::waitpid(pid);
+    }
+}
+
+static void cmd_man(const char* arg) {
+    arg = skip_spaces(arg);
+    if (*arg == '\0') {
+        zenith::print("Usage: man <topic>\n");
+        zenith::print("       man <section> <topic>\n");
+        zenith::print("Try: man intro\n");
+        return;
+    }
+
+    int pid = zenith::spawn("0:/man.elf", arg);
+    if (pid < 0) {
+        zenith::print("Error: failed to start man viewer\n");
+    } else {
+        zenith::waitpid(pid);
+    }
+}
+
+static void cmd_clear() {
+    zenith::print("\033[2J");   // Clear entire screen
+    zenith::print("\033[H");    // Move cursor to top-left
 }
 
 static void process_command(const char* line) {
@@ -241,10 +284,18 @@ static void process_command(const char* line) {
         cmd_info();
     } else if (streq(line, "ls")) {
         cmd_ls();
+    } else if (starts_with(line, "man ")) {
+        cmd_man(line + 4);
+    } else if (streq(line, "man")) {
+        cmd_man("");
     } else if (starts_with(line, "cat ")) {
         cmd_cat(line + 4);
     } else if (streq(line, "cat")) {
         cmd_cat("");
+    } else if (starts_with(line, "run ")) {
+        cmd_run(line + 4);
+    } else if (streq(line, "run")) {
+        cmd_run("");
     } else if (starts_with(line, "ping ")) {
         cmd_ping(line + 5);
     } else if (streq(line, "ping")) {
@@ -265,7 +316,10 @@ static void process_command(const char* line) {
 
 extern "C" void _start() {
     zenith::print("\n");
-    zenith::print("  ZenithOS Shell v0.1\n");
+    zenith::print("  ZenithOS\n");
+    zenith::print("  Copyright (c) 2025-2026 Daniel Hammer\n");
+    zenith::print("\n");
+
     zenith::print("  Type 'help' for available commands.\n");
     zenith::print("\n");
 

@@ -77,12 +77,17 @@ namespace Memory {
             };
         }
 
+        // Allocate() returns pages from the top of a free region in descending
+        // order, so 'first' is the highest address.  The contiguous block
+        // actually starts (n-1) pages below 'first'.
+        void* base = (void*)((uint64_t)first - (uint64_t)(n - 1) * 0x1000);
+
         if (ptr != nullptr) {
-            memcpy(first, ptr, n);
+            memcpy(base, ptr, (uint64_t)n * 0x1000);
             Free(ptr);
         }
 
-        return first;
+        return base;
     }
 
     void PageFrameAllocator::Free(void* ptr) {

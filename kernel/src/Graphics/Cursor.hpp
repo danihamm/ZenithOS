@@ -13,4 +13,9 @@ namespace Graphics::Cursor {
     void Initialize(limine_framebuffer* framebuffer);
     void Update();
 
+    uint32_t* GetFramebufferBase();
+    uint64_t  GetFramebufferWidth();
+    uint64_t  GetFramebufferHeight();
+    uint64_t  GetFramebufferPitch();
+
 };

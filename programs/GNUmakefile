@@ -59,9 +59,19 @@ PROGRAMS := $(notdir $(wildcard src/*))
 # Build targets: one ELF per program.
 TARGETS := $(addprefix $(BINDIR)/,$(addsuffix .elf,$(PROGRAMS)))
 
+# Man pages source directory.
+MANDIR := man
+MANSRC := $(wildcard $(MANDIR)/*.*)
+MANDST := $(patsubst $(MANDIR)/%,$(BINDIR)/man/%,$(MANSRC))
+
 .PHONY: all clean
 
-all: $(TARGETS)
+all: $(TARGETS) $(MANDST)
+
+# Copy man pages into bin/man/ so mkramdisk.sh picks them up.
+$(BINDIR)/man/%: $(MANDIR)/%
+	mkdir -p $(BINDIR)/man
+	cp $< $@
 
 # Build each program from its source files.
 # For now each program is a single .cpp file compiled and linked directly.

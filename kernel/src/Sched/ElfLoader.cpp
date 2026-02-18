@@ -52,8 +52,6 @@ namespace Sched {
     }
 
     uint64_t ElfLoad(const char* vfsPath, uint64_t pml4Phys) {
-        Kt::KernelLogStream(Kt::INFO, "ELF") << "Loading " << vfsPath;
-
         int handle = Fs::Vfs::VfsOpen(vfsPath);
         if (handle < 0) {
             Kt::KernelLogStream(Kt::ERROR, "ELF") << "Failed to open " << vfsPath;
@@ -78,15 +76,16 @@ namespace Sched {
         Fs::Vfs::VfsRead(handle, fileData, 0, fileSize);
         Fs::Vfs::VfsClose(handle);
 
+        // Prevent the optimizer from reordering the VfsRead store past the
+        // header validation reads that follow.
+        asm volatile("" ::: "memory");
+
         // Validate ELF header
         Elf64Header* hdr = (Elf64Header*)fileData;
         if (!ValidateElfHeader(hdr)) {
             Memory::g_heap->Free(fileData);
             return 0;
         }
-
-        Kt::KernelLogStream(Kt::OK, "ELF") << "Entry point: " << kcp::hex << hdr->e_entry << kcp::dec
-            << ", " << (uint64_t)hdr->e_phnum << " program header(s)";
 
         // Process program headers
         for (uint16_t i = 0; i < hdr->e_phnum; i++) {
@@ -99,9 +98,6 @@ namespace Sched {
             if (phdr->p_memsz == 0) {
                 continue;
             }
-
-            Kt::KernelLogStream(Kt::INFO, "ELF") << "PT_LOAD: vaddr=" << kcp::hex << phdr->p_vaddr
-                << " filesz=" << phdr->p_filesz << " memsz=" << phdr->p_memsz << kcp::dec;
 
             // Allocate pages and map them in the process PML4 with User bit
             uint64_t segBase = phdr->p_vaddr & ~0xFFFULL;
@@ -147,7 +143,6 @@ namespace Sched {
         uint64_t entryPoint = hdr->e_entry;
         Memory::g_heap->Free(fileData);
 
-        Kt::KernelLogStream(Kt::OK, "ELF") << "Loaded successfully, entry=" << kcp::hex << entryPoint << kcp::dec;
         return entryPoint;
     }
 
