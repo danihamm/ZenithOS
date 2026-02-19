@@ -1,0 +1,37 @@
+.TH PING 1
+.SH NAME
+    ping - send ICMP echo requests
+
+.SH SYNOPSIS
+    ping <host>
+
+.SH DESCRIPTION
+    Sends 4 ICMP echo requests to the specified host and prints
+    the round-trip time for each reply.
+
+    The host may be an IP address or a hostname. Hostnames are
+    resolved via the configured DNS server.
+
+    Each request has a 3-second timeout. Requests are sent at
+    1-second intervals.
+
+.SH OUTPUT
+    PING example.com (93.184.216.34)
+      Reply from 93.184.216.34: time=12ms
+      Reply from 93.184.216.34: time=11ms
+      Reply from 93.184.216.34: time=13ms
+      Reply from 93.184.216.34: time=11ms
+
+    If a reply is not received within the timeout:
+
+      Request timed out
+
+.SH EXAMPLES
+    ping 10.0.68.1
+        Ping the gateway by IP address.
+
+    ping google.com
+        Ping by hostname (requires DNS).
+
+.SH SEE ALSO
+    nslookup(1), ifconfig(1), shell(1), syscalls(2)

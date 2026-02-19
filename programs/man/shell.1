@@ -61,17 +61,23 @@
     date            Show current date and time
     uptime          Show system uptime
     clear           Clear the screen and framebuffer
+    fontscale [n]   Get or set terminal font scale
     reset           Reboot the system
     shutdown        Shut down the system
 
 .SS Network commands (0:/os/)
-    ping <ip>       Send ICMP echo requests
+    ping <host>     Send ICMP echo requests
+    nslookup <host> DNS lookup
     ifconfig        Show/set network configuration
-    tcpconnect <ip> <port>  Interactive TCP client
+    tcpconnect <host> <port>  Interactive TCP client
     irc             IRC client
     dhcp            DHCP client
-    fetch           HTTP client
+    fetch           HTTP/HTTPS client (TLS 1.2)
+    wiki            Wikipedia article viewer
     httpd           HTTP server
+
+    Network commands accept both IP addresses and hostnames.
+    Hostnames are resolved via the configured DNS server.
 
 .SS Games (0:/games/)
     doom            DOOM

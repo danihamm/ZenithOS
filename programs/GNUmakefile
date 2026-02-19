@@ -56,9 +56,9 @@ BINDIR := bin
 # Discover all programs (each subdirectory under src/ is a program).
 PROGRAMS := $(notdir $(wildcard src/*))
 
-# Games are built separately (doom has its own Makefile).
-GAMES := doom
-SYSTEM_PROGRAMS := $(filter-out $(GAMES),$(PROGRAMS))
+# Programs with custom Makefiles (built separately).
+CUSTOM_BUILDS := doom fetch wiki
+SYSTEM_PROGRAMS := $(filter-out $(CUSTOM_BUILDS),$(PROGRAMS))
 
 # Build targets: system programs go to bin/os/, games are handled separately.
 TARGETS := $(addprefix $(BINDIR)/os/,$(addsuffix .elf,$(SYSTEM_PROGRAMS)))
@@ -76,12 +76,31 @@ WWWDIR := www
 WWWSRC := $(wildcard $(WWWDIR)/*.*)
 WWWDST := $(patsubst $(WWWDIR)/%,$(BINDIR)/www/%,$(WWWSRC))
 
+# CA certificate bundle.
+CA_CERTS := $(BINDIR)/etc/ca-certificates.crt
+
 # Home directory placeholder.
 HOMEKEEP := $(BINDIR)/home/.keep
 
-.PHONY: all clean doom
+.PHONY: all clean doom fetch wiki bearssl libc
 
-all: $(TARGETS) doom $(GAME_DATA) $(MANDST) $(WWWDST) $(HOMEKEEP)
+all: bearssl libc $(TARGETS) fetch wiki doom $(GAME_DATA) $(MANDST) $(WWWDST) $(CA_CERTS) $(HOMEKEEP)
+
+# Build BearSSL static library.
+bearssl:
+	$(MAKE) -C lib/bearssl
+
+# Build shared libc static library.
+libc:
+	$(MAKE) -C lib/libc
+
+# Build fetch via its own Makefile (depends on bearssl and libc).
+fetch: bearssl libc
+	$(MAKE) -C src/fetch
+
+# Build wiki via its own Makefile (depends on bearssl and libc).
+wiki: bearssl libc
+	$(MAKE) -C src/wiki
 
 # Build doom via its own Makefile.
 doom:
@@ -102,6 +121,11 @@ $(BINDIR)/www/%: $(WWWDIR)/%
 	mkdir -p $(BINDIR)/www
 	cp $< $@
 
+# Copy CA certificate bundle into bin/etc/.
+$(CA_CERTS): data/ca-certificates.crt
+	mkdir -p $(BINDIR)/etc
+	cp $< $@
+
 # Create empty home directory with a keep file.
 $(HOMEKEEP):
 	mkdir -p $(BINDIR)/home
@@ -115,4 +139,7 @@ $(BINDIR)/os/%.elf: src/%/main.cpp link.ld GNUmakefile
 
 clean:
 	rm -rf $(BINDIR) obj
+	$(MAKE) -C lib/bearssl clean
+	$(MAKE) -C lib/libc clean
+	$(MAKE) -C src/fetch clean
 	$(MAKE) -C src/doom clean

@@ -1,0 +1,62 @@
+.TH FETCH 1
+.SH NAME
+    fetch - HTTP/HTTPS client for ZenithOS
+
+.SH SYNOPSIS
+    fetch [-v] <url>
+    fetch [-v] <host> <port> [path]
+
+.SH DESCRIPTION
+    fetch performs an HTTP/1.0 GET request and prints the response
+    body to the terminal. Supports both plain HTTP and HTTPS (TLS 1.2)
+    connections. By default only the body is printed.
+
+    In URL mode, the scheme (http:// or https://) determines whether
+    TLS is used. The port defaults to 80 for HTTP and 443 for HTTPS.
+
+    In legacy mode, the host and port are specified as separate
+    arguments and the connection is always plain HTTP.
+
+    The host may be an IP address or a hostname. Hostnames are
+    resolved via the configured DNS server.
+
+    If no path is given, "/" is used.
+
+.SH OPTIONS
+.B -v
+    Verbose mode. Print connection info, trust anchor count, TLS
+    handshake progress, and the HTTP status/size header before
+    the body.
+
+.SH EXAMPLES
+    fetch https://icanhazip.com
+        Print your public IP address over HTTPS.
+
+    fetch http://icanhazip.com
+        Same, but over plain HTTP.
+
+    fetch -v https://example.com
+        Fetch a page with verbose output showing:
+            Connecting to example.com:443 (HTTPS)...
+            Loaded 128 trust anchors
+            TLS handshake...
+            TLS connection established
+            GET /
+            HTTP 200 OK (1256 bytes)
+
+    fetch 10.0.68.1 80 /
+        Fetch from a local server by IP (legacy syntax).
+
+.SH TLS SUPPORT
+    HTTPS connections use BearSSL for TLS 1.2. Server certificates
+    are validated against the system CA bundle at
+    0:/etc/ca-certificates.crt.
+
+    Entropy for the TLS handshake is provided by RDTSC-seeded
+    random data via the SYS_GETRANDOM syscall.
+
+.SH KEYBOARD
+    Ctrl+Q      Abort the request
+
+.SH SEE ALSO
+    ping(1), nslookup(1), tcpconnect(1), shell(1), syscalls(2)

@@ -463,6 +463,7 @@ extern "C" void _start() {
     newCfg.ipAddress  = offer.offeredIp;
     newCfg.subnetMask = offer.subnetMask;
     newCfg.gateway    = offer.router;
+    newCfg.dnsServer  = offer.dns;
     zenith::set_netcfg(&newCfg);
 
     // 9. Print results

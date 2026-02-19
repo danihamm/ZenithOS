@@ -94,6 +94,26 @@ namespace Memory::VMM {
         pageEntry->Address = physicalAddress >> 12;
     }
 
+    void Paging::MapWC(std::uint64_t physicalAddress, std::uint64_t virtualAddress) {
+        if (virtualAddress % 0x1000 != 0 || physicalAddress % 0x1000 != 0) {
+            Panic("Value that isn't page-aligned passed as address to Paging::MapWC!", nullptr);
+        }
+
+        VirtualAddress virtualAddressObj(virtualAddress);
+
+        auto PML3 = HandleLevel(virtualAddressObj, PML4, 4);
+        auto PML2 = HandleLevel(virtualAddressObj, PML3, 3);
+        auto PML1 = HandleLevel(virtualAddressObj, PML2, 2);
+
+        PageTableEntry* pageEntry = (PageTableEntry*)Memory::HHDM(&PML1->entries[virtualAddressObj.GetPageIndex()]);
+
+        pageEntry->Present = true;
+        pageEntry->Writable = true;
+        pageEntry->WriteThrough = true;   // PWT=1, PCD=0 → PAT entry 1 = WC
+
+        pageEntry->Address = physicalAddress >> 12;
+    }
+
     void Paging::MapMMIO(std::uint64_t physicalAddress, std::uint64_t virtualAddress) {
         if (virtualAddress % 0x1000 != 0 || physicalAddress % 0x1000 != 0) {
             Panic("Value that isn't page-aligned passed as address to Paging::MapMMIO!", nullptr);
@@ -182,6 +202,41 @@ namespace Memory::VMM {
         pageEntry->Present = true;
         pageEntry->Writable = true;
         pageEntry->Supervisor = 1;
+        pageEntry->Address = physicalAddress >> 12;
+    }
+
+    void Paging::MapUserInWC(std::uint64_t pml4Phys, std::uint64_t physicalAddress, std::uint64_t virtualAddress) {
+        if (virtualAddress % 0x1000 != 0 || physicalAddress % 0x1000 != 0) {
+            Panic("Non-aligned address in Paging::MapUserInWC!", nullptr);
+        }
+
+        VirtualAddress va(virtualAddress);
+
+        auto walkLevel = [](PageTable* table, uint64_t index) -> PageTable* {
+            PageTableEntry* entry = (PageTableEntry*)Memory::HHDM(&table->entries[index]);
+            if (!entry->Present) {
+                entry->Present = true;
+                entry->Writable = true;
+                entry->Supervisor = 1;
+                uint64_t newPhys = Memory::SubHHDM((uint64_t)Memory::g_pfa->AllocateZeroed());
+                entry->Address = newPhys >> 12;
+                return (PageTable*)newPhys;
+            } else {
+                entry->Supervisor = 1;
+                return (PageTable*)(entry->Address << 12);
+            }
+        };
+
+        PageTable* pml4 = (PageTable*)pml4Phys;
+        auto pml3 = walkLevel(pml4, va.GetL4Index());
+        auto pml2 = walkLevel(pml3, va.GetL3Index());
+        auto pml1 = walkLevel(pml2, va.GetL2Index());
+
+        PageTableEntry* pageEntry = (PageTableEntry*)Memory::HHDM(&pml1->entries[va.GetPageIndex()]);
+        pageEntry->Present = true;
+        pageEntry->Writable = true;
+        pageEntry->Supervisor = 1;
+        pageEntry->WriteThrough = true;   // PWT=1, PCD=0 → PAT entry 1 = WC
         pageEntry->Address = physicalAddress >> 12;
     }
 

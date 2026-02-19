@@ -17,4 +17,7 @@ namespace Graphics::Cursor {
     uint64_t  GetFramebufferHeight();
     uint64_t  GetFramebufferPitch();
 
+    void SetFramebuffer(uint32_t* base, uint64_t width, uint64_t height, uint64_t pitch);
+    uint64_t GetFramebufferPhysBase();
+
 };

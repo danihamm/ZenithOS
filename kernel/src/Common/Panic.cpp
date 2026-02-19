@@ -32,6 +32,12 @@ void Panic(const char *meditationString, System::PanicFrame* frame) {
         if (frame->InterruptVector == 0xE) {
             auto pf_frame = (System::PageFaultPanicFrame*)frame;
             frame = (System::PanicFrame*)&pf_frame->IP;
+
+            // CR2 holds the faulting virtual address for page faults
+            uint64_t cr2;
+            asm volatile("mov %%cr2, %0" : "=r"(cr2));
+            PrintBoxedHex(kerr, "Faulting Address (CR2)", cr2, boxWidth);
+
             PrintBoxedLine(kerr, "Page Fault Error:", boxWidth, true);
             PrintBoxedDec(kerr, "Present", pf_frame->PageFaultError.Present, boxWidth);
             PrintBoxedDec(kerr, "Write", pf_frame->PageFaultError.Write, boxWidth);

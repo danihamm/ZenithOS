@@ -836,23 +836,26 @@ extern "C" void _start() {
     const char* arg = skip_spaces(argbuf);
 
     if (*arg == '\0') {
-        zenith::print("Usage: irc.elf <server_ip> <port> <nickname> [#channel]\n");
-        zenith::print("Example: run irc.elf 10.0.68.1 6667 ZenithUser #general\n");
+        zenith::print("Usage: irc <server> <port> <nickname> [#channel]\n");
+        zenith::print("Example: irc irc.libera.chat 6667 ZenithUser #general\n");
         return;
     }
 
-    // Parse IP
-    char ipStr[32];
+    // Parse host (IP or hostname)
+    char hostStr[128];
     int i = 0;
-    while (arg[i] && arg[i] != ' ' && i < 31) { ipStr[i] = arg[i]; i++; }
-    ipStr[i] = '\0';
+    while (arg[i] && arg[i] != ' ' && i < 127) { hostStr[i] = arg[i]; i++; }
+    hostStr[i] = '\0';
     arg = skip_spaces(arg + i);
 
-    if (!parse_ip(ipStr, &irc.serverIp)) {
-        zenith::print("Invalid IP address: ");
-        zenith::print(ipStr);
-        zenith::putchar('\n');
-        return;
+    if (!parse_ip(hostStr, &irc.serverIp)) {
+        irc.serverIp = zenith::resolve(hostStr);
+        if (irc.serverIp == 0) {
+            zenith::print("Could not resolve: ");
+            zenith::print(hostStr);
+            zenith::putchar('\n');
+            return;
+        }
     }
 
     // Parse port
@@ -910,7 +913,7 @@ extern "C" void _start() {
 
     // Initial draw
     msg_add("\033[1m*** ZenithOS IRC Client\033[0m");
-    msg_add_fmt("*** Connecting to %s:%d as %s...", ipStr, (int)irc.serverPort, irc.nick);
+    msg_add_fmt("*** Connecting to %s:%d as %s...", hostStr, (int)irc.serverPort, irc.nick);
     ui_render();
 
     // Create socket and connect

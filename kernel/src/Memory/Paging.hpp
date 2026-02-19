@@ -94,6 +94,7 @@ public:
         void Init(std::uint64_t kernelBaseVirt, std::uint64_t kernelSize, limine_memmap_response* memMap);
         void Map(std::uint64_t physicalAddress, std::uint64_t virtualAddress);
         void MapMMIO(std::uint64_t physicalAddress, std::uint64_t virtualAddress);
+        void MapWC(std::uint64_t physicalAddress, std::uint64_t virtualAddress);
         void MapUser(std::uint64_t physicalAddress, std::uint64_t virtualAddress);
         static std::uint64_t GetPhysAddr(std::uint64_t PML4, std::uint64_t virtualAddress, bool use40BitL1 = false);
         std::uint64_t GetPhysAddr(std::uint64_t virtualAddress);
@@ -104,6 +105,9 @@ public:
 
         // Map a page into an arbitrary PML4 (specified by physical address) with User bit set.
         static void MapUserIn(std::uint64_t pml4Phys, std::uint64_t physicalAddress, std::uint64_t virtualAddress);
+
+        // Map a page into an arbitrary PML4 with User + Write-Combining attributes.
+        static void MapUserInWC(std::uint64_t pml4Phys, std::uint64_t physicalAddress, std::uint64_t virtualAddress);
     };
 
     extern Paging* g_paging;

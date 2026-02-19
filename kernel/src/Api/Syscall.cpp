@@ -18,6 +18,7 @@
 #include <Libraries/String.hpp>
 #include <Drivers/PS2/Keyboard.hpp>
 #include <Net/Icmp.hpp>
+#include <Net/Dns.hpp>
 #include <Net/Socket.hpp>
 #include <Net/ByteOrder.hpp>
 #include <Net/NetConfig.hpp>
@@ -209,11 +210,18 @@ namespace Zenith {
                         * Graphics::Cursor::GetFramebufferPitch();
         uint64_t numPages = (fbSize + 0xFFF) / 0x1000;
 
+        Kt::KernelLogStream(Kt::INFO, "FbMap") << "fbPhys=" << kcp::hex << fbPhys
+            << " size=" << kcp::dec << fbSize
+            << " pages=" << numPages
+            << " (" << Graphics::Cursor::GetFramebufferWidth()
+            << "x" << Graphics::Cursor::GetFramebufferHeight()
+            << " pitch=" << Graphics::Cursor::GetFramebufferPitch() << ")";
+
         // Map at a fixed user VA
         constexpr uint64_t userVa = 0x50000000ULL;
 
         for (uint64_t i = 0; i < numPages; i++) {
-            Memory::VMM::Paging::MapUserIn(
+            Memory::VMM::Paging::MapUserInWC(
                 proc->pml4Phys,
                 fbPhys + i * 0x1000,
                 userVa + i * 0x1000
@@ -335,6 +343,7 @@ namespace Zenith {
         }
         out->_pad[0] = 0;
         out->_pad[1] = 0;
+        out->dnsServer = Net::GetDnsServer();
     }
 
     static int Sys_SetNetCfg(const NetCfg* in) {
@@ -342,6 +351,7 @@ namespace Zenith {
         Net::SetIpAddress(in->ipAddress);
         Net::SetSubnetMask(in->subnetMask);
         Net::SetGateway(in->gateway);
+        Net::SetDnsServer(in->dnsServer);
         return 0;
     }
 
@@ -370,6 +380,53 @@ namespace Zenith {
 
     static int Sys_FCreate(const char* path) {
         return Fs::Vfs::VfsCreate(path);
+    }
+
+    // ---- Terminal scaling ----
+
+    static int64_t Sys_TermScale(uint64_t scale_x, uint64_t scale_y) {
+        if (scale_x == 0) {
+            return (int64_t)((Kt::GetFontScaleY() << 32) | (Kt::GetFontScaleX() & 0xFFFFFFFF));
+        }
+        Kt::Rescale((size_t)scale_x, (size_t)scale_y);
+        size_t cols = 0, rows = 0;
+        flanterm_get_dimensions(Kt::ctx, &cols, &rows);
+        return (int64_t)((rows << 32) | (cols & 0xFFFFFFFF));
+    }
+
+    // ---- DNS resolve ----
+
+    static int64_t Sys_Resolve(const char* hostname) {
+        uint32_t ip = Net::Dns::Resolve(hostname);
+        return (int64_t)ip;
+    }
+
+    // ---- Random number generation ----
+    // Uses RDTSC mixed with xorshift64* PRNG for entropy.
+    // RDRAND is intentionally avoided: some firmware disables the RDRAND
+    // hardware unit while CPUID still advertises support (bit 30 of ECX),
+    // causing #UD on real hardware. RDTSC-based entropy is sufficient for
+    // seeding BearSSL's PRNG for TLS session keys.
+
+    static int64_t Sys_GetRandom(uint8_t* buf, uint64_t len) {
+        uint64_t tsc;
+        asm volatile("rdtsc; shl $32, %%rdx; or %%rdx, %%rax" : "=a"(tsc) :: "rdx");
+        uint64_t state = tsc;
+
+        for (uint64_t i = 0; i < len; i += 8) {
+            asm volatile("rdtsc; shl $32, %%rdx; or %%rdx, %%rax" : "=a"(tsc) :: "rdx");
+            state ^= tsc;
+            state ^= state >> 12;
+            state ^= state << 25;
+            state ^= state >> 27;
+            uint64_t val = state * 0x2545F4914F6CDD1DULL;
+
+            uint64_t remaining = len - i;
+            uint64_t toCopy = remaining < 8 ? remaining : 8;
+            for (uint64_t j = 0; j < toCopy; j++)
+                buf[i + j] = (uint8_t)(val >> (j * 8));
+        }
+        return (int64_t)len;
     }
 
     // ---- Dispatch ----
@@ -486,6 +543,12 @@ namespace Zenith {
                                            frame->arg3, frame->arg4);
             case SYS_FCREATE:
                 return (int64_t)Sys_FCreate((const char*)frame->arg1);
+            case SYS_TERMSCALE:
+                return Sys_TermScale(frame->arg1, frame->arg2);
+            case SYS_RESOLVE:
+                return Sys_Resolve((const char*)frame->arg1);
+            case SYS_GETRANDOM:
+                return Sys_GetRandom((uint8_t*)frame->arg1, frame->arg2);
             default:
                 return -1;
         }
@@ -512,7 +575,7 @@ namespace Zenith {
         Hal::WriteMSR(Hal::IA32_FMASK, 0x200);
 
         Kt::KernelLogStream(Kt::OK, "Syscall") << "SYSCALL/SYSRET initialized (LSTAR="
-            << kcp::hex << (uint64_t)SyscallEntry << kcp::dec << ", 43 syscalls)";
+            << kcp::hex << (uint64_t)SyscallEntry << kcp::dec << ", 46 syscalls)";
     }
 
 }

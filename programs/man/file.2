@@ -67,8 +67,17 @@
         }
         zenith::close(h);
 
+.SH WRITING FILES
+    Files can be created and written on the ramdisk:
+
+.BI     int zenith::fcreate(const char* path);
+.BI     int zenith::fwrite(int handle, const uint8_t* buf, uint64_t offset, uint64_t size);
+
+    fcreate creates a new file and returns a handle. fwrite writes
+    bytes at the given offset. Changes persist only until reboot --
+    the ramdisk is reloaded from the USTAR archive on each boot.
+
 .SH NOTES
-    The filesystem is read-only. There are no write or create calls.
     All files live on the ramdisk which is loaded at boot from a
     USTAR tar archive.
 

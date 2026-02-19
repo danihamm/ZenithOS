@@ -35,9 +35,11 @@
 #include <Drivers/PS2/Mouse.hpp>
 #include <Drivers/Net/E1000.hpp>
 #include <Drivers/Net/E1000E.hpp>
+#include <Drivers/Graphics/IntelGPU.hpp>
 #include <Net/Net.hpp>
 #include <CppLib/BoxUI.hpp>
 #include <Graphics/Cursor.hpp>
+#include <Hal/MSR.hpp>
 #include <Fs/Ramdisk.hpp>
 #include <Fs/Vfs.hpp>
 #include <Sched/Scheduler.hpp>
@@ -138,7 +140,38 @@ extern "C" void kmain() {
     Memory::VMM::g_paging = &g_paging;
     g_paging.Init((uint64_t)&KernelStartSymbol, ((uint64_t)&KernelEndSymbol - (uint64_t)&KernelStartSymbol), memmap_request.response);
 
+    // Reprogram PAT so entry 1 = Write-Combining (default is Write-Through).
+    // Must be done after paging init and before any WC mappings.
+    Hal::InitializePAT();
+    Kt::KernelLogStream(OK, "Hal") << "PAT reprogrammed (entry 1 = WC)";
+
 #endif
+
+    // Initialize Cursor early so we can WC-map the framebuffer before
+    // the bulk of boot logging begins (ACPI, PCI, drivers, etc.)
+    Graphics::Cursor::Initialize(framebuffer);
+
+#if defined (__x86_64__)
+    // Map framebuffer as Write-Combining immediately for faster screen writes.
+    // All subsequent log output benefits from WC burst transfers.
+    {
+        uint64_t fbPhys = Graphics::Cursor::GetFramebufferPhysBase();
+        uint64_t fbSize = Graphics::Cursor::GetFramebufferHeight()
+                        * Graphics::Cursor::GetFramebufferPitch();
+        uint64_t numPages = (fbSize + 0xFFF) / 0x1000;
+
+        for (uint64_t i = 0; i < numPages; i++) {
+            uint64_t phys = fbPhys + i * 0x1000;
+            g_paging.MapWC(phys, Memory::HHDM(phys));
+        }
+
+        asm volatile("mov %%cr3, %%rax; mov %%rax, %%cr3" ::: "rax", "memory");
+
+        Kt::KernelLogStream(OK, "Graphics") << "Framebuffer mapped as Write-Combining ("
+            << kcp::dec << numPages << " pages)";
+    }
+#endif
+
     Hal::ACPI g_acpi((Hal::ACPI::XSDP*)Memory::HHDM(rsdp_request.response->address));
 
 #if defined (__x86_64__)
@@ -146,6 +179,18 @@ extern "C" void kmain() {
         Hal::ApicInitialize(g_acpi.GetXSDT());
 
         Pci::Initialize(g_acpi.GetXSDT());
+
+        // Intel GPU driver — initialize right after PCI so the native
+        // driver takes over early and all subsequent logs use it.
+        Drivers::Graphics::IntelGPU::Initialize();
+        if (Drivers::Graphics::IntelGPU::IsInitialized()) {
+            Graphics::Cursor::SetFramebuffer(
+                Drivers::Graphics::IntelGPU::GetFramebufferBase(),
+                Drivers::Graphics::IntelGPU::GetWidth(),
+                Drivers::Graphics::IntelGPU::GetHeight(),
+                Drivers::Graphics::IntelGPU::GetPitch()
+            );
+        }
 
         Timekeeping::ApicTimerInitialize();
 
@@ -198,8 +243,6 @@ extern "C" void kmain() {
         Fs::Ramdisk::Create
     };
     Fs::Vfs::RegisterDrive(0, &ramdiskDriver);
-
-    Graphics::Cursor::Initialize(framebuffer);
 
     Hal::LoadTSS();
     Zenith::InitializeSyscalls();

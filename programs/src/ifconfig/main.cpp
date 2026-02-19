@@ -81,6 +81,9 @@ extern "C" void _start() {
         zenith::print("  Gateway:      ");
         print_ip(cfg.gateway);
         zenith::putchar('\n');
+        zenith::print("  DNS Server:   ");
+        print_ip(cfg.dnsServer);
+        zenith::putchar('\n');
         zenith::exit(0);
     }
 

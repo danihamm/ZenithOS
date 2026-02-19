@@ -12,6 +12,7 @@ namespace Net {
     static uint32_t g_ipAddress  = Ipv4Addr(10, 0, 68, 99);
     static uint32_t g_subnetMask = Ipv4Addr(255, 255, 255, 0);
     static uint32_t g_gateway    = Ipv4Addr(10, 0, 68, 1);
+    static uint32_t g_dnsServer  = Ipv4Addr(10, 0, 68, 1);
 
     uint32_t GetIpAddress() { return g_ipAddress; }
     void SetIpAddress(uint32_t ip) { g_ipAddress = ip; }
@@ -21,6 +22,9 @@ namespace Net {
 
     uint32_t GetGateway() { return g_gateway; }
     void SetGateway(uint32_t gw) { g_gateway = gw; }
+
+    uint32_t GetDnsServer() { return g_dnsServer; }
+    void SetDnsServer(uint32_t dns) { g_dnsServer = dns; }
 
     bool IsLocalSubnet(uint32_t destIp) {
         return (destIp & g_subnetMask) == (g_ipAddress & g_subnetMask);

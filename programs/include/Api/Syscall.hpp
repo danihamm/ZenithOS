@@ -54,6 +54,9 @@ namespace Zenith {
     static constexpr uint64_t SYS_RECVFROM       = 40;
     static constexpr uint64_t SYS_FWRITE         = 41;
     static constexpr uint64_t SYS_FCREATE        = 42;
+    static constexpr uint64_t SYS_TERMSCALE     = 43;
+    static constexpr uint64_t SYS_RESOLVE        = 44;
+    static constexpr uint64_t SYS_GETRANDOM     = 45;
 
     static constexpr int SOCK_TCP = 1;
     static constexpr int SOCK_UDP = 2;
@@ -64,6 +67,7 @@ namespace Zenith {
         uint32_t gateway;     // network byte order
         uint8_t  macAddress[6];
         uint8_t  _pad[2];
+        uint32_t dnsServer;   // network byte order
     };
 
     struct DateTime {

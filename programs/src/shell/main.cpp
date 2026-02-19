@@ -118,11 +118,13 @@ static void cmd_help() {
     zenith::print("  date          Show current date and time\n");
     zenith::print("  uptime        Show uptime\n");
     zenith::print("  clear         Clear the screen\n");
+    zenith::print("  fontscale [n] Set terminal font scale (1-8)\n");
     zenith::print("  reset         Reboot the system\n");
     zenith::print("  shutdown      Shut down the system\n");
     zenith::print("\n");
     zenith::print("Network commands:\n");
     zenith::print("  ping <ip>     Send ICMP echo requests\n");
+    zenith::print("  nslookup      DNS lookup\n");
     zenith::print("  ifconfig      Show/set network configuration\n");
     zenith::print("  tcpconnect    Connect to a TCP server\n");
     zenith::print("  irc           IRC client\n");

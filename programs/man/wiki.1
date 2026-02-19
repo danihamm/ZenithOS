@@ -1,0 +1,64 @@
+.TH WIKI 1
+.SH NAME
+    wiki - Wikipedia article viewer for ZenithOS
+
+.SH SYNOPSIS
+    wiki <title>
+    wiki -f <title>
+    wiki -s <query>
+
+.SH DESCRIPTION
+    wiki fetches and displays Wikipedia articles in the terminal.
+    It connects to en.wikipedia.org over HTTPS (TLS 1.2) and
+    uses the Wikipedia REST and Action APIs to retrieve article
+    content as plain text.
+
+    Articles are displayed in a fullscreen interactive pager with
+    color-coded headings and word-wrapped text. Multi-word titles
+    are accepted as separate arguments and joined automatically.
+
+.SH OPTIONS
+.B -f
+    Full article mode. Display the complete article text instead
+    of just the summary. Section headings are color-coded.
+
+.B -s
+    Search mode. Search Wikipedia for articles matching the
+    query and display a numbered list of up to 10 results.
+    Press a number key to view that article's summary.
+
+.SH EXAMPLES
+    wiki Linux
+        Show a summary of the Linux article.
+
+    wiki -f C programming language
+        Show the full text of the C programming language article.
+
+    wiki -s operating system
+        Search for articles related to "operating system".
+
+.SH TLS SUPPORT
+    Connections use BearSSL for TLS 1.2. Server certificates
+    are validated against the system CA bundle at
+    0:/etc/ca-certificates.crt.
+
+.SH KEYBOARD
+
+.SS Article pager
+    j / Down        Scroll down one line
+    k / Up          Scroll up one line
+    Space / PgDn    Scroll down one page
+    b / PgUp        Scroll up one page
+    g / Home        Jump to top
+    G / End         Jump to bottom
+    q               Quit pager
+
+.SS Search results
+    1-9, 0          View article (0 = result 10)
+    q               Quit search
+
+.SS General
+    Ctrl+Q          Abort during network request
+
+.SH SEE ALSO
+    fetch(1), ping(1), nslookup(1), shell(1)

@@ -1,0 +1,43 @@
+.TH FONTSCALE 1
+.SH NAME
+    fontscale - get or set terminal font scale
+
+.SH SYNOPSIS
+    fontscale
+    fontscale <n>
+    fontscale <x> <y>
+
+.SH DESCRIPTION
+    Controls the terminal font scale factor. The Flanterm terminal
+    emulator renders text at a configurable scale multiplier.
+    Increasing the scale makes text larger, which is useful on
+    high-resolution displays or real hardware where text may be
+    too small to read comfortably.
+
+    With no arguments, prints the current scale factor and terminal
+    dimensions.
+
+    With one argument, sets both the horizontal and vertical scale
+    to the same value.
+
+    With two arguments, sets asymmetric horizontal and vertical
+    scale factors independently.
+
+    Valid scale values are 1 through 8. After rescaling, the screen
+    is cleared.
+
+.SH OUTPUT
+    fontscale
+        Scale: 1x1 (160 cols x 50 rows)
+
+    fontscale 2
+        Scale set to 2x2 (80 cols x 25 rows)
+
+.SH EXAMPLES
+    fontscale           Show current scale and dimensions
+    fontscale 2         Double the font size
+    fontscale 3 2       3x horizontal, 2x vertical
+    fontscale 1         Reset to default size
+
+.SH SEE ALSO
+    shell(1), syscalls(2)

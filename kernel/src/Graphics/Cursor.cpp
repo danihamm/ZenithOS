@@ -6,6 +6,7 @@
 
 #include "Cursor.hpp"
 #include <Terminal/Terminal.hpp>
+#include <Memory/HHDM.hpp>
 
 namespace Graphics::Cursor {
 
@@ -29,5 +30,18 @@ namespace Graphics::Cursor {
     uint64_t  GetFramebufferWidth()  { return g_FbWidth; }
     uint64_t  GetFramebufferHeight() { return g_FbHeight; }
     uint64_t  GetFramebufferPitch()  { return g_FbPitch; }
+
+    void SetFramebuffer(uint32_t* base, uint64_t width, uint64_t height, uint64_t pitch) {
+        g_FbBase = base;
+        g_FbWidth = width;
+        g_FbHeight = height;
+        g_FbPitch = pitch;
+        Kt::KernelLogStream(Kt::OK, "Graphics") << "Framebuffer switched ("
+            << (uint64_t)g_FbWidth << "x" << (uint64_t)g_FbHeight << ")";
+    }
+
+    uint64_t GetFramebufferPhysBase() {
+        return Memory::SubHHDM((uint64_t)g_FbBase);
+    }
 
 };

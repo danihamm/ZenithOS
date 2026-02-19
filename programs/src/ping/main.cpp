@@ -65,21 +65,26 @@ extern "C" void _start() {
     int len = zenith::getargs(args, sizeof(args));
 
     if (len <= 0 || args[0] == '\0') {
-        zenith::print("Usage: ping <ip address>\n");
+        zenith::print("Usage: ping <host>\n");
         zenith::exit(1);
     }
 
     uint32_t ip;
     if (!parse_ip(args, &ip)) {
-        zenith::print("Invalid IP address: ");
-        zenith::print(args);
-        zenith::putchar('\n');
-        zenith::exit(1);
+        ip = zenith::resolve(args);
+        if (ip == 0) {
+            zenith::print("Could not resolve: ");
+            zenith::print(args);
+            zenith::putchar('\n');
+            zenith::exit(1);
+        }
     }
 
     zenith::print("PING ");
+    zenith::print(args);
+    zenith::print(" (");
     print_ip(ip);
-    zenith::putchar('\n');
+    zenith::print(")\n");
 
     for (int i = 0; i < 4; i++) {
         int32_t rtt = zenith::ping(ip, 3000);

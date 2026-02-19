@@ -1,7 +1,7 @@
 /*
     * main.cpp
     * HTTP/1.0 server for ZenithOS
-    * Usage: run httpd.elf [port]  (default: 80)
+    * Usage: httpd [port]  (default: 80)
     * Serves a built-in index page and files from the VFS
     * Copyright (c) 2025-2026 Daniel Hammer
 */

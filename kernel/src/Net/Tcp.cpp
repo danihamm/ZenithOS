@@ -255,9 +255,6 @@ namespace Net::Tcp {
 
                         // Send ACK
                         SendSegment(conn, FLAG_ACK, nullptr, 0);
-
-                        KernelLogStream(INFO, "Net") << "TCP connection established to port "
-                            << base::dec << (uint64_t)conn->RemotePort;
                     }
                 }
                 break;

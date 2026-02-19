@@ -81,25 +81,28 @@ extern "C" void _start() {
     int len = zenith::getargs(args, sizeof(args));
 
     if (len <= 0 || args[0] == '\0') {
-        zenith::print("Usage: tcpconnect <ip> <port>\n");
+        zenith::print("Usage: tcpconnect <host> <port>\n");
         zenith::exit(1);
     }
 
-    // Parse IP address (up to first space)
-    char ipStr[32];
+    // Parse host (IP or hostname)
+    char hostStr[128];
     int i = 0;
-    while (args[i] && args[i] != ' ' && i < 31) {
-        ipStr[i] = args[i];
+    while (args[i] && args[i] != ' ' && i < 127) {
+        hostStr[i] = args[i];
         i++;
     }
-    ipStr[i] = '\0';
+    hostStr[i] = '\0';
 
     uint32_t ip;
-    if (!parse_ip(ipStr, &ip)) {
-        zenith::print("Invalid IP address: ");
-        zenith::print(ipStr);
-        zenith::putchar('\n');
-        zenith::exit(1);
+    if (!parse_ip(hostStr, &ip)) {
+        ip = zenith::resolve(hostStr);
+        if (ip == 0) {
+            zenith::print("Could not resolve: ");
+            zenith::print(hostStr);
+            zenith::putchar('\n');
+            zenith::exit(1);
+        }
     }
 
     // Parse port

@@ -27,6 +27,10 @@ namespace Net {
     uint32_t GetGateway();
     void SetGateway(uint32_t gw);
 
+    // Get/set the DNS server (network byte order)
+    uint32_t GetDnsServer();
+    void SetDnsServer(uint32_t dns);
+
     // Check if a destination IP is on the local subnet
     bool IsLocalSubnet(uint32_t destIp);
 

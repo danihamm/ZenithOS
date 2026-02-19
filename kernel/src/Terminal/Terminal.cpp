@@ -5,15 +5,130 @@
 */
 
 #include "Terminal.hpp"
+
+#define FLANTERM_IN_FLANTERM
 #include "../Libraries/flanterm/src/flanterm_backends/fb.h"
 #include "../Libraries/flanterm/src/flanterm.h"
 
 #include "../Libraries/String.hpp"
+#include "../Libraries/Memory.hpp"
 #include <CppLib/CString.hpp>
 
 namespace Kt {
     flanterm_context *ctx;
     std::size_t g_terminal_width = 0;
+
+    // Maximum grid cells allocated at init (scale 1,1). Used to validate
+    // that a requested scale does not exceed the original buffer capacity.
+    static std::size_t g_max_grid_cells = 0;
+
+    // Custom plot_char that works for any font_scale_x/y >= 1.
+    // This is the same algorithm as flanterm's plot_char_scaled_uncanvas
+    // but lives outside fb.c so we can install it after rescaling.
+    static void plot_char_universal(struct flanterm_context *_ctx,
+                                    struct flanterm_fb_char *c,
+                                    size_t x, size_t y) {
+        struct flanterm_fb_context *fbctx = (struct flanterm_fb_context *)_ctx;
+
+        if (x >= _ctx->cols || y >= _ctx->rows) {
+            return;
+        }
+
+        uint32_t default_bg = fbctx->default_bg;
+        uint32_t bg = c->bg == 0xffffffff ? default_bg : c->bg;
+        uint32_t fg = c->fg == 0xffffffff ? fbctx->default_fg : c->fg;
+
+        x = fbctx->offset_x + x * fbctx->glyph_width;
+        y = fbctx->offset_y + y * fbctx->glyph_height;
+
+        bool *glyph = &fbctx->font_bool[c->c * fbctx->font_height * fbctx->font_width];
+
+        // Only ROTATE_0 is used in ZenithOS
+        volatile uint32_t *dest = fbctx->framebuffer + x + y * (fbctx->pitch / 4);
+        size_t stride = fbctx->pitch / 4;
+
+        for (size_t gy = 0; gy < fbctx->glyph_height; gy++) {
+            size_t fy = gy / fbctx->font_scale_y;
+            volatile uint32_t *fb_line = dest;
+            bool *glyph_pointer = glyph + (fy * fbctx->font_width);
+            for (size_t fx = 0; fx < fbctx->font_width; fx++) {
+                for (size_t i = 0; i < fbctx->font_scale_x; i++) {
+                    *fb_line = *glyph_pointer ? fg : bg;
+                    fb_line++;
+                }
+                glyph_pointer++;
+            }
+            dest += stride;
+        }
+    }
+
+    void Rescale(std::size_t scale_x, std::size_t scale_y) {
+        if (scale_x == 0) scale_x = 1;
+        if (scale_y == 0) scale_y = 1;
+
+        struct flanterm_fb_context *fbctx = (struct flanterm_fb_context *)ctx;
+
+        // Calculate new dimensions
+        size_t new_glyph_w = fbctx->font_width * scale_x;
+        size_t new_glyph_h = fbctx->font_height * scale_y;
+        size_t new_cols = fbctx->width / new_glyph_w;
+        size_t new_rows = fbctx->height / new_glyph_h;
+
+        if (new_cols == 0 || new_rows == 0) return;
+
+        // Ensure the new grid fits within original buffer allocation
+        if (new_cols * new_rows > g_max_grid_cells) return;
+
+        // Update scale and glyph dimensions
+        fbctx->font_scale_x = scale_x;
+        fbctx->font_scale_y = scale_y;
+        fbctx->glyph_width = new_glyph_w;
+        fbctx->glyph_height = new_glyph_h;
+
+        // Update terminal grid dimensions
+        ctx->cols = new_cols;
+        ctx->rows = new_rows;
+
+        // Center the text area
+        fbctx->offset_x = (fbctx->width % new_glyph_w) / 2;
+        fbctx->offset_y = (fbctx->height % new_glyph_h) / 2;
+
+        // Install our universal plot_char
+        fbctx->plot_char = plot_char_universal;
+
+        // Reinitialize grid data (reuse existing buffers)
+        for (size_t i = 0; i < new_rows * new_cols; i++) {
+            fbctx->grid[i].c = ' ';
+            fbctx->grid[i].fg = fbctx->text_fg;
+            fbctx->grid[i].bg = fbctx->text_bg;
+        }
+
+        fbctx->queue_i = 0;
+        memset(fbctx->queue, 0, new_rows * new_cols * sizeof(struct flanterm_fb_queue_item));
+        memset(fbctx->map, 0, new_rows * new_cols * sizeof(struct flanterm_fb_queue_item *));
+
+        // Clear the framebuffer
+        for (size_t y = 0; y < fbctx->height; y++) {
+            volatile uint32_t *row = fbctx->framebuffer + y * (fbctx->pitch / 4);
+            for (size_t x = 0; x < fbctx->width; x++) {
+                row[x] = fbctx->default_bg;
+            }
+        }
+
+        // Reset terminal state and refresh
+        flanterm_context_reinit(ctx);
+        flanterm_full_refresh(ctx);
+    }
+
+    std::size_t GetFontScaleX() {
+        struct flanterm_fb_context *fbctx = (struct flanterm_fb_context *)ctx;
+        return fbctx->font_scale_x;
+    }
+
+    std::size_t GetFontScaleY() {
+        struct flanterm_fb_context *fbctx = (struct flanterm_fb_context *)ctx;
+        return fbctx->font_scale_y;
+    }
 
     void UpdatePanelBar(CString panelText) {
         kout << "\033[s";
@@ -48,12 +163,19 @@ namespace Kt {
             NULL, NULL,
             NULL, NULL,
             NULL, 0, 0, 1,
-            0, 0,
+            1, 1,
             0,
             FLANTERM_FB_ROTATE_0
         );
 
         g_terminal_width = width;
+
+        // Store max grid cells for rescale buffer bounds checking
+        g_max_grid_cells = ctx->cols * ctx->rows;
+
+        // Install our universal plot_char so rescaling works at any scale
+        struct flanterm_fb_context *fbctx = (struct flanterm_fb_context *)ctx;
+        fbctx->plot_char = plot_char_universal;
 
         UpdatePanelBar("Initializing...");
         kout << "\n\n\n";

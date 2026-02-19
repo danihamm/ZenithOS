@@ -44,6 +44,10 @@ namespace Kt
 
     void UpdatePanelBar(const char* panelText);
 
+    void Rescale(std::size_t font_scale_x, std::size_t font_scale_y);
+    std::size_t GetFontScaleX();
+    std::size_t GetFontScaleY();
+
     inline base base_custom(int custom)
     {
         return (base)custom;

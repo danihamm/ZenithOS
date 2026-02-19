@@ -1,0 +1,36 @@
+.TH NSLOOKUP 1
+.SH NAME
+    nslookup - DNS hostname lookup
+
+.SH SYNOPSIS
+    nslookup <hostname>
+
+.SH DESCRIPTION
+    Resolves a hostname to an IPv4 address using the configured
+    DNS server and prints the result.
+
+    The kernel DNS resolver sends a UDP query to port 53 of the
+    configured DNS server and waits up to 5 seconds for a reply.
+    Results are cached in an 8-entry kernel cache with TTL support.
+
+.SH OUTPUT
+    Server:   10.0.68.1
+    Name:     example.com
+    Address:  93.184.216.34
+    Time:     3ms
+
+    If the lookup fails:
+
+    Could not resolve: badhost.invalid
+
+.SH DNS CONFIGURATION
+    The DNS server address is obtained automatically via DHCP.
+    It can also be viewed and set with ifconfig. The default
+    is 10.0.68.1 (QEMU user-mode networking).
+
+.SH EXAMPLES
+    nslookup google.com
+    nslookup icanhazip.com
+
+.SH SEE ALSO
+    ping(1), fetch(1), dhcp(1), ifconfig(1), syscalls(2)

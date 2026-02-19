@@ -165,6 +165,11 @@ namespace zenith {
         return (int32_t)syscall2(Zenith::SYS_PING, (uint64_t)ip, (uint64_t)timeoutMs);
     }
 
+    // DNS resolve: returns IP in network byte order, or 0 on failure
+    inline uint32_t resolve(const char* hostname) {
+        return (uint32_t)syscall1(Zenith::SYS_RESOLVE, (uint64_t)hostname);
+    }
+
     // Network configuration
     inline void get_netcfg(Zenith::NetCfg* out) { syscall1(Zenith::SYS_GETNETCFG, (uint64_t)out); }
     inline int set_netcfg(const Zenith::NetCfg* cfg) { return (int)syscall1(Zenith::SYS_SETNETCFG, (uint64_t)cfg); }
@@ -222,8 +227,23 @@ namespace zenith {
         if (rows) *rows = (int)(r >> 32);
     }
 
+    inline void termscale(int scale_x, int scale_y) {
+        syscall2(Zenith::SYS_TERMSCALE, (uint64_t)scale_x, (uint64_t)scale_y);
+    }
+
+    inline void get_termscale(int* scale_x, int* scale_y) {
+        uint64_t r = (uint64_t)syscall2(Zenith::SYS_TERMSCALE, 0, 0);
+        if (scale_x) *scale_x = (int)(r & 0xFFFFFFFF);
+        if (scale_y) *scale_y = (int)(r >> 32);
+    }
+
     // Timekeeping (wall-clock)
     inline void gettime(Zenith::DateTime* out) { syscall1(Zenith::SYS_GETTIME, (uint64_t)out); }
+
+    // Random number generation
+    inline int64_t getrandom(void* buf, uint32_t len) {
+        return syscall2(Zenith::SYS_GETRANDOM, (uint64_t)buf, (uint64_t)len);
+    }
 
     // Power management
     [[noreturn]] inline void reset() {
