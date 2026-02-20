@@ -248,24 +248,16 @@ static void filemanager_on_draw(Window* win, Framebuffer& fb) {
     FileManagerState* fm = (FileManagerState*)win->app_data;
     if (!fm) return;
 
-    Rect cr = win->content_rect();
-    int cw = cr.w;
-    int ch = cr.h;
-    uint32_t* pixels = win->content;
+    Canvas c(win);
+    c.fill(colors::WINDOW_BG);
 
-    uint32_t bg_px = colors::WINDOW_BG.to_pixel();
-    for (int i = 0; i < cw * ch; i++) pixels[i] = bg_px;
-
-    uint32_t text_px = colors::TEXT_COLOR.to_pixel();
-    uint32_t sep_px = colors::BORDER.to_pixel();
-    uint32_t toolbar_px = Color::from_rgb(0xF5, 0xF5, 0xF5).to_pixel();
-
+    Color toolbar_color = Color::from_rgb(0xF5, 0xF5, 0xF5);
+    Color btn_bg = Color::from_rgb(0xE8, 0xE8, 0xE8);
+    Color dim = Color::from_rgb(0x88, 0x88, 0x88);
     DesktopState* ds = fm->desktop;
 
     // ---- Toolbar (32px) ----
-    for (int y = 0; y < FM_TOOLBAR_H && y < ch; y++)
-        for (int x = 0; x < cw; x++)
-            pixels[y * cw + x] = toolbar_px;
+    c.fill_rect(0, 0, c.w, FM_TOOLBAR_H, toolbar_color);
 
     // Toolbar buttons: Back, Forward, Up, Home
     struct ToolBtn { int x; SvgIcon* icon; };
@@ -279,79 +271,53 @@ static void filemanager_on_draw(Window* win, Framebuffer& fb) {
     for (int i = 0; i < 4; i++) {
         int bx = btns[i].x;
         int by = 4;
-        // Button background
-        uint32_t btn_px = Color::from_rgb(0xE8, 0xE8, 0xE8).to_pixel();
-        for (int dy = 0; dy < 24 && by + dy < ch; dy++)
-            for (int dx = 0; dx < 24 && bx + dx < cw; dx++)
-                pixels[(by + dy) * cw + (bx + dx)] = btn_px;
+        c.fill_rect(bx, by, 24, 24, btn_bg);
 
         if (btns[i].icon) {
             int ix = bx + (24 - btns[i].icon->width) / 2;
             int iy = by + (24 - btns[i].icon->height) / 2;
-            blit_icon_to_pixels(pixels, cw, ch, ix, iy, *btns[i].icon);
+            c.icon(ix, iy, *btns[i].icon);
         }
     }
 
     // Toggle view button (5th toolbar button)
     {
         int bx = 120, by = 4;
-        uint32_t btn_px = Color::from_rgb(0xE8, 0xE8, 0xE8).to_pixel();
-        for (int dy = 0; dy < 24 && by + dy < ch; dy++)
-            for (int dx = 0; dx < 24 && bx + dx < cw; dx++)
-                pixels[(by + dy) * cw + (bx + dx)] = btn_px;
-        uint32_t glyph_px = colors::TEXT_COLOR.to_pixel();
+        c.fill_rect(bx, by, 24, 24, btn_bg);
         if (fm->grid_view) {
             // Draw 4 small squares to indicate grid mode
             for (int r = 0; r < 2; r++)
-                for (int c = 0; c < 2; c++)
-                    for (int dy = 0; dy < 6; dy++)
-                        for (int dx = 0; dx < 6; dx++)
-                            if (by + 5 + r * 8 + dy < ch && bx + 5 + c * 8 + dx < cw)
-                                pixels[(by + 5 + r * 8 + dy) * cw + (bx + 5 + c * 8 + dx)] = glyph_px;
+                for (int cc = 0; cc < 2; cc++)
+                    c.fill_rect(bx + 5 + cc * 8, by + 5 + r * 8, 6, 6, colors::TEXT_COLOR);
         } else {
             // Draw 3 horizontal lines to indicate list mode
             for (int r = 0; r < 3; r++)
-                for (int dx = 0; dx < 14; dx++)
-                    for (int dy = 0; dy < 2; dy++)
-                        if (by + 5 + r * 5 + dy < ch && bx + 5 + dx < cw)
-                            pixels[(by + 5 + r * 5 + dy) * cw + (bx + 5 + dx)] = glyph_px;
+                c.fill_rect(bx + 5, by + 5 + r * 5, 14, 2, colors::TEXT_COLOR);
         }
     }
 
     // Toolbar separator
-    int sep_y = FM_TOOLBAR_H - 1;
-    if (sep_y < ch) {
-        for (int x = 0; x < cw; x++)
-            pixels[sep_y * cw + x] = sep_px;
-    }
+    c.hline(0, FM_TOOLBAR_H - 1, c.w, colors::BORDER);
 
     // ---- Path bar ----
     int pathbar_y = FM_TOOLBAR_H;
-    uint32_t pathbar_px = Color::from_rgb(0xF0, 0xF0, 0xF0).to_pixel();
-    for (int y = pathbar_y; y < pathbar_y + FM_PATHBAR_H && y < ch; y++)
-        for (int x = 0; x < cw; x++)
-            pixels[y * cw + x] = pathbar_px;
-
-    draw_text_to_pixels(pixels, cw, ch, 8, pathbar_y + 4, fm->current_path, text_px);
+    c.fill_rect(0, pathbar_y, c.w, FM_PATHBAR_H, Color::from_rgb(0xF0, 0xF0, 0xF0));
+    c.text(8, pathbar_y + 4, fm->current_path, colors::TEXT_COLOR);
 
     // Path bar separator
-    sep_y = pathbar_y + FM_PATHBAR_H - 1;
-    if (sep_y < ch) {
-        for (int x = 0; x < cw; x++)
-            pixels[sep_y * cw + x] = sep_px;
-    }
+    c.hline(0, pathbar_y + FM_PATHBAR_H - 1, c.w, colors::BORDER);
 
     if (fm->grid_view) {
         // ---- Grid View ----
         int list_y = FM_TOOLBAR_H + FM_PATHBAR_H;
-        int list_h = ch - list_y;
-        int cols = (cw - FM_SCROLLBAR_W) / FM_GRID_CELL_W;
+        int list_h = c.h - list_y;
+        int cols = (c.w - FM_SCROLLBAR_W) / FM_GRID_CELL_W;
         if (cols < 1) cols = 1;
         int rows = (fm->entry_count + cols - 1) / cols;
         int content_h = rows * FM_GRID_CELL_H;
 
         // Update scrollbar
-        fm->scrollbar.bounds = {cw - FM_SCROLLBAR_W, list_y, FM_SCROLLBAR_W, list_h};
+        fm->scrollbar.bounds = {c.w - FM_SCROLLBAR_W, list_y, FM_SCROLLBAR_W, list_h};
         fm->scrollbar.content_height = content_h;
         fm->scrollbar.view_height = list_h;
 
@@ -362,32 +328,34 @@ static void filemanager_on_draw(Window* win, Framebuffer& fb) {
             int cell_y = list_y + row * FM_GRID_CELL_H - fm->scrollbar.scroll_offset;
 
             // Skip if entirely off-screen
-            if (cell_y + FM_GRID_CELL_H <= list_y || cell_y >= ch) continue;
+            if (cell_y + FM_GRID_CELL_H <= list_y || cell_y >= c.h) continue;
 
             // Selection highlight
             if (i == fm->selected) {
-                uint32_t sel_px = colors::MENU_HOVER.to_pixel();
-                for (int y = gui_max(cell_y, list_y); y < gui_min(cell_y + FM_GRID_CELL_H, ch); y++)
-                    for (int x = cell_x; x < gui_min(cell_x + FM_GRID_CELL_W, cw - FM_SCROLLBAR_W); x++)
-                        pixels[y * cw + x] = sel_px;
+                int sy = gui_max(cell_y, list_y);
+                int sh = gui_min(cell_y + FM_GRID_CELL_H, c.h) - sy;
+                int sw = gui_min(FM_GRID_CELL_W, c.w - FM_SCROLLBAR_W - cell_x);
+                if (sh > 0 && sw > 0)
+                    c.fill_rect(cell_x, sy, sw, sh, colors::MENU_HOVER);
             }
 
             // Large icon centered horizontally
             int icon_x = cell_x + (FM_GRID_CELL_W - FM_GRID_ICON) / 2;
             int icon_y = cell_y + FM_GRID_PAD;
             if (ds && fm->entry_types[i] == 1 && ds->icon_folder_lg.pixels) {
-                blit_icon_to_pixels(pixels, cw, ch, icon_x, icon_y, ds->icon_folder_lg);
+                c.icon(icon_x, icon_y, ds->icon_folder_lg);
             } else if (ds && fm->entry_types[i] == 2 && ds->icon_exec_lg.pixels) {
-                blit_icon_to_pixels(pixels, cw, ch, icon_x, icon_y, ds->icon_exec_lg);
+                c.icon(icon_x, icon_y, ds->icon_exec_lg);
             } else if (ds && ds->icon_file_lg.pixels) {
-                blit_icon_to_pixels(pixels, cw, ch, icon_x, icon_y, ds->icon_file_lg);
+                c.icon(icon_x, icon_y, ds->icon_file_lg);
             } else {
-                uint32_t icon_px = fm->is_dir[i]
-                    ? Color::from_rgb(0xFF, 0xBD, 0x2E).to_pixel()
-                    : Color::from_rgb(0x90, 0x90, 0x90).to_pixel();
-                for (int dy = 0; dy < FM_GRID_ICON && icon_y + dy < ch && icon_y + dy >= list_y; dy++)
-                    for (int dx = 0; dx < FM_GRID_ICON && icon_x + dx < cw; dx++)
-                        pixels[(icon_y + dy) * cw + (icon_x + dx)] = icon_px;
+                Color icon_c = fm->is_dir[i]
+                    ? Color::from_rgb(0xFF, 0xBD, 0x2E)
+                    : Color::from_rgb(0x90, 0x90, 0x90);
+                int iy_clip = gui_max(icon_y, list_y);
+                int ih_clip = FM_GRID_ICON - (iy_clip - icon_y);
+                if (ih_clip > 0)
+                    c.fill_rect(icon_x, iy_clip, FM_GRID_ICON, ih_clip, icon_c);
             }
 
             // Filename centered below icon, truncated if needed
@@ -405,52 +373,42 @@ static void filemanager_on_draw(Window* win, Framebuffer& fb) {
             int tx = cell_x + (FM_GRID_CELL_W - tw) / 2;
             if (tx < cell_x) tx = cell_x;
             int ty = icon_y + FM_GRID_ICON + 2;
-            if (ty >= list_y && ty + FONT_HEIGHT <= ch)
-                draw_text_to_pixels(pixels, cw, ch, tx, ty, label, text_px);
+            if (ty >= list_y && ty + FONT_HEIGHT <= c.h)
+                c.text(tx, ty, label, colors::TEXT_COLOR);
         }
     } else {
         // ---- List View ----
 
         // ---- Column headers ----
         int header_y = FM_TOOLBAR_H + FM_PATHBAR_H;
-        uint32_t header_px = Color::from_rgb(0xF8, 0xF8, 0xF8).to_pixel();
-        for (int y = header_y; y < header_y + FM_HEADER_H && y < ch; y++)
-            for (int x = 0; x < cw; x++)
-                pixels[y * cw + x] = header_px;
+        c.fill_rect(0, header_y, c.w, FM_HEADER_H, Color::from_rgb(0xF8, 0xF8, 0xF8));
 
-        uint32_t dim_px = Color::from_rgb(0x88, 0x88, 0x88).to_pixel();
         int name_col_x = 8;
-        int size_col_x = cw - FM_SCROLLBAR_W - 120;
-        int type_col_x = cw - FM_SCROLLBAR_W - 60;
+        int size_col_x = c.w - FM_SCROLLBAR_W - 120;
+        int type_col_x = c.w - FM_SCROLLBAR_W - 60;
 
-        draw_text_to_pixels(pixels, cw, ch, name_col_x, header_y + 2, "Name", dim_px);
+        c.text(name_col_x, header_y + 2, "Name", dim);
         if (size_col_x > 100)
-            draw_text_to_pixels(pixels, cw, ch, size_col_x, header_y + 2, "Size", dim_px);
+            c.text(size_col_x, header_y + 2, "Size", dim);
         if (type_col_x > 160)
-            draw_text_to_pixels(pixels, cw, ch, type_col_x, header_y + 2, "Type", dim_px);
+            c.text(type_col_x, header_y + 2, "Type", dim);
 
         // Header separator
-        sep_y = header_y + FM_HEADER_H - 1;
-        if (sep_y < ch) {
-            for (int x = 0; x < cw; x++)
-                pixels[sep_y * cw + x] = sep_px;
-        }
+        c.hline(0, header_y + FM_HEADER_H - 1, c.w, colors::BORDER);
 
         // Column separator lines
         if (size_col_x > 100) {
-            for (int y = header_y; y < ch; y++)
-                if (size_col_x - 4 >= 0 && size_col_x - 4 < cw)
-                    pixels[y * cw + (size_col_x - 4)] = sep_px;
+            c.vline(size_col_x - 4, header_y, c.h - header_y, colors::BORDER);
         }
 
         // ---- File entries ----
         int list_y = header_y + FM_HEADER_H;
-        int list_h = ch - list_y;
+        int list_h = c.h - list_y;
         int visible_items = list_h / FM_ITEM_H;
         int content_h = fm->entry_count * FM_ITEM_H;
 
         // Update scrollbar
-        fm->scrollbar.bounds = {cw - FM_SCROLLBAR_W, list_y, FM_SCROLLBAR_W, list_h};
+        fm->scrollbar.bounds = {c.w - FM_SCROLLBAR_W, list_y, FM_SCROLLBAR_W, list_h};
         fm->scrollbar.content_height = content_h;
         fm->scrollbar.view_height = list_h;
 
@@ -458,78 +416,73 @@ static void filemanager_on_draw(Window* win, Framebuffer& fb) {
 
         for (int i = scroll_items; i < fm->entry_count && (i - scroll_items) < visible_items + 1; i++) {
             int iy = list_y + (i - scroll_items) * FM_ITEM_H - (fm->scrollbar.scroll_offset % FM_ITEM_H);
-            if (iy + FM_ITEM_H <= list_y || iy >= ch) continue;
+            if (iy + FM_ITEM_H <= list_y || iy >= c.h) continue;
 
             // Highlight selected
             if (i == fm->selected) {
-                uint32_t sel_px = colors::MENU_HOVER.to_pixel();
-                for (int y = gui_max(iy, list_y); y < gui_min(iy + FM_ITEM_H, ch); y++)
-                    for (int x = 0; x < cw - FM_SCROLLBAR_W; x++)
-                        pixels[y * cw + x] = sel_px;
+                int sy = gui_max(iy, list_y);
+                int sh = gui_min(iy + FM_ITEM_H, c.h) - sy;
+                if (sh > 0)
+                    c.fill_rect(0, sy, c.w - FM_SCROLLBAR_W, sh, colors::MENU_HOVER);
             }
 
             // Icon
-            int icon_x = 8;
-            int icon_y = iy + (FM_ITEM_H - 16) / 2;
+            int ico_x = 8;
+            int ico_y = iy + (FM_ITEM_H - 16) / 2;
             if (ds && fm->entry_types[i] == 1 && ds->icon_folder.pixels) {
-                blit_icon_to_pixels(pixels, cw, ch, icon_x, icon_y, ds->icon_folder);
+                c.icon(ico_x, ico_y, ds->icon_folder);
             } else if (ds && fm->entry_types[i] == 2 && ds->icon_exec.pixels) {
-                blit_icon_to_pixels(pixels, cw, ch, icon_x, icon_y, ds->icon_exec);
+                c.icon(ico_x, ico_y, ds->icon_exec);
             } else if (ds && ds->icon_file.pixels) {
-                blit_icon_to_pixels(pixels, cw, ch, icon_x, icon_y, ds->icon_file);
+                c.icon(ico_x, ico_y, ds->icon_file);
             } else {
-                uint32_t icon_px = fm->is_dir[i]
-                    ? Color::from_rgb(0xFF, 0xBD, 0x2E).to_pixel()
-                    : Color::from_rgb(0x90, 0x90, 0x90).to_pixel();
-                for (int dy = 0; dy < 16 && icon_y + dy < ch && icon_y + dy >= list_y; dy++)
-                    for (int dx = 0; dx < 16 && icon_x + dx < cw; dx++)
-                        pixels[(icon_y + dy) * cw + (icon_x + dx)] = icon_px;
+                Color icon_c = fm->is_dir[i]
+                    ? Color::from_rgb(0xFF, 0xBD, 0x2E)
+                    : Color::from_rgb(0x90, 0x90, 0x90);
+                int iy_clip = gui_max(ico_y, list_y);
+                int ih_clip = 16 - (iy_clip - ico_y);
+                if (ih_clip > 0)
+                    c.fill_rect(ico_x, iy_clip, 16, ih_clip, icon_c);
             }
 
             // Name
             int tx = 30;
             int ty = iy + (FM_ITEM_H - FONT_HEIGHT) / 2;
-            if (ty >= list_y && ty + FONT_HEIGHT <= ch)
-                draw_text_to_pixels(pixels, cw, ch, tx, ty, fm->entry_names[i], text_px);
+            if (ty >= list_y && ty + FONT_HEIGHT <= c.h)
+                c.text(tx, ty, fm->entry_names[i], colors::TEXT_COLOR);
 
             // Size
-            if (size_col_x > 100 && !fm->is_dir[i] && ty >= list_y && ty + FONT_HEIGHT <= ch) {
+            if (size_col_x > 100 && !fm->is_dir[i] && ty >= list_y && ty + FONT_HEIGHT <= c.h) {
                 char size_str[16];
                 format_size(size_str, fm->entry_sizes[i]);
-                draw_text_to_pixels(pixels, cw, ch, size_col_x, ty, size_str, dim_px);
+                c.text(size_col_x, ty, size_str, dim);
             }
 
             // Type
-            if (type_col_x > 160 && ty >= list_y && ty + FONT_HEIGHT <= ch) {
+            if (type_col_x > 160 && ty >= list_y && ty + FONT_HEIGHT <= c.h) {
                 const char* type_str = "File";
                 if (fm->entry_types[i] == 1) type_str = "Dir";
                 else if (fm->entry_types[i] == 2) type_str = "Exec";
-                draw_text_to_pixels(pixels, cw, ch, type_col_x, ty, type_str, dim_px);
+                c.text(type_col_x, ty, type_str, dim);
             }
         }
     }
 
     // ---- Scrollbar ----
-    // Draw scrollbar directly to pixels
     if (fm->scrollbar.content_height > fm->scrollbar.view_height) {
-        uint32_t sb_bg = colors::SCROLLBAR_BG.to_pixel();
-        uint32_t sb_fg = (fm->scrollbar.hovered || fm->scrollbar.dragging)
-            ? fm->scrollbar.hover_fg.to_pixel() : fm->scrollbar.fg.to_pixel();
+        Color sb_fg_color = (fm->scrollbar.hovered || fm->scrollbar.dragging)
+            ? fm->scrollbar.hover_fg : fm->scrollbar.fg;
 
         int sbx = fm->scrollbar.bounds.x;
         int sby = fm->scrollbar.bounds.y;
         int sbw = fm->scrollbar.bounds.w;
         int sbh = fm->scrollbar.bounds.h;
 
-        for (int y = sby; y < sby + sbh && y < ch; y++)
-            for (int x = sbx; x < sbx + sbw && x < cw; x++)
-                pixels[y * cw + x] = sb_bg;
+        c.fill_rect(sbx, sby, sbw, sbh, colors::SCROLLBAR_BG);
 
         int th = fm->scrollbar.thumb_height();
         int tty = fm->scrollbar.thumb_y();
-        for (int y = tty; y < tty + th && y < sby + sbh && y < ch; y++)
-            for (int x = sbx + 1; x < sbx + sbw - 1 && x < cw; x++)
-                pixels[y * cw + x] = sb_fg;
+        c.fill_rect(sbx + 1, tty, sbw - 2, th, sb_fg_color);
     }
 }
 

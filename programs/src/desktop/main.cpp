@@ -55,6 +55,13 @@ void gui::desktop_init(DesktopState* ds) {
     ds->icon_file_lg   = svg_load("0:/icons/text-x-generic.svg",           48, 48, defColor);
     ds->icon_exec_lg   = svg_load("0:/icons/utilities-terminal.svg",        48, 48, defColor);
 
+    ds->icon_settings = svg_load("0:/icons/help-about.svg",     20, 20, defColor);
+    ds->icon_reboot   = svg_load("0:/icons/system-reboot.svg", 20, 20, defColor);
+
+    ds->ctx_menu_open = false;
+    ds->ctx_menu_x = 0;
+    ds->ctx_menu_y = 0;
+
     ds->net_popup_open = false;
     zenith::get_netcfg(&ds->cached_net_cfg);
     ds->net_cfg_last_poll = zenith::get_milliseconds();
@@ -207,15 +214,17 @@ void gui::desktop_draw_window(DesktopState* ds, int idx) {
     }
     draw_text(fb, title_x, title_y, win->title, colors::TEXT_COLOR);
 
-    // Call app draw callback to render content
-    if (win->on_draw) {
+    // Call app draw callback to render content (skip during resize — buffer is old size)
+    if (win->on_draw && !win->resizing) {
         win->on_draw(win, fb);
     }
 
-    // Blit content buffer to framebuffer
+    // Blit content buffer to framebuffer (clip to actual buffer size during resize)
     Rect cr = win->content_rect();
     if (win->content) {
-        fb.blit(cr.x, cr.y, cr.w, cr.h, win->content);
+        int blit_w = cr.w < win->content_w ? cr.w : win->content_w;
+        int blit_h = cr.h < win->content_h ? cr.h : win->content_h;
+        fb.blit(cr.x, cr.y, blit_w, blit_h, win->content);
     }
 }
 
@@ -340,7 +349,7 @@ void gui::desktop_draw_panel(DesktopState* ds) {
 // App Menu (5 items with separator and rounded corners)
 // ============================================================================
 
-static constexpr int MENU_ITEM_COUNT = 7;
+static constexpr int MENU_ITEM_COUNT = 9;
 static constexpr int MENU_W = 220;
 static constexpr int MENU_ITEM_H = 40;
 
@@ -371,6 +380,8 @@ static void desktop_draw_app_menu(DesktopState* ds) {
         { "Text Editor",  &ds->icon_texteditor },
         { "Kernel Log",   &ds->icon_terminal },
         { "Wikipedia",    &ds->icon_wikipedia },
+        { "About",        &ds->icon_settings },
+        { "Reboot",       &ds->icon_reboot },
     };
 
     int mx = ds->mouse.x;
@@ -379,8 +390,8 @@ static void desktop_draw_app_menu(DesktopState* ds) {
     for (int i = 0; i < MENU_ITEM_COUNT; i++) {
         int iy = menu_y + 4 + i * MENU_ITEM_H;
 
-        // Thin separator line after System Info (before utility apps)
-        if (i == 3) {
+        // Thin separator lines before utility apps and before Settings
+        if (i == 3 || i == 7) {
             int sep_y = iy - 1;
             for (int sx = menu_x + 8; sx < menu_x + MENU_W - 8; sx++)
                 fb.put_pixel(sx, sep_y, colors::BORDER);
@@ -459,6 +470,164 @@ static void desktop_draw_net_popup(DesktopState* ds) {
     draw_text(fb, tx, ty, line, colors::TEXT_COLOR);
 }
 
+// ============================================================================
+// Reboot Dialog
+// ============================================================================
+
+struct RebootDialogState {
+    DesktopState* ds;
+    // Button layout (pixel-buffer-relative coordinates)
+    int btn_w, btn_h, btn_y, reboot_x, cancel_x;
+    bool hover_reboot, hover_cancel;
+};
+
+static void reboot_dialog_on_draw(Window* win, Framebuffer& fb) {
+    RebootDialogState* rs = (RebootDialogState*)win->app_data;
+    if (!rs) return;
+
+    Canvas c(win);
+    c.fill(colors::WINDOW_BG);
+
+    // "Reboot the system?" centered
+    const char* msg = "Reboot the system?";
+    int tw = text_width(msg);
+    c.text((c.w - tw) / 2, 30, msg, colors::TEXT_COLOR);
+
+    // Compute button layout
+    int btn_w = 100;
+    int btn_h = 32;
+    int btn_y = c.h - btn_h - 20;
+    int gap = 20;
+    int total_w = btn_w * 2 + gap;
+    int bx = (c.w - total_w) / 2;
+    rs->btn_w = btn_w;
+    rs->btn_h = btn_h;
+    rs->btn_y = btn_y;
+    rs->reboot_x = bx;
+    rs->cancel_x = bx + btn_w + gap;
+
+    // Draw Reboot button
+    Color reboot_bg = rs->hover_reboot
+        ? Color::from_rgb(0xDD, 0x44, 0x44)
+        : Color::from_rgb(0xCC, 0x33, 0x33);
+    c.button(rs->reboot_x, btn_y, btn_w, btn_h, "Reboot", reboot_bg, colors::WHITE, 4);
+
+    // Draw Cancel button
+    Color cancel_bg = rs->hover_cancel
+        ? Color::from_rgb(0x99, 0x99, 0x99)
+        : Color::from_rgb(0x88, 0x88, 0x88);
+    c.button(rs->cancel_x, btn_y, btn_w, btn_h, "Cancel", cancel_bg, colors::WHITE, 4);
+}
+
+static void reboot_dialog_on_mouse(Window* win, MouseEvent& ev) {
+    RebootDialogState* rs = (RebootDialogState*)win->app_data;
+    if (!rs) return;
+
+    Rect cr = win->content_rect();
+    int lx = ev.x - cr.x;
+    int ly = ev.y - cr.y;
+
+    Rect rb = {rs->reboot_x, rs->btn_y, rs->btn_w, rs->btn_h};
+    Rect cb = {rs->cancel_x, rs->btn_y, rs->btn_w, rs->btn_h};
+    rs->hover_reboot = rb.contains(lx, ly);
+    rs->hover_cancel = cb.contains(lx, ly);
+
+    if (ev.left_pressed()) {
+        if (rs->hover_reboot) zenith::reset();
+        if (rs->hover_cancel) {
+            for (int i = 0; i < rs->ds->window_count; i++) {
+                if (rs->ds->windows[i].app_data == rs) {
+                    desktop_close_window(rs->ds, i);
+                    return;
+                }
+            }
+        }
+    }
+}
+
+static void reboot_dialog_on_key(Window* win, const Zenith::KeyEvent& key) {
+    RebootDialogState* rs = (RebootDialogState*)win->app_data;
+    if (!rs || !key.pressed) return;
+
+    if (key.ascii == '\n' || key.ascii == '\r') {
+        zenith::reset();
+    }
+    if (key.scancode == 0x01) { // Escape
+        for (int i = 0; i < rs->ds->window_count; i++) {
+            if (rs->ds->windows[i].app_data == rs) {
+                desktop_close_window(rs->ds, i);
+                return;
+            }
+        }
+    }
+}
+
+static void reboot_dialog_on_close(Window* win) {
+    if (win->app_data) {
+        zenith::mfree(win->app_data);
+        win->app_data = nullptr;
+    }
+}
+
+void open_reboot_dialog(DesktopState* ds) {
+    int wx = (ds->screen_w - 300) / 2;
+    int wy = (ds->screen_h - 150) / 2;
+    int idx = desktop_create_window(ds, "Reboot", wx, wy, 300, 150);
+    if (idx < 0) return;
+
+    Window* win = &ds->windows[idx];
+    RebootDialogState* rs = (RebootDialogState*)zenith::malloc(sizeof(RebootDialogState));
+    zenith::memset(rs, 0, sizeof(RebootDialogState));
+    rs->ds = ds;
+
+    win->app_data = rs;
+    win->on_draw = reboot_dialog_on_draw;
+    win->on_mouse = reboot_dialog_on_mouse;
+    win->on_key = reboot_dialog_on_key;
+    win->on_close = reboot_dialog_on_close;
+}
+
+static gui::ResizeEdge hit_test_resize_edge(const gui::Rect& f, int mx, int my) {
+    using namespace gui;
+    int G = RESIZE_GRAB;
+    if (!f.contains(mx, my)) return RESIZE_NONE;
+
+    bool near_left   = mx < f.x + G;
+    bool near_right  = mx >= f.x + f.w - G;
+    bool near_top    = my < f.y + G;
+    bool near_bottom = my >= f.y + f.h - G;
+
+    // Corners first
+    if (near_top && near_left)     return RESIZE_TOP_LEFT;
+    if (near_top && near_right)    return RESIZE_TOP_RIGHT;
+    if (near_bottom && near_left)  return RESIZE_BOTTOM_LEFT;
+    if (near_bottom && near_right) return RESIZE_BOTTOM_RIGHT;
+
+    // Edges
+    if (near_top)    return RESIZE_TOP;
+    if (near_bottom) return RESIZE_BOTTOM;
+    if (near_left)   return RESIZE_LEFT;
+    if (near_right)  return RESIZE_RIGHT;
+
+    return RESIZE_NONE;
+}
+
+static gui::CursorStyle cursor_for_edge(gui::ResizeEdge edge) {
+    using namespace gui;
+    switch (edge) {
+    case RESIZE_LEFT: case RESIZE_RIGHT:
+        return CURSOR_RESIZE_H;
+    case RESIZE_TOP: case RESIZE_BOTTOM:
+        return CURSOR_RESIZE_V;
+    case RESIZE_TOP_LEFT: case RESIZE_BOTTOM_RIGHT:
+        return CURSOR_RESIZE_NWSE;
+    case RESIZE_TOP_RIGHT: case RESIZE_BOTTOM_LEFT:
+        return CURSOR_RESIZE_NESW;
+    default:
+        return CURSOR_ARROW;
+    }
+}
+
 void gui::desktop_compose(DesktopState* ds) {
     Framebuffer& fb = ds->fb;
 
@@ -508,8 +677,91 @@ void gui::desktop_compose(DesktopState* ds) {
         desktop_draw_net_popup(ds);
     }
 
+    // Draw right-click context menu if open
+    if (ds->ctx_menu_open) {
+        static constexpr int CTX_MENU_W = 180;
+        static constexpr int CTX_ITEM_H = 36;
+        static constexpr int CTX_ITEM_COUNT = 4;
+        int cmx = ds->ctx_menu_x;
+        int cmy = ds->ctx_menu_y;
+        int cmh = CTX_ITEM_H * CTX_ITEM_COUNT + 8;
+
+        // Clamp to screen
+        if (cmx + CTX_MENU_W > sw) cmx = sw - CTX_MENU_W;
+        if (cmy + cmh > sh) cmy = sh - cmh;
+
+        draw_shadow(fb, cmx, cmy, CTX_MENU_W, cmh, 4, colors::SHADOW);
+        fill_rounded_rect(fb, cmx, cmy, CTX_MENU_W, cmh, 8, colors::MENU_BG);
+        draw_rect(fb, cmx, cmy, CTX_MENU_W, cmh, colors::BORDER);
+
+        struct CtxItem { const char* label; SvgIcon* icon; };
+        CtxItem ctx_items[CTX_ITEM_COUNT] = {
+            { "Terminal", &ds->icon_terminal },
+            { "Files",    &ds->icon_filemanager },
+            { "About",    &ds->icon_settings },
+            { "Reboot",   &ds->icon_reboot },
+        };
+
+        int mmx = ds->mouse.x;
+        int mmy = ds->mouse.y;
+
+        for (int i = 0; i < CTX_ITEM_COUNT; i++) {
+            int iy = cmy + 4 + i * CTX_ITEM_H;
+            Rect item_r = {cmx + 4, iy, CTX_MENU_W - 8, CTX_ITEM_H};
+
+            if (item_r.contains(mmx, mmy)) {
+                fill_rounded_rect(fb, item_r.x, item_r.y, item_r.w, item_r.h, 4, colors::MENU_HOVER);
+            }
+
+            int icon_x = item_r.x + 8;
+            int icon_y = item_r.y + (CTX_ITEM_H - 20) / 2;
+            if (ctx_items[i].icon && ctx_items[i].icon->pixels) {
+                fb.blit_alpha(icon_x, icon_y, ctx_items[i].icon->width, ctx_items[i].icon->height, ctx_items[i].icon->pixels);
+            }
+
+            int tx = icon_x + 28;
+            int ty = item_r.y + (CTX_ITEM_H - FONT_HEIGHT) / 2;
+            draw_text(fb, tx, ty, ctx_items[i].label, colors::TEXT_COLOR);
+        }
+    }
+
+    // Draw snap preview overlay while dragging to screen edge
+    for (int i = 0; i < ds->window_count; i++) {
+        Window* win = &ds->windows[i];
+        if (win->dragging) {
+            int dmx = ds->mouse.x;
+            if (dmx <= 0) {
+                fb.fill_rect_alpha(0, PANEL_HEIGHT, sw / 2, sh - PANEL_HEIGHT,
+                    Color::from_rgba(0x33, 0x77, 0xCC, 0x30));
+            } else if (dmx >= sw - 1) {
+                fb.fill_rect_alpha(sw / 2, PANEL_HEIGHT, sw / 2, sh - PANEL_HEIGHT,
+                    Color::from_rgba(0x33, 0x77, 0xCC, 0x30));
+            }
+            break;
+        }
+    }
+
+    // Determine cursor style based on resize hover or active resize
+    CursorStyle cur_style = CURSOR_ARROW;
+    for (int i = ds->window_count - 1; i >= 0; i--) {
+        Window* win = &ds->windows[i];
+        if (win->resizing) {
+            cur_style = cursor_for_edge(win->resize_edge);
+            break;
+        }
+        if (win->state == WIN_MINIMIZED || win->state == WIN_CLOSED || win->state == WIN_MAXIMIZED)
+            continue;
+        if (win->frame.contains(ds->mouse.x, ds->mouse.y)) {
+            ResizeEdge edge = hit_test_resize_edge(win->frame, ds->mouse.x, ds->mouse.y);
+            if (edge != RESIZE_NONE) {
+                cur_style = cursor_for_edge(edge);
+            }
+            break;
+        }
+    }
+
     // Draw cursor last
-    draw_cursor(fb, ds->mouse.x, ds->mouse.y);
+    draw_cursor(fb, ds->mouse.x, ds->mouse.y, cur_style);
 }
 
 void gui::desktop_handle_mouse(DesktopState* ds) {
@@ -520,6 +772,7 @@ void gui::desktop_handle_mouse(DesktopState* ds) {
     bool left_pressed = (buttons & 0x01) && !(prev & 0x01);
     bool left_held = (buttons & 0x01);
     bool left_released = !(buttons & 0x01) && (prev & 0x01);
+    bool right_pressed = (buttons & 0x02) && !(prev & 0x02);
 
     MouseEvent ev;
     ev.x = mx;
@@ -527,6 +780,42 @@ void gui::desktop_handle_mouse(DesktopState* ds) {
     ev.buttons = buttons;
     ev.prev_buttons = prev;
     ev.scroll = ds->mouse.scrollDelta;
+
+    // Handle context menu clicks
+    if (ds->ctx_menu_open) {
+        if (left_pressed) {
+            static constexpr int CTX_MENU_W = 180;
+            static constexpr int CTX_ITEM_H = 36;
+            static constexpr int CTX_ITEM_COUNT = 4;
+            int cmx = ds->ctx_menu_x;
+            int cmy = ds->ctx_menu_y;
+            int cmh = CTX_ITEM_H * CTX_ITEM_COUNT + 8;
+            if (cmx + CTX_MENU_W > ds->screen_w) cmx = ds->screen_w - CTX_MENU_W;
+            if (cmy + cmh > ds->screen_h) cmy = ds->screen_h - cmh;
+
+            Rect ctx_rect = {cmx, cmy, CTX_MENU_W, cmh};
+            if (ctx_rect.contains(mx, my)) {
+                int rel_y = my - cmy - 4;
+                int item_idx = rel_y / CTX_ITEM_H;
+                if (item_idx >= 0 && item_idx < CTX_ITEM_COUNT) {
+                    ds->ctx_menu_open = false;
+                    switch (item_idx) {
+                    case 0: open_terminal(ds); break;
+                    case 1: open_filemanager(ds); break;
+                    case 2: open_settings(ds); break;
+                    case 3: open_reboot_dialog(ds); break;
+                    }
+                    return;
+                }
+            }
+            ds->ctx_menu_open = false;
+            return;
+        }
+        if (right_pressed) {
+            ds->ctx_menu_open = false;
+            return;
+        }
+    }
 
     // Check for ongoing window drags first
     for (int i = 0; i < ds->window_count; i++) {
@@ -542,6 +831,88 @@ void gui::desktop_handle_mouse(DesktopState* ds) {
             }
             if (left_released) {
                 win->dragging = false;
+                // Window edge snapping
+                if (mx <= 0) {
+                    win->saved_frame = win->frame;
+                    win->frame = {0, PANEL_HEIGHT, ds->screen_w / 2, ds->screen_h - PANEL_HEIGHT};
+                    win->state = WIN_MAXIMIZED;
+                    Rect cr = win->content_rect();
+                    if (cr.w != win->content_w || cr.h != win->content_h) {
+                        if (win->content) zenith::free(win->content);
+                        win->content_w = cr.w;
+                        win->content_h = cr.h;
+                        win->content = (uint32_t*)zenith::alloc(cr.w * cr.h * 4);
+                        zenith::memset(win->content, 0xFF, cr.w * cr.h * 4);
+                    }
+                } else if (mx >= ds->screen_w - 1) {
+                    win->saved_frame = win->frame;
+                    win->frame = {ds->screen_w / 2, PANEL_HEIGHT, ds->screen_w / 2, ds->screen_h - PANEL_HEIGHT};
+                    win->state = WIN_MAXIMIZED;
+                    Rect cr = win->content_rect();
+                    if (cr.w != win->content_w || cr.h != win->content_h) {
+                        if (win->content) zenith::free(win->content);
+                        win->content_w = cr.w;
+                        win->content_h = cr.h;
+                        win->content = (uint32_t*)zenith::alloc(cr.w * cr.h * 4);
+                        zenith::memset(win->content, 0xFF, cr.w * cr.h * 4);
+                    }
+                }
+            }
+            return;
+        }
+    }
+
+    // Check for ongoing window resizes
+    for (int i = 0; i < ds->window_count; i++) {
+        Window* win = &ds->windows[i];
+        if (win->resizing) {
+            if (left_held) {
+                int dx = mx - win->resize_start_mx;
+                int dy = my - win->resize_start_my;
+                Rect sf = win->resize_start_frame;
+                ResizeEdge edge = win->resize_edge;
+
+                int new_x = sf.x, new_y = sf.y, new_w = sf.w, new_h = sf.h;
+
+                if (edge == RESIZE_RIGHT || edge == RESIZE_TOP_RIGHT || edge == RESIZE_BOTTOM_RIGHT)
+                    new_w = sf.w + dx;
+                if (edge == RESIZE_BOTTOM || edge == RESIZE_BOTTOM_LEFT || edge == RESIZE_BOTTOM_RIGHT)
+                    new_h = sf.h + dy;
+                if (edge == RESIZE_LEFT || edge == RESIZE_TOP_LEFT || edge == RESIZE_BOTTOM_LEFT) {
+                    new_x = sf.x + dx;
+                    new_w = sf.w - dx;
+                }
+                if (edge == RESIZE_TOP || edge == RESIZE_TOP_LEFT || edge == RESIZE_TOP_RIGHT) {
+                    new_y = sf.y + dy;
+                    new_h = sf.h - dy;
+                }
+
+                // Enforce minimum size
+                if (new_w < MIN_WINDOW_W) {
+                    if (edge == RESIZE_LEFT || edge == RESIZE_TOP_LEFT || edge == RESIZE_BOTTOM_LEFT)
+                        new_x = sf.x + sf.w - MIN_WINDOW_W;
+                    new_w = MIN_WINDOW_W;
+                }
+                if (new_h < MIN_WINDOW_H) {
+                    if (edge == RESIZE_TOP || edge == RESIZE_TOP_LEFT || edge == RESIZE_TOP_RIGHT)
+                        new_y = sf.y + sf.h - MIN_WINDOW_H;
+                    new_h = MIN_WINDOW_H;
+                }
+
+                win->frame = {new_x, new_y, new_w, new_h};
+            }
+            if (left_released) {
+                win->resizing = false;
+                // Reallocate content buffer if dimensions changed
+                Rect cr = win->content_rect();
+                if (cr.w != win->content_w || cr.h != win->content_h) {
+                    if (win->content) zenith::free(win->content);
+                    win->content_w = cr.w;
+                    win->content_h = cr.h;
+                    win->content = (uint32_t*)zenith::alloc(cr.w * cr.h * 4);
+                    zenith::memset(win->content, 0xFF, cr.w * cr.h * 4);
+                }
+                win->dirty = true;
             }
             return;
         }
@@ -566,6 +937,8 @@ void gui::desktop_handle_mouse(DesktopState* ds) {
                 case 4: open_texteditor(ds); break;
                 case 5: open_klog(ds); break;
                 case 6: open_wiki(ds); break;
+                case 7: open_settings(ds); break;
+                case 8: open_reboot_dialog(ds); break;
                 }
                 ds->app_menu_open = false;
             }
@@ -597,6 +970,7 @@ void gui::desktop_handle_mouse(DesktopState* ds) {
         if (mx < 36) {
             ds->app_menu_open = !ds->app_menu_open;
             ds->net_popup_open = false;
+            ds->ctx_menu_open = false;
             return;
         }
 
@@ -604,6 +978,7 @@ void gui::desktop_handle_mouse(DesktopState* ds) {
         if (ds->net_icon_rect.w > 0 && ds->net_icon_rect.contains(mx, my)) {
             ds->net_popup_open = !ds->net_popup_open;
             ds->app_menu_open = false;
+            ds->ctx_menu_open = false;
             return;
         }
         // Window indicator buttons
@@ -683,6 +1058,26 @@ void gui::desktop_handle_mouse(DesktopState* ds) {
                 return;
             }
 
+            // Check resize edges (before titlebar drag, so corner grabs work)
+            if (win->state != WIN_MAXIMIZED) {
+                ResizeEdge edge = hit_test_resize_edge(win->frame, mx, my);
+                if (edge != RESIZE_NONE) {
+                    win->resizing = true;
+                    win->resize_edge = edge;
+                    win->resize_start_frame = win->frame;
+                    win->resize_start_mx = mx;
+                    win->resize_start_my = my;
+                    desktop_raise_window(ds, i);
+                    int new_idx = ds->window_count - 1;
+                    ds->windows[new_idx].resizing = true;
+                    ds->windows[new_idx].resize_edge = edge;
+                    ds->windows[new_idx].resize_start_frame = ds->windows[new_idx].frame;
+                    ds->windows[new_idx].resize_start_mx = mx;
+                    ds->windows[new_idx].resize_start_my = my;
+                    return;
+                }
+            }
+
             // Check titlebar (start drag)
             Rect tb = win->titlebar_rect();
             if (tb.contains(mx, my)) {
@@ -718,6 +1113,7 @@ void gui::desktop_handle_mouse(DesktopState* ds) {
         }
 
         ds->app_menu_open = false;
+        ds->ctx_menu_open = false;
     }
 
     // Handle scroll events on focused window
@@ -726,6 +1122,26 @@ void gui::desktop_handle_mouse(DesktopState* ds) {
         Rect cr = win->content_rect();
         if (cr.contains(mx, my) && win->on_mouse) {
             win->on_mouse(win, ev);
+        }
+    }
+
+    // Right-click on desktop background opens context menu
+    if (right_pressed && my >= PANEL_HEIGHT) {
+        bool on_window = false;
+        for (int i = ds->window_count - 1; i >= 0; i--) {
+            Window* win = &ds->windows[i];
+            if (win->state == WIN_MINIMIZED || win->state == WIN_CLOSED) continue;
+            if (win->frame.contains(mx, my)) {
+                on_window = true;
+                break;
+            }
+        }
+        if (!on_window) {
+            ds->ctx_menu_open = true;
+            ds->ctx_menu_x = mx;
+            ds->ctx_menu_y = my;
+            ds->app_menu_open = false;
+            ds->net_popup_open = false;
         }
     }
 }

@@ -16,6 +16,7 @@
 #include <gui/svg.hpp>
 #include <gui/widgets.hpp>
 #include <gui/window.hpp>
+#include <gui/canvas.hpp>
 #include <gui/terminal.hpp>
 #include <gui/desktop.hpp>
 
@@ -129,53 +130,6 @@ inline void format_mac(char* buf, const uint8_t* mac) {
 }
 
 // ============================================================================
-// Text rendering to pixel buffers (for app content areas)
-// ============================================================================
-
-inline void draw_text_to_pixels(uint32_t* pixels, int pw, int ph,
-                                int tx, int ty, const char* text, uint32_t color_px) {
-    for (int i = 0; text[i] && tx + (i + 1) * FONT_WIDTH <= pw; i++) {
-        const uint8_t* glyph = &font_data[(unsigned char)text[i] * FONT_HEIGHT];
-        int cx = tx + i * FONT_WIDTH;
-        for (int fy = 0; fy < FONT_HEIGHT && ty + fy < ph; fy++) {
-            uint8_t bits = glyph[fy];
-            for (int fx = 0; fx < FONT_WIDTH; fx++) {
-                if (bits & (0x80 >> fx)) {
-                    int dx = cx + fx;
-                    int dy = ty + fy;
-                    if (dx >= 0 && dx < pw && dy >= 0 && dy < ph)
-                        pixels[dy * pw + dx] = color_px;
-                }
-            }
-        }
-    }
-}
-
-inline void draw_text_to_pixels_2x(uint32_t* pixels, int pw, int ph,
-                                   int tx, int ty, const char* text, uint32_t color_px) {
-    for (int i = 0; text[i] && tx + (i + 1) * FONT_WIDTH * 2 <= pw; i++) {
-        const uint8_t* glyph = &font_data[(unsigned char)text[i] * FONT_HEIGHT];
-        int cx = tx + i * FONT_WIDTH * 2;
-        for (int fy = 0; fy < FONT_HEIGHT; fy++) {
-            uint8_t bits = glyph[fy];
-            for (int fx = 0; fx < FONT_WIDTH; fx++) {
-                if (bits & (0x80 >> fx)) {
-                    int dx = cx + fx * 2;
-                    int dy = ty + fy * 2;
-                    for (int sy = 0; sy < 2; sy++)
-                        for (int sx = 0; sx < 2; sx++) {
-                            int px = dx + sx;
-                            int py = dy + sy;
-                            if (px >= 0 && px < pw && py >= 0 && py < ph)
-                                pixels[py * pw + px] = color_px;
-                        }
-                }
-            }
-        }
-    }
-}
-
-// ============================================================================
 // File size formatting
 // ============================================================================
 
@@ -202,42 +156,6 @@ inline void format_size(char* buf, int size) {
 }
 
 // ============================================================================
-// Icon rendering to pixel buffer
-// ============================================================================
-
-inline void blit_icon_to_pixels(uint32_t* pixels, int pw, int ph,
-                                int ix, int iy, const SvgIcon& icon) {
-    if (!icon.pixels) return;
-    for (int row = 0; row < icon.height; row++) {
-        int dy = iy + row;
-        if (dy < 0 || dy >= ph) continue;
-        for (int col = 0; col < icon.width; col++) {
-            int dx = ix + col;
-            if (dx < 0 || dx >= pw) continue;
-            uint32_t src = icon.pixels[row * icon.width + col];
-            uint8_t sa = (src >> 24) & 0xFF;
-            if (sa == 0) continue;
-            if (sa == 255) {
-                pixels[dy * pw + dx] = src;
-            } else {
-                uint32_t dst = pixels[dy * pw + dx];
-                uint8_t sr = (src >> 16) & 0xFF;
-                uint8_t sg = (src >> 8) & 0xFF;
-                uint8_t sb = src & 0xFF;
-                uint8_t dr = (dst >> 16) & 0xFF;
-                uint8_t dg = (dst >> 8) & 0xFF;
-                uint8_t db = dst & 0xFF;
-                uint32_t a = sa, inv_a = 255 - sa;
-                uint32_t rr = (a * sr + inv_a * dr + 128) / 255;
-                uint32_t gg = (a * sg + inv_a * dg + 128) / 255;
-                uint32_t bb = (a * sb + inv_a * db + 128) / 255;
-                pixels[dy * pw + dx] = 0xFF000000 | (rr << 16) | (gg << 8) | bb;
-            }
-        }
-    }
-}
-
-// ============================================================================
 // Forward declarations for app launchers
 // ============================================================================
 
@@ -249,3 +167,5 @@ void open_texteditor(DesktopState* ds);
 void open_texteditor_with_file(DesktopState* ds, const char* path);
 void open_klog(DesktopState* ds);
 void open_wiki(DesktopState* ds);
+void open_settings(DesktopState* ds);
+void open_reboot_dialog(DesktopState* ds);

@@ -50,6 +50,8 @@ ICONS=(
     "devices/scalable/network-wired.svg"
     "mimetypes/scalable/text-x-generic.svg"
     "mimetypes/scalable/application-x-executable.svg"
+    "categories/scalable/help-about.svg"
+    "categories/scalable/system-reboot.svg"
 )
 
 copied=0

@@ -14,11 +14,20 @@ namespace gui {
 
 enum WindowState { WIN_NORMAL, WIN_MINIMIZED, WIN_MAXIMIZED, WIN_CLOSED };
 
+enum ResizeEdge {
+    RESIZE_NONE = 0,
+    RESIZE_LEFT, RESIZE_RIGHT, RESIZE_TOP, RESIZE_BOTTOM,
+    RESIZE_TOP_LEFT, RESIZE_TOP_RIGHT, RESIZE_BOTTOM_LEFT, RESIZE_BOTTOM_RIGHT
+};
+
 static constexpr int TITLEBAR_HEIGHT = 30;
 static constexpr int BORDER_WIDTH = 1;
 static constexpr int SHADOW_SIZE = 3;
 static constexpr int BTN_RADIUS = 6;
 static constexpr int MAX_TITLE_LEN = 64;
+static constexpr int RESIZE_GRAB = 6;
+static constexpr int MIN_WINDOW_W = 120;
+static constexpr int MIN_WINDOW_H = 80;
 
 struct Window;
 using WindowDrawCallback  = void (*)(Window* win, Framebuffer& fb);
@@ -42,6 +51,9 @@ struct Window {
     int drag_offset_x, drag_offset_y;
 
     bool resizing;
+    ResizeEdge resize_edge;
+    Rect resize_start_frame;
+    int resize_start_mx, resize_start_my;
 
     Rect saved_frame;
 

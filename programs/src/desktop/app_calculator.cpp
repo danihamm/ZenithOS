@@ -222,29 +222,21 @@ static void calculator_on_draw(Window* win, Framebuffer& fb) {
     CalcState* cs = (CalcState*)win->app_data;
     if (!cs) return;
 
-    Rect cr = win->content_rect();
-    int cw = cr.w;
-    int ch = cr.h;
-    uint32_t* pixels = win->content;
+    Canvas c(win);
 
     // Background
-    uint32_t bg_px = Color::from_rgb(0xF0, 0xF0, 0xF0).to_pixel();
-    for (int i = 0; i < cw * ch; i++) pixels[i] = bg_px;
+    c.fill(Color::from_rgb(0xF0, 0xF0, 0xF0));
 
     // Display area
-    uint32_t disp_px = Color::from_rgb(0x2D, 0x2D, 0x2D).to_pixel();
-    for (int y = 0; y < CALC_DISPLAY_H && y < ch; y++)
-        for (int x = 0; x < cw; x++)
-            pixels[y * cw + x] = disp_px;
+    c.fill_rect(0, 0, c.w, CALC_DISPLAY_H, Color::from_rgb(0x2D, 0x2D, 0x2D));
 
     // Display text (right-aligned, 2x scale)
-    uint32_t disp_text = colors::WHITE.to_pixel();
     int text_len = zenith::slen(cs->display_str);
     int text_w = text_len * FONT_WIDTH * 2;
-    int tx = cw - text_w - 12;
+    int tx = c.w - text_w - 12;
     int ty = (CALC_DISPLAY_H - FONT_HEIGHT * 2) / 2;
     if (tx < 4) tx = 4;
-    draw_text_to_pixels_2x(pixels, cw, ch, tx, ty, cs->display_str, disp_text);
+    c.text_2x(tx, ty, cs->display_str, colors::WHITE);
 
     // Button grid
     int grid_y = CALC_DISPLAY_H + CALC_BTN_PAD;
@@ -264,30 +256,25 @@ static void calculator_on_draw(Window* win, Framebuffer& fb) {
             }
 
             // Button color
-            uint32_t btn_px;
+            Color btn_color;
             if (col == 3) {
-                // Operator column: accent blue
-                btn_px = colors::ACCENT.to_pixel();
+                btn_color = colors::ACCENT;
             } else if (row == 0) {
-                // Function row: gray
-                btn_px = Color::from_rgb(0xD0, 0xD0, 0xD0).to_pixel();
+                btn_color = Color::from_rgb(0xD0, 0xD0, 0xD0);
             } else {
-                // Digit buttons: light gray
-                btn_px = Color::from_rgb(0xE8, 0xE8, 0xE8).to_pixel();
+                btn_color = Color::from_rgb(0xE8, 0xE8, 0xE8);
             }
 
             // Draw button
-            for (int dy = 0; dy < CALC_BTN_H && by + dy < ch; dy++)
-                for (int dx = 0; dx < bw && bx + dx < cw; dx++)
-                    pixels[(by + dy) * cw + (bx + dx)] = btn_px;
+            c.fill_rect(bx, by, bw, CALC_BTN_H, btn_color);
 
             // Button text
             const char* label = calc_labels[row][col];
-            uint32_t label_px = (col == 3) ? colors::WHITE.to_pixel() : colors::TEXT_COLOR.to_pixel();
+            Color label_color = (col == 3) ? colors::WHITE : colors::TEXT_COLOR;
             int label_w = zenith::slen(label) * FONT_WIDTH;
             int lx = bx + (bw - label_w) / 2;
             int ly = by + (CALC_BTN_H - FONT_HEIGHT) / 2;
-            draw_text_to_pixels(pixels, cw, ch, lx, ly, label, label_px);
+            c.text(lx, ly, label, label_color);
         }
     }
 }

@@ -161,7 +161,7 @@ namespace Drivers::PS2::Mouse {
         g_State.X += deltaX;
         g_State.Y += deltaY;
         g_State.Buttons = buttons;
-        g_State.ScrollDelta = scrollDelta;
+        g_State.ScrollDelta += scrollDelta;
 
         // Clamp to screen bounds
         if (g_State.X < 0) g_State.X = 0;
@@ -175,6 +175,7 @@ namespace Drivers::PS2::Mouse {
     MouseState GetMouseState() {
         g_StateLock.Acquire();
         MouseState state = g_State;
+        g_State.ScrollDelta = 0;  // clear after read so deltas don't repeat
         g_StateLock.Release();
         return state;
     }
@@ -202,7 +203,7 @@ namespace Drivers::PS2::Mouse {
         g_State.X += (int32_t)deltaX;
         g_State.Y += (int32_t)deltaY;
         g_State.Buttons = buttons;
-        g_State.ScrollDelta = (int32_t)scroll;
+        g_State.ScrollDelta += (int32_t)scroll;
 
         // Clamp to screen bounds
         if (g_State.X < 0) g_State.X = 0;

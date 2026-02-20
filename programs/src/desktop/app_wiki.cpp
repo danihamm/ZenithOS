@@ -22,7 +22,7 @@ static constexpr int WIKI_SCROLLBAR_W  = 12;
 
 struct WikiDisplayLine {
     char text[256];
-    uint32_t color;
+    Color color;
 };
 
 struct WikiState {
@@ -121,7 +121,7 @@ static int wiki_extract_json_string(const char* buf, int len, const char* key,
 // Display line building (word-wrap adapted for pixel widths)
 // ============================================================================
 
-static void wiki_add_line(WikiState* ws, const char* text, int len, uint32_t color) {
+static void wiki_add_line(WikiState* ws, const char* text, int len, Color color) {
     if (ws->lineCount >= ws->lineCap) return;
     WikiDisplayLine* dl = &ws->lines[ws->lineCount];
     int copyLen = len;
@@ -133,7 +133,7 @@ static void wiki_add_line(WikiState* ws, const char* text, int len, uint32_t col
 }
 
 static void wiki_wrap_text(WikiState* ws, const char* text, int textLen,
-                           int maxChars, uint32_t color) {
+                           int maxChars, Color color) {
     if (textLen <= 0 || maxChars <= 0) return;
     const char* p = text;
     const char* end = text + textLen;
@@ -171,18 +171,18 @@ static void wiki_build_display(WikiState* ws, const char* title,
     int maxChars = (contentW - 24 - WIKI_SCROLLBAR_W) / FONT_WIDTH;
     if (maxChars < 20) maxChars = 20;
 
-    uint32_t accent_px = colors::ACCENT.to_pixel();
-    uint32_t green_px = Color::from_rgb(0x2E, 0x7D, 0x32).to_pixel();
-    uint32_t text_px = colors::TEXT_COLOR.to_pixel();
+    Color accent_c = colors::ACCENT;
+    Color green_c = Color::from_rgb(0x2E, 0x7D, 0x32);
+    Color text_c = colors::TEXT_COLOR;
 
     // Title
     if (title && title[0]) {
-        wiki_wrap_text(ws, title, slen(title), maxChars, accent_px);
+        wiki_wrap_text(ws, title, slen(title), maxChars, accent_c);
     }
 
     // Blank separator
     if (ws->lineCount > 0)
-        wiki_add_line(ws, "", 0, text_px);
+        wiki_add_line(ws, "", 0, text_c);
 
     // Process extract line by line
     const char* p = extract;
@@ -195,7 +195,7 @@ static void wiki_build_display(WikiState* ws, const char* title,
         if (p < end) p++;
 
         if (lineLen == 0) {
-            wiki_add_line(ws, "", 0, text_px);
+            wiki_add_line(ws, "", 0, text_c);
             continue;
         }
 
@@ -208,20 +208,20 @@ static void wiki_build_display(WikiState* ws, const char* title,
             while (ei > si && lineStart[ei - 1] == '=') ei--;
             while (ei > si && lineStart[ei - 1] == ' ') ei--;
 
-            wiki_add_line(ws, "", 0, text_px);
+            wiki_add_line(ws, "", 0, text_c);
             if (ei > si) {
                 char secBuf[256];
                 int secLen = ei - si;
                 if (secLen > 255) secLen = 255;
                 for (int i = 0; i < secLen; i++) secBuf[i] = lineStart[si + i];
                 secBuf[secLen] = '\0';
-                wiki_add_line(ws, secBuf, secLen, green_px);
+                wiki_add_line(ws, secBuf, secLen, green_c);
             }
             continue;
         }
 
         // Regular text
-        wiki_wrap_text(ws, lineStart, lineLen, maxChars, text_px);
+        wiki_wrap_text(ws, lineStart, lineLen, maxChars, text_c);
     }
 }
 
@@ -280,111 +280,68 @@ static void wiki_on_draw(Window* win, Framebuffer& fb) {
     WikiState* ws = (WikiState*)win->app_data;
     if (!ws) return;
 
-    Rect cr = win->content_rect();
-    int cw = cr.w;
-    int ch = cr.h;
-    uint32_t* pixels = win->content;
-
-    // Fill background
-    uint32_t bg_px = colors::WINDOW_BG.to_pixel();
-    for (int i = 0; i < cw * ch; i++) pixels[i] = bg_px;
+    Canvas c(win);
+    c.fill(colors::WINDOW_BG);
 
     // ---- Toolbar background ----
-    uint32_t toolbar_bg = Color::from_rgb(0xF5, 0xF5, 0xF5).to_pixel();
-    for (int y = 0; y < WIKI_TOOLBAR_H && y < ch; y++)
-        for (int x = 0; x < cw; x++)
-            pixels[y * cw + x] = toolbar_bg;
+    c.fill_rect(0, 0, c.w, WIKI_TOOLBAR_H, Color::from_rgb(0xF5, 0xF5, 0xF5));
 
     // Toolbar separator line
-    uint32_t sep_px = colors::BORDER.to_pixel();
-    if (WIKI_TOOLBAR_H < ch)
-        for (int x = 0; x < cw; x++)
-            pixels[WIKI_TOOLBAR_H * cw + x] = sep_px;
+    c.hline(0, WIKI_TOOLBAR_H, c.w, colors::BORDER);
 
     // ---- Draw search box outline ----
     int tb_x = 8;
     int tb_y = 6;
-    int tb_w = cw - 90;
+    int tb_w = c.w - 90;
     int tb_h = 24;
     if (tb_w < 100) tb_w = 100;
 
-    // TextBox background
-    uint32_t white_px = colors::WHITE.to_pixel();
-    uint32_t border_px = colors::BORDER.to_pixel();
-    for (int y = tb_y; y < tb_y + tb_h && y < ch; y++)
-        for (int x = tb_x; x < tb_x + tb_w && x < cw; x++)
-            pixels[y * cw + x] = white_px;
-    // Border
-    for (int x = tb_x; x < tb_x + tb_w && x < cw; x++) {
-        if (tb_y < ch) pixels[tb_y * cw + x] = border_px;
-        if (tb_y + tb_h - 1 < ch) pixels[(tb_y + tb_h - 1) * cw + x] = border_px;
-    }
-    for (int y = tb_y; y < tb_y + tb_h && y < ch; y++) {
-        if (tb_x < cw) pixels[y * cw + tb_x] = border_px;
-        if (tb_x + tb_w - 1 < cw) pixels[y * cw + (tb_x + tb_w - 1)] = border_px;
-    }
+    // TextBox background + border
+    c.fill_rect(tb_x, tb_y, tb_w, tb_h, colors::WHITE);
+    c.rect(tb_x, tb_y, tb_w, tb_h, colors::BORDER);
 
     // Search text
-    uint32_t text_px = colors::TEXT_COLOR.to_pixel();
-    draw_text_to_pixels(pixels, cw, ch, tb_x + 4, tb_y + (tb_h - FONT_HEIGHT) / 2,
-                        ws->searchQuery, text_px);
+    c.text(tb_x + 4, tb_y + (tb_h - FONT_HEIGHT) / 2, ws->searchQuery, colors::TEXT_COLOR);
 
     // ---- Search button ----
     int btn_x = tb_x + tb_w + 6;
     int btn_y = tb_y;
     int btn_w = 66;
     int btn_h = tb_h;
-    uint32_t accent_px = colors::ACCENT.to_pixel();
-    for (int y = btn_y; y < btn_y + btn_h && y < ch; y++)
-        for (int x = btn_x; x < btn_x + btn_w && x < cw; x++)
-            pixels[y * cw + x] = accent_px;
-    // Button text
-    uint32_t white_text = colors::WHITE.to_pixel();
-    const char* btnLabel = "Search";
-    int labelW = zenith::slen(btnLabel) * FONT_WIDTH;
-    draw_text_to_pixels(pixels, cw, ch,
-                        btn_x + (btn_w - labelW) / 2,
-                        btn_y + (btn_h - FONT_HEIGHT) / 2,
-                        btnLabel, white_text);
+    c.button(btn_x, btn_y, btn_w, btn_h, "Search", colors::ACCENT, colors::WHITE, 0);
 
     // ---- Content area ----
     int content_y = WIKI_TOOLBAR_H + 1;
-    int content_h = ch - content_y;
+    int content_h = c.h - content_y;
     int visibleLines = content_h / (FONT_HEIGHT + 4);
     if (visibleLines < 1) visibleLines = 1;
 
     if (ws->mode == WikiState::FETCHING) {
-        draw_text_to_pixels(pixels, cw, ch, 16, content_y + 16,
-                            "Loading...", Color::from_rgb(0x88, 0x88, 0x88).to_pixel());
+        c.text(16, content_y + 16, "Loading...", Color::from_rgb(0x88, 0x88, 0x88));
     } else if (ws->mode == WikiState::WIKI_ERROR) {
-        draw_text_to_pixels(pixels, cw, ch, 16, content_y + 16,
-                            ws->statusMsg, colors::CLOSE_BTN.to_pixel());
+        c.text(16, content_y + 16, ws->statusMsg, colors::CLOSE_BTN);
     } else if (ws->mode == WikiState::IDLE) {
-        draw_text_to_pixels(pixels, cw, ch, 16, content_y + 16,
-                            "Type a topic and press Enter or click Search.",
-                            Color::from_rgb(0x88, 0x88, 0x88).to_pixel());
+        c.text(16, content_y + 16,
+            "Type a topic and press Enter or click Search.",
+            Color::from_rgb(0x88, 0x88, 0x88));
     } else if (ws->mode == WikiState::DONE && ws->lineCount > 0) {
         int y = content_y + 8;
         int lineH = FONT_HEIGHT + 4;
-        for (int i = ws->scrollY; i < ws->lineCount && y + FONT_HEIGHT < ch; i++) {
+        for (int i = ws->scrollY; i < ws->lineCount && y + FONT_HEIGHT < c.h; i++) {
             WikiDisplayLine* dl = &ws->lines[i];
             if (dl->text[0] != '\0') {
-                draw_text_to_pixels(pixels, cw, ch, 12, y, dl->text, dl->color);
+                c.text(12, y, dl->text, dl->color);
             }
             y += lineH;
         }
 
         // ---- Scrollbar ----
         if (ws->lineCount > visibleLines) {
-            int sb_x = cw - WIKI_SCROLLBAR_W;
+            int sb_x = c.w - WIKI_SCROLLBAR_W;
             int sb_y = content_y;
             int sb_h = content_h;
 
-            // Scrollbar track
-            uint32_t sb_bg = colors::SCROLLBAR_BG.to_pixel();
-            for (int y2 = sb_y; y2 < sb_y + sb_h && y2 < ch; y2++)
-                for (int x = sb_x; x < cw; x++)
-                    pixels[y2 * cw + x] = sb_bg;
+            c.fill_rect(sb_x, sb_y, WIKI_SCROLLBAR_W, sb_h, colors::SCROLLBAR_BG);
 
             // Thumb
             int maxScroll = ws->lineCount - visibleLines;
@@ -393,10 +350,7 @@ static void wiki_on_draw(Window* win, Framebuffer& fb) {
             if (thumbH < 20) thumbH = 20;
             int thumbY = sb_y + (ws->scrollY * (sb_h - thumbH)) / maxScroll;
 
-            uint32_t sb_fg = colors::SCROLLBAR_FG.to_pixel();
-            for (int y2 = thumbY; y2 < thumbY + thumbH && y2 < ch; y2++)
-                for (int x = sb_x + 2; x < cw - 2; x++)
-                    pixels[y2 * cw + x] = sb_fg;
+            c.fill_rect(sb_x + 2, thumbY, WIKI_SCROLLBAR_W - 4, thumbH, colors::SCROLLBAR_FG);
         }
     }
 }

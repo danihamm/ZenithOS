@@ -51,6 +51,12 @@ struct DesktopState {
     SvgIcon icon_file_lg;
     SvgIcon icon_exec_lg;
 
+    SvgIcon icon_settings;
+    SvgIcon icon_reboot;
+
+    bool ctx_menu_open;
+    int ctx_menu_x, ctx_menu_y;
+
     bool net_popup_open;
     Zenith::NetCfg cached_net_cfg;
     uint64_t net_cfg_last_poll;

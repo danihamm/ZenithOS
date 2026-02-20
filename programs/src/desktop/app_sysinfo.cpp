@@ -20,52 +20,38 @@ static void sysinfo_on_draw(Window* win, Framebuffer& fb) {
     SysInfoState* si = (SysInfoState*)win->app_data;
     if (!si) return;
 
-    // Refresh uptime
     si->uptime_ms = zenith::get_milliseconds();
 
-    Rect cr = win->content_rect();
-    int cw = cr.w;
-    int ch = cr.h;
-    uint32_t* pixels = win->content;
+    Canvas c(win);
+    c.fill(colors::WINDOW_BG);
 
-    // Fill background
-    uint32_t bg_px = colors::WINDOW_BG.to_pixel();
-    for (int i = 0; i < cw * ch; i++) pixels[i] = bg_px;
-
-    uint32_t text_px = colors::TEXT_COLOR.to_pixel();
-    uint32_t accent_px = colors::ACCENT.to_pixel();
     int y = 16;
     int x = 16;
     char line[128];
 
     // Title
-    draw_text_to_pixels(pixels, cw, ch, x, y, "System Information", accent_px);
+    c.text(x, y, "System Information", colors::ACCENT);
     y += FONT_HEIGHT + 12;
 
     // Separator
-    uint32_t sep_px = colors::BORDER.to_pixel();
-    for (int sx = x; sx < cw - x && y < ch; sx++)
-        pixels[y * cw + sx] = sep_px;
+    c.hline(x, y, c.w - 2 * x, colors::BORDER);
     y += 8;
 
     // OS Name
     snprintf(line, sizeof(line), "OS:       %s", si->sys_info.osName);
-    draw_text_to_pixels(pixels, cw, ch, x, y, line, text_px);
-    y += FONT_HEIGHT + 6;
+    c.kv_line(x, &y, line, colors::TEXT_COLOR);
 
     // OS Version
     snprintf(line, sizeof(line), "Version:  %s", si->sys_info.osVersion);
-    draw_text_to_pixels(pixels, cw, ch, x, y, line, text_px);
-    y += FONT_HEIGHT + 6;
+    c.kv_line(x, &y, line, colors::TEXT_COLOR);
 
     // API Version
     snprintf(line, sizeof(line), "API:      %d", (int)si->sys_info.apiVersion);
-    draw_text_to_pixels(pixels, cw, ch, x, y, line, text_px);
-    y += FONT_HEIGHT + 6;
+    c.kv_line(x, &y, line, colors::TEXT_COLOR);
 
     // Max Processes
     snprintf(line, sizeof(line), "Max PIDs: %d", (int)si->sys_info.maxProcesses);
-    draw_text_to_pixels(pixels, cw, ch, x, y, line, text_px);
+    c.text(x, y, line, colors::TEXT_COLOR);
     y += FONT_HEIGHT + 12;
 
     // Uptime
@@ -73,15 +59,14 @@ static void sysinfo_on_draw(Window* win, Framebuffer& fb) {
     int up_min = up_sec / 60;
     int up_hr = up_min / 60;
     snprintf(line, sizeof(line), "Uptime:   %d:%02d:%02d", up_hr, up_min % 60, up_sec % 60);
-    draw_text_to_pixels(pixels, cw, ch, x, y, line, text_px);
+    c.text(x, y, line, colors::TEXT_COLOR);
     y += FONT_HEIGHT + 12;
 
     // Network section
-    draw_text_to_pixels(pixels, cw, ch, x, y, "Network", accent_px);
+    c.text(x, y, "Network", colors::ACCENT);
     y += FONT_HEIGHT + 8;
 
-    for (int sx = x; sx < cw - x && y < ch; sx++)
-        pixels[y * cw + sx] = sep_px;
+    c.hline(x, y, c.w - 2 * x, colors::BORDER);
     y += 8;
 
     // IP Address
@@ -89,39 +74,35 @@ static void sysinfo_on_draw(Window* win, Framebuffer& fb) {
     snprintf(line, sizeof(line), "IP:       %d.%d.%d.%d",
         (int)(ip & 0xFF), (int)((ip >> 8) & 0xFF),
         (int)((ip >> 16) & 0xFF), (int)((ip >> 24) & 0xFF));
-    draw_text_to_pixels(pixels, cw, ch, x, y, line, text_px);
-    y += FONT_HEIGHT + 6;
+    c.kv_line(x, &y, line, colors::TEXT_COLOR);
 
     // Subnet
     uint32_t mask = si->net_cfg.subnetMask;
     snprintf(line, sizeof(line), "Subnet:   %d.%d.%d.%d",
         (int)(mask & 0xFF), (int)((mask >> 8) & 0xFF),
         (int)((mask >> 16) & 0xFF), (int)((mask >> 24) & 0xFF));
-    draw_text_to_pixels(pixels, cw, ch, x, y, line, text_px);
-    y += FONT_HEIGHT + 6;
+    c.kv_line(x, &y, line, colors::TEXT_COLOR);
 
     // Gateway
     uint32_t gw = si->net_cfg.gateway;
     snprintf(line, sizeof(line), "Gateway:  %d.%d.%d.%d",
         (int)(gw & 0xFF), (int)((gw >> 8) & 0xFF),
         (int)((gw >> 16) & 0xFF), (int)((gw >> 24) & 0xFF));
-    draw_text_to_pixels(pixels, cw, ch, x, y, line, text_px);
-    y += FONT_HEIGHT + 6;
+    c.kv_line(x, &y, line, colors::TEXT_COLOR);
 
     // DNS
     uint32_t dns = si->net_cfg.dnsServer;
     snprintf(line, sizeof(line), "DNS:      %d.%d.%d.%d",
         (int)(dns & 0xFF), (int)((dns >> 8) & 0xFF),
         (int)((dns >> 16) & 0xFF), (int)((dns >> 24) & 0xFF));
-    draw_text_to_pixels(pixels, cw, ch, x, y, line, text_px);
-    y += FONT_HEIGHT + 6;
+    c.kv_line(x, &y, line, colors::TEXT_COLOR);
 
     // MAC Address
     snprintf(line, sizeof(line), "MAC:      %02x:%02x:%02x:%02x:%02x:%02x",
         (unsigned)si->net_cfg.macAddress[0], (unsigned)si->net_cfg.macAddress[1],
         (unsigned)si->net_cfg.macAddress[2], (unsigned)si->net_cfg.macAddress[3],
         (unsigned)si->net_cfg.macAddress[4], (unsigned)si->net_cfg.macAddress[5]);
-    draw_text_to_pixels(pixels, cw, ch, x, y, line, text_px);
+    c.text(x, y, line, colors::TEXT_COLOR);
 }
 
 static void sysinfo_on_close(Window* win) {

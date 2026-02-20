@@ -217,20 +217,175 @@ static constexpr uint16_t cursor_fill[16] = {
     0x0000, // row 15: no fill
 };
 
+// Resize cursor: horizontal double arrow (left-right)
+static constexpr uint16_t cursor_h_resize_outline[16] = {
+    0x0000, 0x0000, 0x0000, 0x0000,
+    0x0820, // 0000100000100000
+    0x1830, // 0001100000110000
+    0x3FF8, // 0011111111111000
+    0x7FFC, // 0111111111111100
+    0x3FF8, // 0011111111111000
+    0x1830, // 0001100000110000
+    0x0820, // 0000100000100000
+    0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+};
+static constexpr uint16_t cursor_h_resize_fill[16] = {
+    0x0000, 0x0000, 0x0000, 0x0000,
+    0x0000,
+    0x0000,
+    0x1FF0, // 0001111111110000
+    0x3FF8, // 0011111111111000
+    0x1FF0, // 0001111111110000
+    0x0000,
+    0x0000,
+    0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+};
+
+// Resize cursor: vertical double arrow (up-down)
+static constexpr uint16_t cursor_v_resize_outline[16] = {
+    0x0000, 0x0000,
+    0x0200, // 0000001000000000
+    0x0700, // 0000011100000000
+    0x0F80, // 0000111110000000
+    0x0200, // 0000001000000000
+    0x0200, // 0000001000000000
+    0x0200, // 0000001000000000
+    0x0200, // 0000001000000000
+    0x0200, // 0000001000000000
+    0x0200, // 0000001000000000
+    0x0F80, // 0000111110000000
+    0x0700, // 0000011100000000
+    0x0200, // 0000001000000000
+    0x0000, 0x0000,
+};
+static constexpr uint16_t cursor_v_resize_fill[16] = {
+    0x0000, 0x0000, 0x0000,
+    0x0200, // 0000001000000000
+    0x0700, // 0000011100000000
+    0x0200, // 0000001000000000
+    0x0200, // 0000001000000000
+    0x0200, // 0000001000000000
+    0x0200, // 0000001000000000
+    0x0200, // 0000001000000000
+    0x0200, // 0000001000000000
+    0x0700, // 0000011100000000
+    0x0200, // 0000001000000000
+    0x0000, 0x0000, 0x0000,
+};
+
+// Resize cursor: diagonal NW-SE double arrow
+static constexpr uint16_t cursor_nwse_resize_outline[16] = {
+    0x0000, 0x0000,
+    0x7C00, // 0111110000000000
+    0x6000, // 0110000000000000
+    0x5000, // 0101000000000000
+    0x4800, // 0100100000000000
+    0x2400, // 0010010000000000
+    0x1200, // 0001001000000000
+    0x0900, // 0000100100000000
+    0x0480, // 0000010010000000
+    0x0240, // 0000001001000000
+    0x0140, // 0000000101000000
+    0x00C0, // 0000000011000000
+    0x07C0, // 0000011111000000
+    0x0000, 0x0000,
+};
+static constexpr uint16_t cursor_nwse_resize_fill[16] = {
+    0x0000, 0x0000, 0x0000,
+    0x1C00, // 0001110000000000
+    0x2800, // 0010100000000000
+    0x0400, // 0000010000000000
+    0x0200, // 0000001000000000
+    0x0100, // 0000000100000000
+    0x0080, // 0000000010000000
+    0x0040, // 0000000001000000
+    0x0280, // 0000001010000000
+    0x0380, // 0000001110000000
+    0x0000, 0x0000, 0x0000, 0x0000,
+};
+
+// Resize cursor: diagonal NE-SW double arrow
+static constexpr uint16_t cursor_nesw_resize_outline[16] = {
+    0x0000, 0x0000,
+    0x07C0, // 0000011111000000
+    0x00C0, // 0000000011000000
+    0x0140, // 0000000101000000
+    0x0240, // 0000001001000000
+    0x0480, // 0000010010000000
+    0x0900, // 0000100100000000
+    0x1200, // 0001001000000000
+    0x2400, // 0010010000000000
+    0x4800, // 0100100000000000
+    0x5000, // 0101000000000000
+    0x6000, // 0110000000000000
+    0x7C00, // 0111110000000000
+    0x0000, 0x0000,
+};
+static constexpr uint16_t cursor_nesw_resize_fill[16] = {
+    0x0000, 0x0000, 0x0000,
+    0x0380, // 0000001110000000
+    0x0280, // 0000001010000000
+    0x0040, // 0000000001000000
+    0x0080, // 0000000010000000
+    0x0100, // 0000000100000000
+    0x0200, // 0000001000000000
+    0x0400, // 0000010000000000
+    0x2800, // 0010100000000000
+    0x1C00, // 0001110000000000
+    0x0000, 0x0000, 0x0000, 0x0000,
+};
+
+enum CursorStyle {
+    CURSOR_ARROW = 0,
+    CURSOR_RESIZE_H,    // left-right
+    CURSOR_RESIZE_V,    // up-down
+    CURSOR_RESIZE_NWSE, // diagonal NW-SE
+    CURSOR_RESIZE_NESW, // diagonal NE-SW
+};
+
 // Draw the mouse cursor at (x, y)
-inline void draw_cursor(Framebuffer& fb, int x, int y) {
+inline void draw_cursor(Framebuffer& fb, int x, int y, CursorStyle style = CURSOR_ARROW) {
+    const uint16_t* outline_data = cursor_outline;
+    const uint16_t* fill_data = cursor_fill;
+    int ox = 0, oy = 0; // hotspot offset for centered cursors
+
+    switch (style) {
+    case CURSOR_RESIZE_H:
+        outline_data = cursor_h_resize_outline;
+        fill_data = cursor_h_resize_fill;
+        ox = -8; oy = -8;
+        break;
+    case CURSOR_RESIZE_V:
+        outline_data = cursor_v_resize_outline;
+        fill_data = cursor_v_resize_fill;
+        ox = -8; oy = -8;
+        break;
+    case CURSOR_RESIZE_NWSE:
+        outline_data = cursor_nwse_resize_outline;
+        fill_data = cursor_nwse_resize_fill;
+        ox = -8; oy = -8;
+        break;
+    case CURSOR_RESIZE_NESW:
+        outline_data = cursor_nesw_resize_outline;
+        fill_data = cursor_nesw_resize_fill;
+        ox = -8; oy = -8;
+        break;
+    default:
+        break;
+    }
+
     Color black = colors::BLACK;
     Color white = colors::WHITE;
 
     for (int row = 0; row < 16; row++) {
-        uint16_t outline = cursor_outline[row];
-        uint16_t fill = cursor_fill[row];
+        uint16_t outline = outline_data[row];
+        uint16_t fill = fill_data[row];
         for (int col = 0; col < 16; col++) {
             uint16_t mask = (uint16_t)(0x8000 >> col);
             if (outline & mask) {
-                fb.put_pixel(x + col, y + row, black);
+                fb.put_pixel(x + ox + col, y + oy + row, black);
             } else if (fill & mask) {
-                fb.put_pixel(x + col, y + row, white);
+                fb.put_pixel(x + ox + col, y + oy + row, white);
             }
         }
     }

@@ -287,38 +287,24 @@ static void texteditor_on_draw(Window* win, Framebuffer& fb) {
     TextEditorState* te = (TextEditorState*)win->app_data;
     if (!te) return;
 
-    Rect cr = win->content_rect();
-    int cw = cr.w;
-    int ch = cr.h;
-    uint32_t* pixels = win->content;
+    Canvas c(win);
+    c.fill(colors::WINDOW_BG);
 
-    // Background
-    uint32_t bg_px = colors::WINDOW_BG.to_pixel();
-    for (int i = 0; i < cw * ch; i++) pixels[i] = bg_px;
-
-    int text_area_h = ch - TE_STATUS_H;
+    int text_area_h = c.h - TE_STATUS_H;
     int visible_lines = text_area_h / FONT_HEIGHT;
 
     te_ensure_cursor_visible(te, visible_lines);
 
     // Line number gutter background
-    uint32_t gutter_px = Color::from_rgb(0xF0, 0xF0, 0xF0).to_pixel();
-    for (int y = 0; y < text_area_h && y < ch; y++)
-        for (int x = 0; x < TE_LINE_NUM_W && x < cw; x++)
-            pixels[y * cw + x] = gutter_px;
+    c.fill_rect(0, 0, TE_LINE_NUM_W, text_area_h, Color::from_rgb(0xF0, 0xF0, 0xF0));
 
     // Gutter separator
-    uint32_t sep_px = colors::BORDER.to_pixel();
-    if (TE_LINE_NUM_W < cw) {
-        for (int y = 0; y < text_area_h && y < ch; y++)
-            pixels[y * cw + TE_LINE_NUM_W] = sep_px;
-    }
+    c.vline(TE_LINE_NUM_W, 0, text_area_h, colors::BORDER);
 
     // Draw lines
+    Color linenum_color = Color::from_rgb(0x99, 0x99, 0x99);
+    Color cursor_line_color = Color::from_rgb(0xFF, 0xFD, 0xE8);
     uint32_t text_px = colors::TEXT_COLOR.to_pixel();
-    uint32_t linenum_px = Color::from_rgb(0x99, 0x99, 0x99).to_pixel();
-    uint32_t cursor_line_px = Color::from_rgb(0xFF, 0xFD, 0xE8).to_pixel();
-    uint32_t cursor_px = colors::ACCENT.to_pixel();
 
     int text_start_x = TE_LINE_NUM_W + 4;
 
@@ -331,36 +317,36 @@ static void texteditor_on_draw(Window* win, Framebuffer& fb) {
 
         // Cursor line highlighting
         if (line == te->cursor_line) {
-            for (int y = py; y < py + FONT_HEIGHT && y < text_area_h; y++)
-                for (int x = TE_LINE_NUM_W + 1; x < cw; x++)
-                    pixels[y * cw + x] = cursor_line_px;
+            int hl_h = gui_min(FONT_HEIGHT, text_area_h - py);
+            if (hl_h > 0)
+                c.fill_rect(TE_LINE_NUM_W + 1, py, c.w - TE_LINE_NUM_W - 1, hl_h, cursor_line_color);
         }
 
         // Line number
         char num_str[8];
         snprintf(num_str, 8, "%4d", line + 1);
-        draw_text_to_pixels(pixels, cw, ch, 4, py, num_str, linenum_px);
+        c.text(4, py, num_str, linenum_color);
 
-        // Line text
+        // Line text (per-character rendering with horizontal scroll clipping)
         int line_start = te->line_offsets[line];
         int line_len = te_line_length(te, line);
 
         for (int ci = 0; ci < line_len; ci++) {
             int px = text_start_x + ci * FONT_WIDTH - te->scroll_x;
             if (px + FONT_WIDTH <= TE_LINE_NUM_W + 1) continue;
-            if (px >= cw) break;
+            if (px >= c.w) break;
 
-            char c = te->buffer[line_start + ci];
-            if (c >= 32 || c < 0) {
-                const uint8_t* glyph = &font_data[(unsigned char)c * FONT_HEIGHT];
+            char ch = te->buffer[line_start + ci];
+            if (ch >= 32 || ch < 0) {
+                const uint8_t* glyph = &font_data[(unsigned char)ch * FONT_HEIGHT];
                 for (int fy = 0; fy < FONT_HEIGHT && py + fy < text_area_h; fy++) {
                     uint8_t bits = glyph[fy];
                     for (int fx = 0; fx < FONT_WIDTH; fx++) {
                         if (bits & (0x80 >> fx)) {
                             int dx = px + fx;
                             int dy = py + fy;
-                            if (dx > TE_LINE_NUM_W && dx < cw && dy >= 0 && dy < text_area_h)
-                                pixels[dy * cw + dx] = text_px;
+                            if (dx > TE_LINE_NUM_W && dx < c.w && dy >= 0 && dy < text_area_h)
+                                c.pixels[dy * c.w + dx] = text_px;
                         }
                     }
                 }
@@ -370,24 +356,17 @@ static void texteditor_on_draw(Window* win, Framebuffer& fb) {
         // Draw cursor
         if (line == te->cursor_line) {
             int cx = text_start_x + te->cursor_col * FONT_WIDTH - te->scroll_x;
-            if (cx > TE_LINE_NUM_W && cx + 2 <= cw) {
-                for (int y = py; y < py + FONT_HEIGHT && y < text_area_h; y++) {
-                    pixels[y * cw + cx] = cursor_px;
-                    if (cx + 1 < cw)
-                        pixels[y * cw + cx + 1] = cursor_px;
-                }
+            if (cx > TE_LINE_NUM_W && cx + 2 <= c.w) {
+                int cur_h = gui_min(FONT_HEIGHT, text_area_h - py);
+                if (cur_h > 0)
+                    c.fill_rect(cx, py, 2, cur_h, colors::ACCENT);
             }
         }
     }
 
     // ---- Status bar ----
-    int status_y = ch - TE_STATUS_H;
-    uint32_t status_bg = Color::from_rgb(0x2B, 0x3E, 0x50).to_pixel();
-    uint32_t status_fg = colors::PANEL_TEXT.to_pixel();
-
-    for (int y = status_y; y < ch; y++)
-        for (int x = 0; x < cw; x++)
-            pixels[y * cw + x] = status_bg;
+    int status_y = c.h - TE_STATUS_H;
+    c.fill_rect(0, status_y, c.w, TE_STATUS_H, Color::from_rgb(0x2B, 0x3E, 0x50));
 
     // Filename + modified flag
     char status_left[128];
@@ -396,16 +375,13 @@ static void texteditor_on_draw(Window* win, Framebuffer& fb) {
     } else {
         snprintf(status_left, 128, " Untitled%s", te->modified ? " [modified]" : "");
     }
-    draw_text_to_pixels(pixels, cw, ch, 4, status_y + (TE_STATUS_H - FONT_HEIGHT) / 2,
-                        status_left, status_fg);
+    c.text(4, status_y + (TE_STATUS_H - FONT_HEIGHT) / 2, status_left, colors::PANEL_TEXT);
 
     // Cursor position (right side)
     char status_right[32];
     snprintf(status_right, 32, "Ln %d, Col %d ", te->cursor_line + 1, te->cursor_col + 1);
     int sr_w = zenith::slen(status_right) * FONT_WIDTH;
-    draw_text_to_pixels(pixels, cw, ch, cw - sr_w - 4,
-                        status_y + (TE_STATUS_H - FONT_HEIGHT) / 2,
-                        status_right, status_fg);
+    c.text(c.w - sr_w - 4, status_y + (TE_STATUS_H - FONT_HEIGHT) / 2, status_right, colors::PANEL_TEXT);
 }
 
 // ============================================================================
