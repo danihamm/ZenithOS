@@ -20,7 +20,7 @@ LINK_LD  := ../../link.ld
 BINDIR   := ../../bin
 OBJDIR   := obj
 
-# ---- Compiler flags ----
+# ---- C++ compiler flags ----
 
 CXXFLAGS := \
     -std=gnu++20 \
@@ -40,10 +40,8 @@ CXXFLAGS := \
     -fdata-sections \
     -m64 \
     -march=x86-64 \
-    -mno-80387 \
-    -mno-mmx \
-    -mno-sse \
-    -mno-sse2 \
+    -msse \
+    -msse2 \
     -mno-red-zone \
     -mcmodel=small \
     -I $(PROG_INC) \
@@ -61,9 +59,9 @@ LDFLAGS := \
     -z max-page-size=0x1000 \
     -T $(LINK_LD)
 
-# ---- Source files ----
+# ---- C++ source files ----
 
-SRCS := main.cpp font_data.cpp app_terminal.cpp app_filemanager.cpp app_sysinfo.cpp app_calculator.cpp app_texteditor.cpp app_klog.cpp app_wiki.cpp app_settings.cpp
+SRCS := main.cpp font_data.cpp stb_truetype_impl.cpp app_terminal.cpp app_filemanager.cpp app_sysinfo.cpp app_calculator.cpp app_texteditor.cpp app_klog.cpp app_wiki.cpp app_procmgr.cpp app_mandelbrot.cpp app_devexplorer.cpp app_settings.cpp app_doom.cpp
 OBJS := $(addprefix $(OBJDIR)/,$(SRCS:.cpp=.o))
 
 # ---- Target ----
@@ -78,6 +76,7 @@ $(TARGET): $(OBJS) $(LINK_LD) Makefile
 	mkdir -p $(BINDIR)/os
 	$(CXX) $(CXXFLAGS) $(LDFLAGS) $(OBJS) -o $@
 
+# C++ sources
 $(OBJDIR)/%.o: %.cpp Makefile
 	mkdir -p $(OBJDIR)
 	$(CXX) $(CXXFLAGS) -c $< -o $@

@@ -19,6 +19,10 @@
 using namespace Kt;
 
 namespace Hal {
+    static int g_detectedCpuCount = 0;
+
+    int GetDetectedCpuCount() { return g_detectedCpuCount; }
+
     void ApicInitialize(ACPI::CommonSDTHeader* xsdt) {
         KernelLogStream(INFO, "APIC") << "Initializing APIC subsystem";
 
@@ -28,6 +32,8 @@ namespace Hal {
             KernelLogStream(ERROR, "APIC") << "Failed to parse MADT, cannot initialize APIC";
             return;
         }
+
+        g_detectedCpuCount = madt.LocalApicCount;
 
         if (madt.IoApicAddress == 0) {
             KernelLogStream(ERROR, "APIC") << "No IOAPIC found in MADT";

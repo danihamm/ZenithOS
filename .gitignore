@@ -9,6 +9,6 @@ toolchain/build/
 toolchain/src/
 programs/bin/
 programs/obj/
-programs/src/doom/obj/
+programs/src/*/obj/
+programs/lib/libc/liblibc.a
 programs/gui/icons/
-programs/src/desktop/obj/

@@ -52,6 +52,11 @@ ICONS=(
     "mimetypes/scalable/application-x-executable.svg"
     "categories/scalable/help-about.svg"
     "categories/scalable/system-reboot.svg"
+    "apps/scalable/doom.svg"
+    "apps/scalable/system-monitor.svg"
+    "apps/scalable/applications-science.svg"
+    "apps/scalable/hardware.svg"
+    "apps/scalable/unsettings.svg" # settings icon; toolbox in flat remix
 )
 
 copied=0

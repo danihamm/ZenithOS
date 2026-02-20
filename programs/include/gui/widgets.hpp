@@ -79,7 +79,7 @@ struct Button {
         // Center text
         int tw = text_width(text);
         int tx = bounds.x + (bounds.w - tw) / 2;
-        int ty = bounds.y + (bounds.h - FONT_HEIGHT) / 2;
+        int ty = bounds.y + (bounds.h - system_font_height()) / 2;
         draw_text(fb, tx, ty, text, fg);
     }
 
@@ -150,7 +150,7 @@ struct IconButton {
 
         // Draw text
         if (text) {
-            int ty = bounds.y + (bounds.h - FONT_HEIGHT) / 2;
+            int ty = bounds.y + (bounds.h - system_font_height()) / 2;
             draw_text(fb, content_x, ty, text, text_color);
         }
     }
@@ -206,13 +206,18 @@ struct TextBox {
 
         // Draw text with 4px padding
         int tx = bounds.x + 4;
-        int ty = bounds.y + (bounds.h - FONT_HEIGHT) / 2;
+        int fh = system_font_height();
+        int ty = bounds.y + (bounds.h - fh) / 2;
         draw_text(fb, tx, ty, text, fg);
 
         // Draw cursor if focused
         if (focused) {
-            int cx = tx + cursor * FONT_WIDTH;
-            draw_vline(fb, cx, ty, FONT_HEIGHT, cursor_color);
+            // Measure text up to cursor position for proportional fonts
+            char prefix[256];
+            for (int i = 0; i < cursor && i < 255; i++) prefix[i] = text[i];
+            prefix[cursor < 255 ? cursor : 255] = '\0';
+            int cx = tx + text_width(prefix);
+            draw_vline(fb, cx, ty, fh, cursor_color);
         }
     }
 

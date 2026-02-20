@@ -15,6 +15,14 @@ static void terminal_on_draw(Window* win, Framebuffer& fb) {
     if (!ts) return;
 
     Rect cr = win->content_rect();
+
+    // Check if window was resized and update terminal grid
+    int new_cols = cr.w / mono_cell_width();
+    int new_rows = cr.h / mono_cell_height();
+    if (new_cols != ts->cols || new_rows != ts->rows) {
+        terminal_resize(ts, new_cols, new_rows);
+    }
+
     terminal_render(ts, win->content, cr.w, cr.h);
 }
 
@@ -52,8 +60,8 @@ void open_terminal(DesktopState* ds) {
 
     Window* win = &ds->windows[idx];
     Rect cr = win->content_rect();
-    int cols = cr.w / FONT_WIDTH;
-    int rows = cr.h / FONT_HEIGHT;
+    int cols = cr.w / mono_cell_width();
+    int rows = cr.h / mono_cell_height();
 
     TerminalState* ts = (TerminalState*)zenith::malloc(sizeof(TerminalState));
     zenith::memset(ts, 0, sizeof(TerminalState));

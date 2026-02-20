@@ -30,7 +30,7 @@ namespace Sched {
     struct Process {
         int pid;
         ProcessState state;
-        const char* name;
+        char name[64];
         uint64_t savedRsp;
         uint64_t stackBase;       // Bottom of allocated kernel stack (lowest address)
         uint64_t entryPoint;
@@ -58,6 +58,9 @@ namespace Sched {
         // GUI terminal dimensions (set by desktop, read by SYS_TERMSIZE)
         int termCols = 0;
         int termRows = 0;
+
+        // FPU/SSE state (FXSAVE format, must be 16-byte aligned)
+        uint8_t fpuState[512] __attribute__((aligned(16)));
     };
 
     void Initialize();
@@ -81,5 +84,8 @@ namespace Sched {
 
     // Find a process by PID (returns nullptr if not found or not alive)
     Process* GetProcessByPid(int pid);
+
+    // Get a pointer to slot i in the process table (for enumeration)
+    Process* GetProcessSlot(int slot);
 
 }

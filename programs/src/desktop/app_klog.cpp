@@ -119,8 +119,8 @@ void open_klog(DesktopState* ds) {
 
     Window* win = &ds->windows[idx];
     Rect cr = win->content_rect();
-    int cols = cr.w / FONT_WIDTH;
-    int rows = cr.h / FONT_HEIGHT;
+    int cols = cr.w / mono_cell_width();
+    int rows = cr.h / mono_cell_height();
 
     KlogState* klog = (KlogState*)zenith::malloc(sizeof(KlogState));
     zenith::memset(klog, 0, sizeof(KlogState));

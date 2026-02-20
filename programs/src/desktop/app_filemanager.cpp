@@ -373,7 +373,7 @@ static void filemanager_on_draw(Window* win, Framebuffer& fb) {
             int tx = cell_x + (FM_GRID_CELL_W - tw) / 2;
             if (tx < cell_x) tx = cell_x;
             int ty = icon_y + FM_GRID_ICON + 2;
-            if (ty >= list_y && ty + FONT_HEIGHT <= c.h)
+            if (ty >= list_y && ty + system_font_height() <= c.h)
                 c.text(tx, ty, label, colors::TEXT_COLOR);
         }
     } else {
@@ -447,19 +447,20 @@ static void filemanager_on_draw(Window* win, Framebuffer& fb) {
 
             // Name
             int tx = 30;
-            int ty = iy + (FM_ITEM_H - FONT_HEIGHT) / 2;
-            if (ty >= list_y && ty + FONT_HEIGHT <= c.h)
+            int fm_sfh = system_font_height();
+            int ty = iy + (FM_ITEM_H - fm_sfh) / 2;
+            if (ty >= list_y && ty + fm_sfh <= c.h)
                 c.text(tx, ty, fm->entry_names[i], colors::TEXT_COLOR);
 
             // Size
-            if (size_col_x > 100 && !fm->is_dir[i] && ty >= list_y && ty + FONT_HEIGHT <= c.h) {
+            if (size_col_x > 100 && !fm->is_dir[i] && ty >= list_y && ty + fm_sfh <= c.h) {
                 char size_str[16];
                 format_size(size_str, fm->entry_sizes[i]);
                 c.text(size_col_x, ty, size_str, dim);
             }
 
             // Type
-            if (type_col_x > 160 && ty >= list_y && ty + FONT_HEIGHT <= c.h) {
+            if (type_col_x > 160 && ty >= list_y && ty + fm_sfh <= c.h) {
                 const char* type_str = "File";
                 if (fm->entry_types[i] == 1) type_str = "Dir";
                 else if (fm->entry_types[i] == 2) type_str = "Exec";

@@ -461,9 +461,11 @@ namespace Drivers::USB::UsbDevice {
         }
 
         // -----------------------------------------------------------------
-        // Step 10: SET_PROTOCOL(0) -- request Boot Protocol
+        // Step 10: SET_PROTOCOL -- Boot Protocol for keyboards only
         // -----------------------------------------------------------------
-        if (foundEp) {
+        // Boot Protocol constrains mice to 3-byte reports (no scroll wheel).
+        // Keep mice in Report Protocol (the default) so scroll data is included.
+        if (foundEp && dev->InterfaceProtocol == PROTOCOL_KEYBOARD) {
             cc = Xhci::ControlTransfer(slotId, REQTYPE_CLASS_IFACE, REQ_SET_PROTOCOL,
                                        0, 0, 0, nullptr, false);
             if (cc != Xhci::CC_SUCCESS) {
@@ -475,7 +477,7 @@ namespace Drivers::USB::UsbDevice {
         // -----------------------------------------------------------------
         // Step 11: SET_IDLE(4) -- 16ms idle rate for software typematic
         // -----------------------------------------------------------------
-        if (foundEp) {
+        if (foundEp && dev->InterfaceProtocol == PROTOCOL_KEYBOARD) {
             // wValue upper byte = duration in 4ms units, lower byte = report ID
             cc = Xhci::ControlTransfer(slotId, REQTYPE_CLASS_IFACE, REQ_SET_IDLE,
                                        (4 << 8), 0, 0, nullptr, false);

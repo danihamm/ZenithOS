@@ -231,10 +231,18 @@ static void calculator_on_draw(Window* win, Framebuffer& fb) {
     c.fill_rect(0, 0, c.w, CALC_DISPLAY_H, Color::from_rgb(0x2D, 0x2D, 0x2D));
 
     // Display text (right-aligned, 2x scale)
-    int text_len = zenith::slen(cs->display_str);
-    int text_w = text_len * FONT_WIDTH * 2;
+    int text_w;
+    int large_h;
+    if (fonts::system_font && fonts::system_font->valid) {
+        text_w = fonts::system_font->measure_text(cs->display_str, fonts::LARGE_SIZE);
+        large_h = fonts::system_font->get_line_height(fonts::LARGE_SIZE);
+    } else {
+        int text_len = zenith::slen(cs->display_str);
+        text_w = text_len * FONT_WIDTH * 2;
+        large_h = FONT_HEIGHT * 2;
+    }
     int tx = c.w - text_w - 12;
-    int ty = (CALC_DISPLAY_H - FONT_HEIGHT * 2) / 2;
+    int ty = (CALC_DISPLAY_H - large_h) / 2;
     if (tx < 4) tx = 4;
     c.text_2x(tx, ty, cs->display_str, colors::WHITE);
 
@@ -271,9 +279,9 @@ static void calculator_on_draw(Window* win, Framebuffer& fb) {
             // Button text
             const char* label = calc_labels[row][col];
             Color label_color = (col == 3) ? colors::WHITE : colors::TEXT_COLOR;
-            int label_w = zenith::slen(label) * FONT_WIDTH;
+            int label_w = text_width(label);
             int lx = bx + (bw - label_w) / 2;
-            int ly = by + (CALC_BTN_H - FONT_HEIGHT) / 2;
+            int ly = by + (CALC_BTN_H - system_font_height()) / 2;
             c.text(lx, ly, label, label_color);
         }
     }

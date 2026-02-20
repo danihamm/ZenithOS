@@ -168,7 +168,8 @@ static void wiki_build_display(WikiState* ws, const char* title,
     ws->lineCount = 0;
     ws->scrollY = 0;
 
-    int maxChars = (contentW - 24 - WIKI_SCROLLBAR_W) / FONT_WIDTH;
+    int char_w = mono_cell_width();
+    int maxChars = (contentW - 24 - WIKI_SCROLLBAR_W) / char_w;
     if (maxChars < 20) maxChars = 20;
 
     Color accent_c = colors::ACCENT;
@@ -301,7 +302,7 @@ static void wiki_on_draw(Window* win, Framebuffer& fb) {
     c.rect(tb_x, tb_y, tb_w, tb_h, colors::BORDER);
 
     // Search text
-    c.text(tb_x + 4, tb_y + (tb_h - FONT_HEIGHT) / 2, ws->searchQuery, colors::TEXT_COLOR);
+    c.text(tb_x + 4, tb_y + (tb_h - system_font_height()) / 2, ws->searchQuery, colors::TEXT_COLOR);
 
     // ---- Search button ----
     int btn_x = tb_x + tb_w + 6;
@@ -313,7 +314,8 @@ static void wiki_on_draw(Window* win, Framebuffer& fb) {
     // ---- Content area ----
     int content_y = WIKI_TOOLBAR_H + 1;
     int content_h = c.h - content_y;
-    int visibleLines = content_h / (FONT_HEIGHT + 4);
+    int wiki_sfh = system_font_height();
+    int visibleLines = content_h / (wiki_sfh + 4);
     if (visibleLines < 1) visibleLines = 1;
 
     if (ws->mode == WikiState::FETCHING) {
@@ -326,8 +328,8 @@ static void wiki_on_draw(Window* win, Framebuffer& fb) {
             Color::from_rgb(0x88, 0x88, 0x88));
     } else if (ws->mode == WikiState::DONE && ws->lineCount > 0) {
         int y = content_y + 8;
-        int lineH = FONT_HEIGHT + 4;
-        for (int i = ws->scrollY; i < ws->lineCount && y + FONT_HEIGHT < c.h; i++) {
+        int lineH = wiki_sfh + 4;
+        for (int i = ws->scrollY; i < ws->lineCount && y + wiki_sfh < c.h; i++) {
             WikiDisplayLine* dl = &ws->lines[i];
             if (dl->text[0] != '\0') {
                 c.text(12, y, dl->text, dl->color);
@@ -412,7 +414,7 @@ static void wiki_on_mouse(Window* win, MouseEvent& ev) {
     if (ev.scroll != 0 && ws->mode == WikiState::DONE && ws->lineCount > 0) {
         int ch = cr.h;
         int content_h = ch - WIKI_TOOLBAR_H - 1;
-        int visibleLines = content_h / (FONT_HEIGHT + 4);
+        int visibleLines = content_h / (system_font_height() + 4);
         int maxScroll = ws->lineCount - visibleLines;
         if (maxScroll < 0) maxScroll = 0;
 
@@ -443,7 +445,7 @@ static void wiki_on_key(Window* win, const Zenith::KeyEvent& key) {
             }
         }
         int content_h = cr.h - WIKI_TOOLBAR_H - 1;
-        int visibleLines = content_h / (FONT_HEIGHT + 4);
+        int visibleLines = content_h / (system_font_height() + 4);
         if (visibleLines < 1) visibleLines = 1;
         int maxScroll = ws->lineCount - visibleLines;
         if (maxScroll < 0) maxScroll = 0;

@@ -284,4 +284,38 @@ namespace zenith {
         return (int)syscall3(Zenith::SYS_CHILDIO_SETTERMSZ, (uint64_t)childPid, (uint64_t)cols, (uint64_t)rows);
     }
 
+    // Process listing / kill
+    inline int proclist(Zenith::ProcInfo* buf, int max) {
+        return (int)syscall2(Zenith::SYS_PROCLIST, (uint64_t)buf, (uint64_t)max);
+    }
+    inline int kill(int pid) {
+        return (int)syscall1(Zenith::SYS_KILL, (uint64_t)pid);
+    }
+    inline int devlist(Zenith::DevInfo* buf, int max) {
+        return (int)syscall2(Zenith::SYS_DEVLIST, (uint64_t)buf, (uint64_t)max);
+    }
+
+    // Window server
+    inline int win_create(const char* title, int w, int h, Zenith::WinCreateResult* result) {
+        return (int)syscall4(Zenith::SYS_WINCREATE, (uint64_t)title, (uint64_t)w, (uint64_t)h, (uint64_t)result);
+    }
+    inline int win_destroy(int id) {
+        return (int)syscall1(Zenith::SYS_WINDESTROY, (uint64_t)id);
+    }
+    inline int win_present(int id) {
+        return (int)syscall1(Zenith::SYS_WINPRESENT, (uint64_t)id);
+    }
+    inline int win_poll(int id, Zenith::WinEvent* event) {
+        return (int)syscall2(Zenith::SYS_WINPOLL, (uint64_t)id, (uint64_t)event);
+    }
+    inline int win_enumerate(Zenith::WinInfo* info, int max) {
+        return (int)syscall2(Zenith::SYS_WINENUM, (uint64_t)info, (uint64_t)max);
+    }
+    inline uint64_t win_map(int id) {
+        return (uint64_t)syscall1(Zenith::SYS_WINMAP, (uint64_t)id);
+    }
+    inline int win_sendevent(int id, const Zenith::WinEvent* event) {
+        return (int)syscall2(Zenith::SYS_WINSENDEVENT, (uint64_t)id, (uint64_t)event);
+    }
+
 }

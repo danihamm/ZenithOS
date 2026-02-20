@@ -99,6 +99,10 @@ struct Canvas {
     // ---- Text ----
 
     void text(int x, int y, const char* str, Color c) {
+        if (fonts::system_font && fonts::system_font->valid) {
+            fonts::system_font->draw_to_buffer(pixels, w, h, x, y, str, c, fonts::UI_SIZE);
+            return;
+        }
         uint32_t px = c.to_pixel();
         for (int i = 0; str[i] && x + (i + 1) * FONT_WIDTH <= w; i++) {
             const uint8_t* glyph = &font_data[(unsigned char)str[i] * FONT_HEIGHT];
@@ -118,6 +122,10 @@ struct Canvas {
     }
 
     void text_2x(int x, int y, const char* str, Color c) {
+        if (fonts::system_font && fonts::system_font->valid) {
+            fonts::system_font->draw_to_buffer(pixels, w, h, x, y, str, c, fonts::LARGE_SIZE);
+            return;
+        }
         uint32_t px = c.to_pixel();
         for (int i = 0; str[i] && x + (i + 1) * FONT_WIDTH * 2 <= w; i++) {
             const uint8_t* glyph = &font_data[(unsigned char)str[i] * FONT_HEIGHT];
@@ -139,6 +147,14 @@ struct Canvas {
                 }
             }
         }
+    }
+
+    void text_mono(int x, int y, const char* str, Color c) {
+        if (fonts::mono && fonts::mono->valid) {
+            fonts::mono->draw_to_buffer(pixels, w, h, x, y, str, c, fonts::TERM_SIZE);
+            return;
+        }
+        text(x, y, str, c);
     }
 
     // ---- Icons ----
@@ -176,7 +192,8 @@ struct Canvas {
 
     // ---- High-level helpers ----
 
-    void kv_line(int x, int* y, const char* line, Color c, int line_h = FONT_HEIGHT + 6) {
+    void kv_line(int x, int* y, const char* line, Color c, int line_h = 0) {
+        if (line_h == 0) line_h = system_font_height() + 6;
         text(x, *y, line, c);
         *y += line_h;
     }
@@ -190,8 +207,9 @@ struct Canvas {
                 Color bg, Color fg, int radius = 4) {
         fill_rounded_rect(x, y, bw, bh, radius, bg);
         int tw = text_width(label);
+        int fh = system_font_height();
         int tx = x + (bw - tw) / 2;
-        int ty = y + (bh - FONT_HEIGHT) / 2;
+        int ty = y + (bh - fh) / 2;
         text(tx, ty, label, fg);
     }
 };

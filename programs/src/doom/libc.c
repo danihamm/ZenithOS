@@ -712,27 +712,22 @@ int sprintf(char *buf, const char *fmt, ...) {
 static char _printbuf[4096];
 
 int vprintf(const char *fmt, va_list ap) {
-    int ret = vsnprintf(_printbuf, sizeof(_printbuf), fmt, ap);
-    _zos_syscall1(SYS_PRINT, (long)_printbuf);
-    return ret;
+    (void)fmt; (void)ap;
+    return 0;
 }
 
 int printf(const char *fmt, ...) {
-    va_list ap;
-    va_start(ap, fmt);
-    int ret = vprintf(fmt, ap);
-    va_end(ap);
-    return ret;
+    (void)fmt;
+    return 0;
 }
 
 int puts(const char *s) {
-    _zos_syscall1(SYS_PRINT, (long)s);
-    _zos_syscall1(SYS_PUTCHAR, (long)'\n');
+    (void)s;
     return 0;
 }
 
 int putchar(int c) {
-    _zos_syscall1(SYS_PUTCHAR, (long)c);
+    (void)c;
     return c;
 }
 
@@ -862,20 +857,8 @@ size_t fread(void *ptr, size_t size, size_t nmemb, FILE *fp) {
 size_t fwrite(const void *ptr, size_t size, size_t nmemb, FILE *fp) {
     if (fp == NULL) return 0;
 
-    /* stdout/stderr: write to terminal */
+    /* stdout/stderr: discard (no terminal in windowed mode) */
     if (fp->is_std == 1 || fp->is_std == 2) {
-        /* Write as string to terminal */
-        size_t total = size * nmemb;
-        const char *s = (const char *)ptr;
-        char buf[512];
-        while (total > 0) {
-            size_t chunk = total > 511 ? 511 : total;
-            memcpy(buf, s, chunk);
-            buf[chunk] = '\0';
-            _zos_syscall1(SYS_PRINT, (long)buf);
-            s += chunk;
-            total -= chunk;
-        }
         return nmemb;
     }
 
@@ -970,31 +953,18 @@ char *fgets(char *s, int size, FILE *fp) {
 }
 
 int fputs(const char *s, FILE *fp) {
-    size_t len = strlen(s);
-    return fwrite(s, 1, len, fp) > 0 ? 0 : -1;
+    (void)s; (void)fp;
+    return 0;
 }
 
 int fprintf(FILE *fp, const char *fmt, ...) {
-    char buf[4096];
-    va_list ap;
-    va_start(ap, fmt);
-    int ret = vsnprintf(buf, sizeof(buf), fmt, ap);
-    va_end(ap);
-
-    if (fp == stdout || fp == stderr || (fp && fp->is_std)) {
-        _zos_syscall1(SYS_PRINT, (long)buf);
-    }
-    return ret;
+    (void)fp; (void)fmt;
+    return 0;
 }
 
 int vfprintf(FILE *fp, const char *fmt, va_list ap) {
-    char buf[4096];
-    int ret = vsnprintf(buf, sizeof(buf), fmt, ap);
-
-    if (fp == stdout || fp == stderr || (fp && fp->is_std)) {
-        _zos_syscall1(SYS_PRINT, (long)buf);
-    }
-    return ret;
+    (void)fp; (void)fmt; (void)ap;
+    return 0;
 }
 
 int sscanf(const char *str, const char *fmt, ...) {
@@ -1069,11 +1039,7 @@ int sscanf(const char *str, const char *fmt, ...) {
 }
 
 void perror(const char *s) {
-    if (s && *s) {
-        _zos_syscall1(SYS_PRINT, (long)s);
-        _zos_syscall1(SYS_PRINT, (long)": ");
-    }
-    _zos_syscall1(SYS_PRINT, (long)"error\n");
+    (void)s;
 }
 
 int rename(const char *old, const char *new_) {

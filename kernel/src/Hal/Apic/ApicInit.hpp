@@ -19,4 +19,7 @@ namespace Hal {
     //
     // xsdt: pointer to the XSDT (already HHDM-mapped)
     void ApicInitialize(ACPI::CommonSDTHeader* xsdt);
+
+    // Number of CPU cores detected via MADT (available after ApicInitialize)
+    int GetDetectedCpuCount();
 };

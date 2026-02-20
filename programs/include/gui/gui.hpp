@@ -25,13 +25,13 @@ inline fixed_t fixed_from_parts(int whole, int frac_num, int frac_den) {
 struct Color {
     uint8_t r, g, b, a;
 
-    static Color from_rgb(uint8_t r, uint8_t g, uint8_t b) { return {r, g, b, 255}; }
-    static Color from_rgba(uint8_t r, uint8_t g, uint8_t b, uint8_t a) { return {r, g, b, a}; }
-    static Color from_hex(uint32_t hex) {
+    static constexpr Color from_rgb(uint8_t r, uint8_t g, uint8_t b) { return {r, g, b, 255}; }
+    static constexpr Color from_rgba(uint8_t r, uint8_t g, uint8_t b, uint8_t a) { return {r, g, b, a}; }
+    static constexpr Color from_hex(uint32_t hex) {
         return {(uint8_t)((hex >> 16) & 0xFF), (uint8_t)((hex >> 8) & 0xFF), (uint8_t)(hex & 0xFF), 255};
     }
 
-    uint32_t to_pixel() const { return ((uint32_t)a << 24) | ((uint32_t)r << 16) | ((uint32_t)g << 8) | b; }
+    constexpr uint32_t to_pixel() const { return ((uint32_t)a << 24) | ((uint32_t)r << 16) | ((uint32_t)g << 8) | b; }
 };
 
 // Named colors for the desktop theme

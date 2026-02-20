@@ -14,9 +14,11 @@
 #include <CppLib/Stream.hpp>
 #include <Hal/Apic/Apic.hpp>
 #include <Hal/GDT.hpp>
+#include <Api/WinServer.hpp>
 
-// Assembly: context switch with CR3 parameter
-extern "C" void SchedContextSwitch(uint64_t* oldRsp, uint64_t newRsp, uint64_t newCR3);
+// Assembly: context switch with CR3 and FPU state parameters
+extern "C" void SchedContextSwitch(uint64_t* oldRsp, uint64_t newRsp, uint64_t newCR3,
+                                   uint8_t* oldFpuArea, uint8_t* newFpuArea);
 
 // Assembly: jump to user mode via IRETQ
 extern "C" void JumpToUserMode(uint64_t rip, uint64_t rsp);
@@ -66,7 +68,7 @@ namespace Sched {
         for (int i = 0; i < MaxProcesses; i++) {
             processTable[i].pid = i;
             processTable[i].state = ProcessState::Free;
-            processTable[i].name = nullptr;
+            processTable[i].name[0] = '\0';
             processTable[i].savedRsp = 0;
             processTable[i].stackBase = 0;
             processTable[i].entryPoint = 0;
@@ -191,7 +193,11 @@ namespace Sched {
         Process& proc = processTable[slot];
         proc.pid = nextPid++;
         proc.state = ProcessState::Ready;
-        proc.name = vfsPath;
+        {
+            int i = 0;
+            for (; i < 63 && vfsPath[i]; i++) proc.name[i] = vfsPath[i];
+            proc.name[i] = '\0';
+        }
         proc.savedRsp = (uint64_t)sp;
         proc.stackBase = (uint64_t)kernelStackBase;
         proc.entryPoint = entry;
@@ -223,6 +229,11 @@ namespace Sched {
         proc.keyTail = 0;
         proc.termCols = 0;
         proc.termRows = 0;
+
+        // Initialize FPU state: zero out, then set default FCW and MXCSR
+        memset(proc.fpuState, 0, 512);
+        *(uint16_t*)&proc.fpuState[0] = 0x037F;   // FCW: default x87 control word
+        *(uint32_t*)&proc.fpuState[24] = 0x1F80;   // MXCSR: default SSE control/status
 
         return proc.pid;
     }
@@ -276,7 +287,9 @@ namespace Sched {
         // Update TSS RSP0 for hardware interrupts from ring 3
         Hal::g_tss.rsp0 = processTable[next].kernelStackTop;
 
-        SchedContextSwitch(oldRspPtr, processTable[next].savedRsp, newCR3);
+        uint8_t* oldFpu = (currentPid >= 0) ? processTable[currentPid].fpuState : nullptr;
+        uint8_t* newFpu = processTable[next].fpuState;
+        SchedContextSwitch(oldRspPtr, processTable[next].savedRsp, newCR3, oldFpu, newFpu);
     }
 
     void Tick() {
@@ -309,6 +322,9 @@ namespace Sched {
             return;
         }
 
+        // Clean up any windows owned by this process
+        WinServer::CleanupProcess(processTable[currentPid].pid);
+
         processTable[currentPid].state = ProcessState::Terminated;
 
         int next = -1;
@@ -329,11 +345,13 @@ namespace Sched {
             g_kernelRsp = processTable[next].kernelStackTop;
             Hal::g_tss.rsp0 = processTable[next].kernelStackTop;
 
-            SchedContextSwitch(&processTable[old].savedRsp, processTable[next].savedRsp, newCR3);
+            SchedContextSwitch(&processTable[old].savedRsp, processTable[next].savedRsp, newCR3,
+                              processTable[old].fpuState, processTable[next].fpuState);
         } else {
             int old = currentPid;
             currentPid = -1;
-            SchedContextSwitch(&processTable[old].savedRsp, idleSavedRsp, GetKernelCR3());
+            SchedContextSwitch(&processTable[old].savedRsp, idleSavedRsp, GetKernelCR3(),
+                              processTable[old].fpuState, nullptr);
         }
 
         for (;;) {
@@ -360,6 +378,11 @@ namespace Sched {
             }
         }
         return nullptr;
+    }
+
+    Process* GetProcessSlot(int slot) {
+        if (slot < 0 || slot >= MaxProcesses) return nullptr;
+        return &processTable[slot];
     }
 
 }

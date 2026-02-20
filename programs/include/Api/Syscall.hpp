@@ -66,6 +66,20 @@ namespace Zenith {
     static constexpr uint64_t SYS_CHILDIO_WRITEKEY = 52;
     static constexpr uint64_t SYS_CHILDIO_SETTERMSZ = 53;
 
+    // Window server syscalls
+    static constexpr uint64_t SYS_WINCREATE    = 54;
+    static constexpr uint64_t SYS_WINDESTROY   = 55;
+    static constexpr uint64_t SYS_WINPRESENT   = 56;
+    static constexpr uint64_t SYS_WINPOLL      = 57;
+    static constexpr uint64_t SYS_WINENUM      = 58;
+    static constexpr uint64_t SYS_WINMAP       = 59;
+    static constexpr uint64_t SYS_WINSENDEVENT = 60;
+
+    // Process management syscalls
+    static constexpr uint64_t SYS_PROCLIST    = 61;
+    static constexpr uint64_t SYS_KILL        = 62;
+    static constexpr uint64_t SYS_DEVLIST     = 63;
+
     static constexpr int SOCK_TCP = 1;
     static constexpr int SOCK_UDP = 2;
 
@@ -116,6 +130,48 @@ namespace Zenith {
         int32_t  y;
         int32_t  scrollDelta;
         uint8_t  buttons;
+    };
+
+    // Window server shared types
+    struct WinEvent {
+        uint8_t type;     // 0=key, 1=mouse, 2=resize, 3=close
+        uint8_t _pad[3];
+        union {
+            KeyEvent key;
+            struct { int32_t x, y, scroll; uint8_t buttons, prev_buttons; } mouse;
+            struct { int32_t w, h; } resize;
+        };
+    };
+
+    struct WinInfo {
+        int32_t  id;
+        int32_t  ownerPid;
+        char     title[64];
+        int32_t  width, height;
+        uint8_t  dirty;
+        uint8_t  _pad2[3];
+    };
+
+    struct WinCreateResult {
+        int32_t  id;       // -1 on failure
+        uint32_t _pad;
+        uint64_t pixelVa;  // VA of pixel buffer in caller's address space
+    };
+
+    struct DevInfo {
+        uint8_t  category;     // 0=CPU, 1=Interrupt, 2=Timer, 3=Input, 4=USB, 5=Network, 6=Display, 7=PCI
+        uint8_t  _pad[3];
+        char     name[48];
+        char     detail[48];
+    };
+
+    struct ProcInfo {
+        int32_t  pid;
+        int32_t  parentPid;
+        uint8_t  state;        // 0=Free, 1=Ready, 2=Running, 3=Terminated
+        uint8_t  _pad[3];
+        char     name[64];
+        uint64_t heapUsed;     // heapNext - UserHeapBase (bytes)
     };
 
 }

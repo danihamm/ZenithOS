@@ -82,9 +82,9 @@ CA_CERTS := $(BINDIR)/etc/ca-certificates.crt
 # Home directory placeholder.
 HOMEKEEP := $(BINDIR)/home/.keep
 
-.PHONY: all clean doom fetch wiki desktop icons bearssl libc
+.PHONY: all clean doom fetch wiki desktop icons fonts bearssl libc
 
-all: bearssl libc $(TARGETS) fetch wiki doom desktop icons $(GAME_DATA) $(MANDST) $(WWWDST) $(CA_CERTS) $(HOMEKEEP)
+all: bearssl libc $(TARGETS) fetch wiki doom desktop icons fonts $(GAME_DATA) $(MANDST) $(WWWDST) $(CA_CERTS) $(HOMEKEEP)
 
 # Build BearSSL static library.
 bearssl:
@@ -109,6 +109,10 @@ desktop:
 # Copy SVG icons for the desktop into bin/icons/.
 icons:
 	../scripts/copy_icons.sh
+
+# Copy TTF fonts for the desktop into bin/fonts/.
+fonts:
+	../scripts/copy_fonts.sh
 
 # Build doom via its own Makefile.
 doom:

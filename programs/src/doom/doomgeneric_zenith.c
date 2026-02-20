@@ -1,6 +1,6 @@
 /*
     * doomgeneric_zenith.c
-    * DOOM platform implementation for ZenithOS
+    * DOOM platform implementation for ZenithOS (standalone window server client)
     * Copyright (c) 2025 Daniel Hammer
 */
 
@@ -30,41 +30,70 @@ static inline long _zos_syscall1(long nr, long a1) {
     return ret;
 }
 
+static inline long _zos_syscall2(long nr, long a1, long a2) {
+    long ret;
+    __asm__ volatile(
+        "mov %[a1], %%rdi\n\t"
+        "mov %[a2], %%rsi\n\t"
+        "syscall"
+        : "=a"(ret)
+        : "a"(nr), [a1] "r"(a1), [a2] "r"(a2)
+        : "rcx", "r11", "rdi", "rsi", "rdx", "r8", "r9", "r10", "memory");
+    return ret;
+}
+
+static inline long _zos_syscall4(long nr, long a1, long a2, long a3, long a4) {
+    long ret;
+    __asm__ volatile(
+        "mov %[a1], %%rdi\n\t"
+        "mov %[a2], %%rsi\n\t"
+        "mov %[a3], %%rdx\n\t"
+        "mov %[a4], %%r10\n\t"
+        "syscall"
+        : "=a"(ret)
+        : "a"(nr), [a1] "r"(a1), [a2] "r"(a2), [a3] "r"(a3), [a4] "r"(a4)
+        : "rcx", "r11", "rdi", "rsi", "rdx", "r8", "r9", "r10", "memory");
+    return ret;
+}
+
 /* Syscall numbers (must match kernel/src/Api/Syscall.hpp) */
 #define SYS_EXIT            0
 #define SYS_SLEEP_MS        2
 #define SYS_PRINT           4
 #define SYS_GETMILLISECONDS 14
-#define SYS_ISKEYAVAILABLE  16
-#define SYS_GETKEY          17
-#define SYS_FBINFO          21
-#define SYS_FBMAP           22
+#define SYS_WINCREATE       54
+#define SYS_WINDESTROY      55
+#define SYS_WINPRESENT      56
+#define SYS_WINPOLL         57
 
-/* FbInfo struct (must match kernel definition) */
-struct FbInfo {
-    unsigned long width;
-    unsigned long height;
-    unsigned long pitch;
-    unsigned long bpp;
-    unsigned long userAddr;
+/* Window server structs (must match Zenith::WinCreateResult and Zenith::WinEvent) */
+struct WinCreateResult {
+    int      id;        /* -1 on failure */
+    unsigned _pad;
+    unsigned long pixelVa;  /* VA of pixel buffer in caller's address space */
 };
 
-/* KeyEvent struct (must match kernel definition) */
-struct KeyEvent {
-    unsigned char scancode;
-    char          ascii;
-    unsigned char pressed;
-    unsigned char shift;
-    unsigned char ctrl;
-    unsigned char alt;
+struct WinEvent {
+    unsigned char type;     /* 0=key, 1=mouse, 2=resize, 3=close */
+    unsigned char _pad[3];
+    union {
+        struct {
+            unsigned char scancode;
+            char          ascii;
+            unsigned char pressed;
+            unsigned char shift;
+            unsigned char ctrl;
+            unsigned char alt;
+        } key;
+        struct { int x, y, scroll; unsigned char buttons, prev_buttons; } mouse;
+        struct { int w, h; } resize;
+    };
 };
 
-/* ---- Framebuffer state ---- */
+/* ---- Window state ---- */
 
-static uint32_t* g_fbPtr    = 0;
-static uint32_t  g_fbWidth  = 0;
-static uint32_t  g_fbHeight = 0;
-static uint32_t  g_fbPitch  = 0; /* bytes per scanline */
+static int       g_winId   = -1;
+static uint32_t* g_pixBuf  = 0;
 
 /* ---- Circular key queue ---- */
 
@@ -115,8 +144,8 @@ static unsigned char scancode_to_doomkey(unsigned char scancode, char ascii) {
         case 0x4D: return KEY_RIGHTARROW;
         case 0x1C: return KEY_ENTER;
         case 0x01: return KEY_ESCAPE;
-        case 0x39: return ' ';          /* Space = use */
-        case 0x1D: return KEY_RCTRL;    /* LCtrl = fire */
+        case 0x39: return KEY_USE;      /* Space = use */
+        case 0x1D: return KEY_FIRE;     /* LCtrl = fire */
         case 0x2A: return KEY_RSHIFT;   /* LShift = run */
         case 0x36: return KEY_RSHIFT;   /* RShift = run */
         case 0x38: return KEY_RALT;     /* Alt = strafe */
@@ -146,22 +175,26 @@ static unsigned char scancode_to_doomkey(unsigned char scancode, char ascii) {
     }
 }
 
-/* ---- Poll keyboard and enqueue events ---- */
+/* ---- Poll window events and enqueue key events ---- */
 
 static void poll_keyboard(void) {
-    while (_zos_syscall0(SYS_ISKEYAVAILABLE)) {
-        struct KeyEvent evt;
-        _zos_syscall1(SYS_GETKEY, (long)&evt);
+    struct WinEvent evt;
+    while (_zos_syscall2(SYS_WINPOLL, (long)g_winId, (long)&evt) > 0) {
+        if (evt.type == 0) {
+            /* Key event */
+            unsigned char baseSc = evt.key.scancode & 0x7F;
 
-        unsigned char baseSc = evt.scancode & 0x7F; /* strip break bit */
+            char ascii = 0;
+            if (baseSc < 128)
+                ascii = scancode_to_ascii[baseSc];
 
-        char ascii = 0;
-        if (baseSc < 128)
-            ascii = scancode_to_ascii[baseSc];
-
-        unsigned char dk = scancode_to_doomkey(baseSc, ascii);
-        if (dk != 0) {
-            key_queue_push(evt.pressed ? 1 : 0, dk);
+            unsigned char dk = scancode_to_doomkey(baseSc, ascii);
+            if (dk != 0) {
+                key_queue_push(evt.key.pressed ? 1 : 0, dk);
+            }
+        } else if (evt.type == 3) {
+            /* Close event — exit the process */
+            _zos_syscall1(SYS_EXIT, 0);
         }
     }
 }
@@ -169,38 +202,30 @@ static void poll_keyboard(void) {
 /* ---- DG platform functions ---- */
 
 void DG_Init(void) {
-    struct FbInfo info;
-    _zos_syscall1(SYS_FBINFO, (long)&info);
+    struct WinCreateResult result;
+    _zos_syscall4(SYS_WINCREATE, (long)"DOOM", (long)DOOMGENERIC_RESX,
+                  (long)DOOMGENERIC_RESY, (long)&result);
 
-    g_fbWidth  = (uint32_t)info.width;
-    g_fbHeight = (uint32_t)info.height;
-    g_fbPitch  = (uint32_t)info.pitch;
+    if (result.id < 0) {
+        _zos_syscall1(SYS_EXIT, 1);
+    }
 
-    g_fbPtr = (uint32_t*)(unsigned long)_zos_syscall0(SYS_FBMAP);
-
-    printf("DOOM: framebuffer %ux%u pitch=%u mapped at %p\n",
-           g_fbWidth, g_fbHeight, g_fbPitch, (void*)g_fbPtr);
+    g_winId  = result.id;
+    g_pixBuf = (uint32_t*)result.pixelVa;
 }
 
 void DG_DrawFrame(void) {
     /* Poll keyboard first */
     poll_keyboard();
 
-    /* Copy DG_ScreenBuffer (DOOMGENERIC_RESX x DOOMGENERIC_RESY) to framebuffer */
-    if (g_fbPtr == 0 || DG_ScreenBuffer == 0) return;
+    /* Copy DG_ScreenBuffer into the shared pixel buffer */
+    if (g_pixBuf == 0 || DG_ScreenBuffer == 0) return;
 
-    uint32_t copyW = DOOMGENERIC_RESX;
-    uint32_t copyH = DOOMGENERIC_RESY;
-    if (copyW > g_fbWidth)  copyW = g_fbWidth;
-    if (copyH > g_fbHeight) copyH = g_fbHeight;
+    memcpy(g_pixBuf, DG_ScreenBuffer,
+           DOOMGENERIC_RESX * DOOMGENERIC_RESY * sizeof(uint32_t));
 
-    uint32_t fbStride = g_fbPitch / 4; /* pixels per scanline */
-
-    for (uint32_t y = 0; y < copyH; y++) {
-        uint32_t* dst = g_fbPtr + y * fbStride;
-        uint32_t* src = DG_ScreenBuffer + y * DOOMGENERIC_RESX;
-        memcpy(dst, src, copyW * sizeof(uint32_t));
-    }
+    /* Mark window as dirty so the compositor picks it up */
+    _zos_syscall1(SYS_WINPRESENT, (long)g_winId);
 }
 
 void DG_SleepMs(uint32_t ms) {

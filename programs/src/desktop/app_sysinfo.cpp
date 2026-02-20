@@ -31,7 +31,7 @@ static void sysinfo_on_draw(Window* win, Framebuffer& fb) {
 
     // Title
     c.text(x, y, "System Information", colors::ACCENT);
-    y += FONT_HEIGHT + 12;
+    y += system_font_height() + 12;
 
     // Separator
     c.hline(x, y, c.w - 2 * x, colors::BORDER);
@@ -52,7 +52,7 @@ static void sysinfo_on_draw(Window* win, Framebuffer& fb) {
     // Max Processes
     snprintf(line, sizeof(line), "Max PIDs: %d", (int)si->sys_info.maxProcesses);
     c.text(x, y, line, colors::TEXT_COLOR);
-    y += FONT_HEIGHT + 12;
+    y += system_font_height() + 12;
 
     // Uptime
     int up_sec = (int)(si->uptime_ms / 1000);
@@ -60,11 +60,11 @@ static void sysinfo_on_draw(Window* win, Framebuffer& fb) {
     int up_hr = up_min / 60;
     snprintf(line, sizeof(line), "Uptime:   %d:%02d:%02d", up_hr, up_min % 60, up_sec % 60);
     c.text(x, y, line, colors::TEXT_COLOR);
-    y += FONT_HEIGHT + 12;
+    y += system_font_height() + 12;
 
     // Network section
     c.text(x, y, "Network", colors::ACCENT);
-    y += FONT_HEIGHT + 8;
+    y += system_font_height() + 8;
 
     c.hline(x, y, c.w - 2 * x, colors::BORDER);
     y += 8;

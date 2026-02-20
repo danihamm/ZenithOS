@@ -23,6 +23,9 @@ void gui::desktop_init(DesktopState* ds) {
     ds->fb.clear(colors::DESKTOP_BG);
     ds->fb.flip();
 
+    // Load TrueType fonts
+    fonts::init();
+
     ds->window_count = 0;
     ds->focused_window = -1;
     ds->prev_buttons = 0;
@@ -57,6 +60,22 @@ void gui::desktop_init(DesktopState* ds) {
 
     ds->icon_settings = svg_load("0:/icons/help-about.svg",     20, 20, defColor);
     ds->icon_reboot   = svg_load("0:/icons/system-reboot.svg", 20, 20, defColor);
+
+    ds->icon_doom     = svg_load("0:/icons/doom.svg", 20, 20, defColor);
+    ds->icon_procmgr  = svg_load("0:/icons/system-monitor.svg", 20, 20, defColor);
+    ds->icon_mandelbrot = svg_load("0:/icons/applications-science.svg", 20, 20, defColor);
+    ds->icon_devexplorer = svg_load("0:/icons/hardware.svg", 20, 20, defColor);
+
+    // Settings defaults
+    ds->settings.bg_gradient = true;
+    ds->settings.bg_grad_top = Color::from_rgb(0xD0, 0xD8, 0xE8);
+    ds->settings.bg_grad_bottom = Color::from_rgb(0xA0, 0xA8, 0xB8);
+    ds->settings.bg_solid = Color::from_rgb(0xD0, 0xD8, 0xE8);
+    ds->settings.panel_color = colors::PANEL_BG;
+    ds->settings.accent_color = colors::ACCENT;
+    ds->settings.show_shadows = true;
+    ds->settings.clock_24h = true;
+    ds->settings.ui_scale = 1;
 
     ds->ctx_menu_open = false;
     ds->ctx_menu_x = 0;
@@ -100,6 +119,8 @@ int gui::desktop_create_window(DesktopState* ds, const char* title, int x, int y
     win->on_close = nullptr;
     win->on_poll = nullptr;
     win->app_data = nullptr;
+    win->external = false;
+    win->ext_win_id = -1;
 
     // Unfocus previous window
     if (ds->focused_window >= 0 && ds->focused_window < ds->window_count) {
@@ -115,10 +136,19 @@ void gui::desktop_close_window(DesktopState* ds, int idx) {
     if (idx < 0 || idx >= ds->window_count) return;
 
     Window* win = &ds->windows[idx];
+
+    // For external windows, send a close event instead of freeing the buffer
+    if (win->external) {
+        Zenith::WinEvent ev;
+        zenith::memset(&ev, 0, sizeof(ev));
+        ev.type = 3; // close
+        zenith::win_sendevent(win->ext_win_id, &ev);
+    }
+
     if (win->on_close) win->on_close(win);
 
-    // Free content buffer
-    if (win->content) {
+    // Free content buffer (skip for external windows — shared memory)
+    if (win->content && !win->external) {
         zenith::free(win->content);
         win->content = nullptr;
     }
@@ -180,7 +210,8 @@ void gui::desktop_draw_window(DesktopState* ds, int idx) {
     int h = win->frame.h;
 
     // Draw shadow
-    draw_shadow(fb, x, y, w, h, SHADOW_SIZE, colors::SHADOW);
+    if (ds->settings.show_shadows)
+        draw_shadow(fb, x, y, w, h, SHADOW_SIZE, colors::SHADOW);
 
     // Draw window body
     fb.fill_rect(x, y, w, h, colors::WINDOW_BG);
@@ -205,7 +236,7 @@ void gui::desktop_draw_window(DesktopState* ds, int idx) {
 
     // Draw title text centered in titlebar (after buttons)
     int title_x = x + 12 + 44 + BTN_RADIUS * 2 + 12; // after buttons
-    int title_y = y + (TITLEBAR_HEIGHT - FONT_HEIGHT) / 2;
+    int title_y = y + (TITLEBAR_HEIGHT - system_font_height()) / 2;
     int title_w = text_width(win->title);
     // Center in remaining space
     int remaining_w = w - (title_x - x) - 12;
@@ -222,9 +253,31 @@ void gui::desktop_draw_window(DesktopState* ds, int idx) {
     // Blit content buffer to framebuffer (clip to actual buffer size during resize)
     Rect cr = win->content_rect();
     if (win->content) {
-        int blit_w = cr.w < win->content_w ? cr.w : win->content_w;
-        int blit_h = cr.h < win->content_h ? cr.h : win->content_h;
-        fb.blit(cr.x, cr.y, blit_w, blit_h, win->content);
+        if (win->external && (cr.w != win->content_w || cr.h != win->content_h)) {
+            // Nearest-neighbor scale for external windows (fixed-size shared buffer)
+            int src_w = win->content_w;
+            int src_h = win->content_h;
+            int dst_w = cr.w;
+            int dst_h = cr.h;
+            uint32_t* buf = fb.buffer();
+            int pitch = fb.pitch();
+            for (int y = 0; y < dst_h; y++) {
+                int dy = cr.y + y;
+                if (dy < 0 || dy >= fb.height()) continue;
+                int sy = y * src_h / dst_h;
+                uint32_t* dst_row = (uint32_t*)((uint8_t*)buf + dy * pitch);
+                uint32_t* src_row = win->content + sy * src_w;
+                for (int x = 0; x < dst_w; x++) {
+                    int dx = cr.x + x;
+                    if (dx < 0 || dx >= fb.width()) continue;
+                    dst_row[dx] = src_row[x * src_w / dst_w];
+                }
+            }
+        } else {
+            int blit_w = cr.w < win->content_w ? cr.w : win->content_w;
+            int blit_h = cr.h < win->content_h ? cr.h : win->content_h;
+            fb.blit(cr.x, cr.y, blit_w, blit_h, win->content);
+        }
     }
 }
 
@@ -233,11 +286,12 @@ void gui::desktop_draw_panel(DesktopState* ds) {
     int sw = ds->screen_w;
 
     // Panel gradient background (slightly lighter at top)
+    Color pc = ds->settings.panel_color;
     for (int y = 0; y < PANEL_HEIGHT; y++) {
         int t = y * 255 / PANEL_HEIGHT;
-        uint8_t r = colors::PANEL_BG.r + (10 - t * 10 / 255);
-        uint8_t g = colors::PANEL_BG.g + (10 - t * 10 / 255);
-        uint8_t b = colors::PANEL_BG.b + (10 - t * 10 / 255);
+        uint8_t r = pc.r + (10 - t * 10 / 255);
+        uint8_t g = pc.g + (10 - t * 10 / 255);
+        uint8_t b = pc.b + (10 - t * 10 / 255);
         fb.fill_rect(0, y, sw, 1, Color::from_rgb(r, g, b));
     }
 
@@ -284,7 +338,7 @@ void gui::desktop_draw_panel(DesktopState* ds) {
 
         // Active window accent underline bar
         if (i == ds->focused_window) {
-            fb.fill_rect(indicator_x + 4, 26, iw - 8, 2, colors::ACCENT);
+            fb.fill_rect(indicator_x + 4, 26, iw - 8, 2, ds->settings.accent_color);
         }
 
         // Truncate title if too long
@@ -292,7 +346,7 @@ void gui::desktop_draw_panel(DesktopState* ds) {
         zenith::strncpy(short_title, win->title, 18);
 
         int tx = indicator_x + pad;
-        int ty = 4 + (24 - FONT_HEIGHT) / 2;
+        int ty = 4 + (24 - system_font_height()) / 2;
         draw_text(fb, tx, ty, short_title, colors::PANEL_TEXT);
 
         indicator_x += iw + 4;
@@ -302,11 +356,18 @@ void gui::desktop_draw_panel(DesktopState* ds) {
     Zenith::DateTime dt;
     zenith::gettime(&dt);
 
-    char clock_str[8];
-    snprintf(clock_str, sizeof(clock_str), "%02d:%02d", (int)dt.Hour, (int)dt.Minute);
+    char clock_str[12];
+    if (ds->settings.clock_24h) {
+        snprintf(clock_str, sizeof(clock_str), "%02d:%02d", (int)dt.Hour, (int)dt.Minute);
+    } else {
+        int h12 = (int)dt.Hour % 12;
+        if (h12 == 0) h12 = 12;
+        const char* ampm = dt.Hour < 12 ? "AM" : "PM";
+        snprintf(clock_str, sizeof(clock_str), "%d:%02d %s", h12, (int)dt.Minute, ampm);
+    }
     int clock_w = text_width(clock_str);
     int clock_x = sw - clock_w - 12;
-    int clock_y = (PANEL_HEIGHT - FONT_HEIGHT) / 2;
+    int clock_y = (PANEL_HEIGHT - system_font_height()) / 2;
     draw_text(fb, clock_x, clock_y, clock_str, colors::PANEL_TEXT);
 
     // Date before clock
@@ -314,7 +375,7 @@ void gui::desktop_draw_panel(DesktopState* ds) {
     int month_idx = dt.Month > 0 && dt.Month <= 12 ? dt.Month - 1 : 0;
     snprintf(date_str, sizeof(date_str), "%s %d", month_names[month_idx], (int)dt.Day);
     int date_w = text_width(date_str);
-    int date_x = clock_x - date_w - 16;
+    int date_x = clock_x - date_w - 10;
     draw_text(fb, date_x, clock_y, date_str, colors::PANEL_TEXT);
 
     // Network icon (to the left of the date)
@@ -349,7 +410,7 @@ void gui::desktop_draw_panel(DesktopState* ds) {
 // App Menu (5 items with separator and rounded corners)
 // ============================================================================
 
-static constexpr int MENU_ITEM_COUNT = 9;
+static constexpr int MENU_ITEM_COUNT = 13;
 static constexpr int MENU_W = 220;
 static constexpr int MENU_ITEM_H = 40;
 
@@ -379,8 +440,12 @@ static void desktop_draw_app_menu(DesktopState* ds) {
         { "Calculator",   &ds->icon_calculator },
         { "Text Editor",  &ds->icon_texteditor },
         { "Kernel Log",   &ds->icon_terminal },
+        { "Processes",    &ds->icon_procmgr },
+        { "Mandelbrot",   &ds->icon_mandelbrot },
+        { "Devices",      &ds->icon_devexplorer },
         { "Wikipedia",    &ds->icon_wikipedia },
-        { "About",        &ds->icon_settings },
+        { "DOOM",         &ds->icon_doom },
+        { "Settings",     &ds->icon_settings },
         { "Reboot",       &ds->icon_reboot },
     };
 
@@ -391,7 +456,7 @@ static void desktop_draw_app_menu(DesktopState* ds) {
         int iy = menu_y + 4 + i * MENU_ITEM_H;
 
         // Thin separator lines before utility apps and before Settings
-        if (i == 3 || i == 7) {
+        if (i == 3 || i == 11) {
             int sep_y = iy - 1;
             for (int sx = menu_x + 8; sx < menu_x + MENU_W - 8; sx++)
                 fb.put_pixel(sx, sep_y, colors::BORDER);
@@ -414,7 +479,7 @@ static void desktop_draw_app_menu(DesktopState* ds) {
 
         // Label
         int tx = icon_x + 28;
-        int ty = item_rect.y + (MENU_ITEM_H - FONT_HEIGHT) / 2;
+        int ty = item_rect.y + (MENU_ITEM_H - system_font_height()) / 2;
         draw_text(fb, tx, ty, items[i].label, colors::TEXT_COLOR);
     }
 }
@@ -434,7 +499,7 @@ static void desktop_draw_net_popup(DesktopState* ds) {
 
     int tx = popup_x + 12;
     int ty = popup_y + 10;
-    int line_h = FONT_HEIGHT + 6;
+    int line_h = system_font_height() + 6;
     char line[64];
 
     Zenith::NetCfg& nc = ds->cached_net_cfg;
@@ -645,14 +710,19 @@ void gui::desktop_compose(DesktopState* ds) {
         uint32_t* row = (uint32_t*)((uint8_t*)buf + y * pitch);
         if (y < grad_start) {
             // Panel area - will be overwritten by panel drawing
-            uint32_t px = colors::PANEL_BG.to_pixel();
+            uint32_t px = ds->settings.panel_color.to_pixel();
+            for (int x = 0; x < sw; x++) row[x] = px;
+        } else if (ds->settings.bg_gradient) {
+            int t = y - grad_start;
+            Color top = ds->settings.bg_grad_top;
+            Color bot = ds->settings.bg_grad_bottom;
+            uint8_t r = top.r - (top.r - bot.r) * t / grad_range;
+            uint8_t g = top.g - (top.g - bot.g) * t / grad_range;
+            uint8_t b = top.b - (top.b - bot.b) * t / grad_range;
+            uint32_t px = 0xFF000000 | ((uint32_t)r << 16) | ((uint32_t)g << 8) | b;
             for (int x = 0; x < sw; x++) row[x] = px;
         } else {
-            int t = y - grad_start;
-            uint8_t r = 0xD0 - (0xD0 - 0xA0) * t / grad_range;
-            uint8_t g = 0xD8 - (0xD8 - 0xA8) * t / grad_range;
-            uint8_t b = 0xE8 - (0xE8 - 0xB8) * t / grad_range;
-            uint32_t px = 0xFF000000 | ((uint32_t)r << 16) | ((uint32_t)g << 8) | b;
+            uint32_t px = ds->settings.bg_solid.to_pixel();
             for (int x = 0; x < sw; x++) row[x] = px;
         }
     }
@@ -720,7 +790,7 @@ void gui::desktop_compose(DesktopState* ds) {
             }
 
             int tx = icon_x + 28;
-            int ty = item_r.y + (CTX_ITEM_H - FONT_HEIGHT) / 2;
+            int ty = item_r.y + (CTX_ITEM_H - system_font_height()) / 2;
             draw_text(fb, tx, ty, ctx_items[i].label, colors::TEXT_COLOR);
         }
     }
@@ -836,25 +906,29 @@ void gui::desktop_handle_mouse(DesktopState* ds) {
                     win->saved_frame = win->frame;
                     win->frame = {0, PANEL_HEIGHT, ds->screen_w / 2, ds->screen_h - PANEL_HEIGHT};
                     win->state = WIN_MAXIMIZED;
-                    Rect cr = win->content_rect();
-                    if (cr.w != win->content_w || cr.h != win->content_h) {
-                        if (win->content) zenith::free(win->content);
-                        win->content_w = cr.w;
-                        win->content_h = cr.h;
-                        win->content = (uint32_t*)zenith::alloc(cr.w * cr.h * 4);
-                        zenith::memset(win->content, 0xFF, cr.w * cr.h * 4);
+                    if (!win->external) {
+                        Rect cr = win->content_rect();
+                        if (cr.w != win->content_w || cr.h != win->content_h) {
+                            if (win->content) zenith::free(win->content);
+                            win->content_w = cr.w;
+                            win->content_h = cr.h;
+                            win->content = (uint32_t*)zenith::alloc(cr.w * cr.h * 4);
+                            zenith::memset(win->content, 0xFF, cr.w * cr.h * 4);
+                        }
                     }
                 } else if (mx >= ds->screen_w - 1) {
                     win->saved_frame = win->frame;
                     win->frame = {ds->screen_w / 2, PANEL_HEIGHT, ds->screen_w / 2, ds->screen_h - PANEL_HEIGHT};
                     win->state = WIN_MAXIMIZED;
-                    Rect cr = win->content_rect();
-                    if (cr.w != win->content_w || cr.h != win->content_h) {
-                        if (win->content) zenith::free(win->content);
-                        win->content_w = cr.w;
-                        win->content_h = cr.h;
-                        win->content = (uint32_t*)zenith::alloc(cr.w * cr.h * 4);
-                        zenith::memset(win->content, 0xFF, cr.w * cr.h * 4);
+                    if (!win->external) {
+                        Rect cr = win->content_rect();
+                        if (cr.w != win->content_w || cr.h != win->content_h) {
+                            if (win->content) zenith::free(win->content);
+                            win->content_w = cr.w;
+                            win->content_h = cr.h;
+                            win->content = (uint32_t*)zenith::alloc(cr.w * cr.h * 4);
+                            zenith::memset(win->content, 0xFF, cr.w * cr.h * 4);
+                        }
                     }
                 }
             }
@@ -903,14 +977,16 @@ void gui::desktop_handle_mouse(DesktopState* ds) {
             }
             if (left_released) {
                 win->resizing = false;
-                // Reallocate content buffer if dimensions changed
-                Rect cr = win->content_rect();
-                if (cr.w != win->content_w || cr.h != win->content_h) {
-                    if (win->content) zenith::free(win->content);
-                    win->content_w = cr.w;
-                    win->content_h = cr.h;
-                    win->content = (uint32_t*)zenith::alloc(cr.w * cr.h * 4);
-                    zenith::memset(win->content, 0xFF, cr.w * cr.h * 4);
+                // Reallocate content buffer if dimensions changed (skip for external)
+                if (!win->external) {
+                    Rect cr = win->content_rect();
+                    if (cr.w != win->content_w || cr.h != win->content_h) {
+                        if (win->content) zenith::free(win->content);
+                        win->content_w = cr.w;
+                        win->content_h = cr.h;
+                        win->content = (uint32_t*)zenith::alloc(cr.w * cr.h * 4);
+                        zenith::memset(win->content, 0xFF, cr.w * cr.h * 4);
+                    }
                 }
                 win->dirty = true;
             }
@@ -936,9 +1012,13 @@ void gui::desktop_handle_mouse(DesktopState* ds) {
                 case 3: open_calculator(ds); break;
                 case 4: open_texteditor(ds); break;
                 case 5: open_klog(ds); break;
-                case 6: open_wiki(ds); break;
-                case 7: open_settings(ds); break;
-                case 8: open_reboot_dialog(ds); break;
+                case 6: open_procmgr(ds); break;
+                case 7: open_mandelbrot(ds); break;
+                case 8: open_devexplorer(ds); break;
+                case 9: open_wiki(ds); break;
+                case 10: open_doom(ds); break;
+                case 11: open_settings(ds); break;
+                case 12: open_reboot_dialog(ds); break;
                 }
                 ds->app_menu_open = false;
             }
@@ -1046,13 +1126,16 @@ void gui::desktop_handle_mouse(DesktopState* ds) {
                     win->frame = {0, PANEL_HEIGHT, ds->screen_w, ds->screen_h - PANEL_HEIGHT};
                     win->state = WIN_MAXIMIZED;
                 }
-                Rect cr = win->content_rect();
-                if (cr.w != win->content_w || cr.h != win->content_h) {
-                    if (win->content) zenith::free(win->content);
-                    win->content_w = cr.w;
-                    win->content_h = cr.h;
-                    win->content = (uint32_t*)zenith::alloc(cr.w * cr.h * 4);
-                    zenith::memset(win->content, 0xFF, cr.w * cr.h * 4);
+                // Reallocate content buffer for local windows only
+                if (!win->external) {
+                    Rect cr = win->content_rect();
+                    if (cr.w != win->content_w || cr.h != win->content_h) {
+                        if (win->content) zenith::free(win->content);
+                        win->content_w = cr.w;
+                        win->content_h = cr.h;
+                        win->content = (uint32_t*)zenith::alloc(cr.w * cr.h * 4);
+                        zenith::memset(win->content, 0xFF, cr.w * cr.h * 4);
+                    }
                 }
                 desktop_raise_window(ds, i);
                 return;
@@ -1097,10 +1180,22 @@ void gui::desktop_handle_mouse(DesktopState* ds) {
             if (cr.contains(mx, my)) {
                 desktop_raise_window(ds, i);
                 int new_idx = ds->window_count - 1;
-                if (ds->windows[new_idx].on_mouse) {
+                Window* raised = &ds->windows[new_idx];
+                if (raised->external) {
+                    // Forward mouse event to external window
+                    Zenith::WinEvent wev;
+                    zenith::memset(&wev, 0, sizeof(wev));
+                    wev.type = 1; // mouse
+                    wev.mouse.x = mx - cr.x;
+                    wev.mouse.y = my - cr.y;
+                    wev.mouse.scroll = ev.scroll;
+                    wev.mouse.buttons = buttons;
+                    wev.mouse.prev_buttons = prev;
+                    zenith::win_sendevent(raised->ext_win_id, &wev);
+                } else if (raised->on_mouse) {
                     ev.x = mx;
                     ev.y = my;
-                    ds->windows[new_idx].on_mouse(&ds->windows[new_idx], ev);
+                    raised->on_mouse(raised, ev);
                 }
                 return;
             }
@@ -1120,8 +1215,20 @@ void gui::desktop_handle_mouse(DesktopState* ds) {
     if (ev.scroll != 0 && ds->focused_window >= 0) {
         Window* win = &ds->windows[ds->focused_window];
         Rect cr = win->content_rect();
-        if (cr.contains(mx, my) && win->on_mouse) {
-            win->on_mouse(win, ev);
+        if (cr.contains(mx, my)) {
+            if (win->external) {
+                Zenith::WinEvent wev;
+                zenith::memset(&wev, 0, sizeof(wev));
+                wev.type = 1; // mouse
+                wev.mouse.x = mx - cr.x;
+                wev.mouse.y = my - cr.y;
+                wev.mouse.scroll = ev.scroll;
+                wev.mouse.buttons = buttons;
+                wev.mouse.prev_buttons = prev;
+                zenith::win_sendevent(win->ext_win_id, &wev);
+            } else if (win->on_mouse) {
+                win->on_mouse(win, ev);
+            }
         }
     }
 
@@ -1147,10 +1254,8 @@ void gui::desktop_handle_mouse(DesktopState* ds) {
 }
 
 void gui::desktop_handle_keyboard(DesktopState* ds, const Zenith::KeyEvent& key) {
-    if (!key.pressed) return;
-
-    // Global shortcuts
-    if (key.ctrl && key.alt) {
+    // Global shortcuts (only on key press)
+    if (key.pressed && key.ctrl && key.alt) {
         if (key.ascii == 't' || key.ascii == 'T') {
             open_terminal(ds);
             return;
@@ -1175,13 +1280,117 @@ void gui::desktop_handle_keyboard(DesktopState* ds, const Zenith::KeyEvent& key)
             open_klog(ds);
             return;
         }
+        if (key.ascii == 'd' || key.ascii == 'D') {
+            open_doom(ds);
+            return;
+        }
     }
 
     // Dispatch to focused window
     if (ds->focused_window >= 0 && ds->focused_window < ds->window_count) {
         Window* win = &ds->windows[ds->focused_window];
-        if (win->on_key) {
+        if (win->external) {
+            // Forward key event to external window via syscall
+            Zenith::WinEvent ev;
+            zenith::memset(&ev, 0, sizeof(ev));
+            ev.type = 0; // key
+            ev.key = key;
+            zenith::win_sendevent(win->ext_win_id, &ev);
+        } else if (win->on_key) {
             win->on_key(win, key);
+        }
+    }
+}
+
+// ============================================================================
+// External Window Polling
+// ============================================================================
+
+void desktop_poll_external_windows(DesktopState* ds) {
+    Zenith::WinInfo extWins[8];
+    int extCount = zenith::win_enumerate(extWins, 8);
+
+    // Check for new external windows and map them
+    for (int e = 0; e < extCount; e++) {
+        int extId = extWins[e].id;
+
+        // Check if we already have this window
+        bool found = false;
+        for (int i = 0; i < ds->window_count; i++) {
+            if (ds->windows[i].external && ds->windows[i].ext_win_id == extId) {
+                found = true;
+                // Update dirty flag
+                if (extWins[e].dirty) {
+                    ds->windows[i].dirty = true;
+                }
+                break;
+            }
+        }
+
+        if (!found && ds->window_count < MAX_WINDOWS) {
+            // Map the pixel buffer into our address space
+            uint64_t va = zenith::win_map(extId);
+            if (va == 0) continue;
+
+            int idx = ds->window_count;
+            Window* win = &ds->windows[idx];
+            zenith::memset(win, 0, sizeof(Window));
+
+            zenith::strncpy(win->title, extWins[e].title, MAX_TITLE_LEN);
+            int w = extWins[e].width;
+            int h = extWins[e].height;
+            // Position the window centered-ish
+            int wx = (ds->screen_w - w - 2 * BORDER_WIDTH) / 2 + idx * 30;
+            int wy = PANEL_HEIGHT + 20 + idx * 30;
+            win->frame = {wx, wy, w + 2 * BORDER_WIDTH, h + TITLEBAR_HEIGHT + BORDER_WIDTH};
+            win->state = WIN_NORMAL;
+            win->z_order = idx;
+            win->focused = true;
+            win->dirty = true;
+            win->dragging = false;
+            win->resizing = false;
+            win->saved_frame = win->frame;
+
+            // Point content to the shared pixel buffer
+            win->content = (uint32_t*)va;
+            win->content_w = w;
+            win->content_h = h;
+
+            win->on_draw = nullptr;
+            win->on_mouse = nullptr;
+            win->on_key = nullptr;
+            win->on_close = nullptr;
+            win->on_poll = nullptr;
+            win->app_data = nullptr;
+            win->external = true;
+            win->ext_win_id = extId;
+
+            // Unfocus previous window
+            if (ds->focused_window >= 0 && ds->focused_window < ds->window_count) {
+                ds->windows[ds->focused_window].focused = false;
+            }
+            ds->focused_window = idx;
+            ds->window_count++;
+        }
+    }
+
+    // Check for removed external windows (process exited)
+    for (int i = ds->window_count - 1; i >= 0; i--) {
+        if (!ds->windows[i].external) continue;
+
+        int extId = ds->windows[i].ext_win_id;
+        bool stillExists = false;
+        for (int e = 0; e < extCount; e++) {
+            if (extWins[e].id == extId) {
+                stillExists = true;
+                break;
+            }
+        }
+
+        if (!stillExists) {
+            // Window gone — remove without freeing content (shared memory)
+            ds->windows[i].content = nullptr; // prevent free
+            gui::desktop_close_window(ds, i);
         }
     }
 }
@@ -1198,6 +1407,9 @@ void gui::desktop_run(DesktopState* ds) {
             zenith::getkey(&key);
             desktop_handle_keyboard(ds, key);
         }
+
+        // Poll external windows (discover new, remove dead, update dirty)
+        desktop_poll_external_windows(ds);
 
         // Poll windows that have a poll callback
         for (int i = 0; i < ds->window_count; i++) {

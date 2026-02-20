@@ -64,6 +64,9 @@ struct Window {
     WindowPollCallback  on_poll;
     void* app_data;
 
+    bool external;      // true = shared-memory window from external process
+    int  ext_win_id;    // window server ID (valid when external == true)
+
     Rect titlebar_rect() const {
         return {frame.x, frame.y, frame.w, TITLEBAR_HEIGHT};
     }

@@ -423,6 +423,11 @@ static inline void terminal_feed(TerminalState* t, const char* data, int len) {
 }
 
 static inline void terminal_render(TerminalState* t, uint32_t* pixels, int pw, int ph) {
+    int cell_w = mono_cell_width();
+    int cell_h = mono_cell_height();
+    bool use_ttf = fonts::mono && fonts::mono->valid;
+    GlyphCache* gc = use_ttf ? fonts::mono->get_cache(fonts::TERM_SIZE) : nullptr;
+
     // Fill background
     uint32_t bg_px = colors::TERM_BG.to_pixel();
     int total = pw * ph;
@@ -431,8 +436,8 @@ static inline void terminal_render(TerminalState* t, uint32_t* pixels, int pw, i
     }
 
     // Render each visible cell
-    int visible_rows = ph / FONT_HEIGHT;
-    int visible_cols = pw / FONT_WIDTH;
+    int visible_rows = ph / cell_h;
+    int visible_cols = pw / cell_w;
     if (visible_rows > t->rows) visible_rows = t->rows;
     if (visible_cols > t->cols) visible_cols = t->cols;
 
@@ -441,17 +446,16 @@ static inline void terminal_render(TerminalState* t, uint32_t* pixels, int pw, i
             int idx = r * t->cols + c;
             TermCell& cell = t->cells[idx];
 
-            int px = c * FONT_WIDTH;
-            int py = r * FONT_HEIGHT;
+            int px = c * cell_w;
+            int py = r * cell_h;
 
             uint32_t cell_bg = cell.bg.to_pixel();
-            uint32_t cell_fg = cell.fg.to_pixel();
 
             // Draw cell background
-            for (int fy = 0; fy < FONT_HEIGHT; fy++) {
+            for (int fy = 0; fy < cell_h; fy++) {
                 int dy = py + fy;
                 if (dy >= ph) break;
-                for (int fx = 0; fx < FONT_WIDTH; fx++) {
+                for (int fx = 0; fx < cell_w; fx++) {
                     int dx = px + fx;
                     if (dx >= pw) break;
                     pixels[dy * pw + dx] = cell_bg;
@@ -460,16 +464,23 @@ static inline void terminal_render(TerminalState* t, uint32_t* pixels, int pw, i
 
             // Draw character glyph
             if (cell.ch > 32 || cell.ch < 0) {
-                const uint8_t* glyph = &font_data[(unsigned char)cell.ch * FONT_HEIGHT];
-                for (int fy = 0; fy < FONT_HEIGHT; fy++) {
-                    int dy = py + fy;
-                    if (dy >= ph) break;
-                    uint8_t bits = glyph[fy];
-                    for (int fx = 0; fx < FONT_WIDTH; fx++) {
-                        if (bits & (0x80 >> fx)) {
-                            int dx = px + fx;
-                            if (dx >= pw) break;
-                            pixels[dy * pw + dx] = cell_fg;
+                if (use_ttf) {
+                    int baseline = py + gc->ascent;
+                    fonts::mono->draw_char_to_buffer(pixels, pw, ph,
+                        px, baseline, (unsigned char)cell.ch, cell.fg, gc);
+                } else {
+                    uint32_t cell_fg = cell.fg.to_pixel();
+                    const uint8_t* glyph = &font_data[(unsigned char)cell.ch * FONT_HEIGHT];
+                    for (int fy = 0; fy < FONT_HEIGHT; fy++) {
+                        int dy = py + fy;
+                        if (dy >= ph) break;
+                        uint8_t bits = glyph[fy];
+                        for (int fx = 0; fx < FONT_WIDTH; fx++) {
+                            if (bits & (0x80 >> fx)) {
+                                int dx = px + fx;
+                                if (dx >= pw) break;
+                                pixels[dy * pw + dx] = cell_fg;
+                            }
                         }
                     }
                 }
@@ -479,13 +490,13 @@ static inline void terminal_render(TerminalState* t, uint32_t* pixels, int pw, i
 
     // Draw cursor
     if (t->cursor_visible && t->cursor_x < visible_cols && t->cursor_y < visible_rows) {
-        int cx = t->cursor_x * FONT_WIDTH;
-        int cy = t->cursor_y * FONT_HEIGHT;
+        int cx = t->cursor_x * cell_w;
+        int cy = t->cursor_y * cell_h;
         uint32_t cursor_px = colors::WHITE.to_pixel();
-        for (int fy = 0; fy < FONT_HEIGHT; fy++) {
+        for (int fy = 0; fy < cell_h; fy++) {
             int dy = cy + fy;
             if (dy >= ph) break;
-            for (int fx = 0; fx < FONT_WIDTH; fx++) {
+            for (int fx = 0; fx < cell_w; fx++) {
                 int dx = cx + fx;
                 if (dx >= pw) break;
                 pixels[dy * pw + dx] = cursor_px;
@@ -496,22 +507,80 @@ static inline void terminal_render(TerminalState* t, uint32_t* pixels, int pw, i
             int idx = t->cursor_y * t->cols + t->cursor_x;
             char ch = t->cells[idx].ch;
             if (ch > 32 || ch < 0) {
-                const uint8_t* glyph = &font_data[(unsigned char)ch * FONT_HEIGHT];
-                uint32_t black_px = colors::BLACK.to_pixel();
-                for (int fy = 0; fy < FONT_HEIGHT; fy++) {
-                    int dy = cy + fy;
-                    if (dy >= ph) break;
-                    uint8_t bits = glyph[fy];
-                    for (int fx = 0; fx < FONT_WIDTH; fx++) {
-                        if (bits & (0x80 >> fx)) {
-                            int dx = cx + fx;
-                            if (dx >= pw) break;
-                            pixels[dy * pw + dx] = black_px;
+                if (use_ttf) {
+                    int baseline = cy + gc->ascent;
+                    fonts::mono->draw_char_to_buffer(pixels, pw, ph,
+                        cx, baseline, (unsigned char)ch, colors::BLACK, gc);
+                } else {
+                    const uint8_t* glyph = &font_data[(unsigned char)ch * FONT_HEIGHT];
+                    uint32_t black_px = colors::BLACK.to_pixel();
+                    for (int fy = 0; fy < FONT_HEIGHT; fy++) {
+                        int dy = cy + fy;
+                        if (dy >= ph) break;
+                        uint8_t bits = glyph[fy];
+                        for (int fx = 0; fx < FONT_WIDTH; fx++) {
+                            if (bits & (0x80 >> fx)) {
+                                int dx = cx + fx;
+                                if (dx >= pw) break;
+                                pixels[dy * pw + dx] = black_px;
+                            }
                         }
                     }
                 }
             }
         }
+    }
+}
+
+static inline void terminal_resize(TerminalState* t, int new_cols, int new_rows) {
+    if (new_cols == t->cols && new_rows == t->rows) return;
+    if (new_cols < 1 || new_rows < 1) return;
+
+    int new_total = new_cols * new_rows;
+    TermCell* new_cells = (TermCell*)zenith::alloc(new_total * sizeof(TermCell));
+    TermCell* new_alt = (TermCell*)zenith::alloc(new_total * sizeof(TermCell));
+
+    // Clear new buffers
+    for (int i = 0; i < new_total; i++) {
+        new_cells[i] = {' ', colors::TERM_FG, colors::TERM_BG};
+        new_alt[i] = {' ', colors::TERM_FG, colors::TERM_BG};
+    }
+
+    // Copy existing content (as much as fits)
+    int copy_rows = t->rows < new_rows ? t->rows : new_rows;
+    int copy_cols = t->cols < new_cols ? t->cols : new_cols;
+
+    // If cursor is beyond the new grid, scroll content up to keep cursor visible
+    int row_offset = 0;
+    if (t->cursor_y >= new_rows) {
+        row_offset = t->cursor_y - new_rows + 1;
+    }
+
+    for (int r = 0; r < copy_rows && (r + row_offset) < t->rows; r++) {
+        for (int c = 0; c < copy_cols; c++) {
+            new_cells[r * new_cols + c] = t->cells[(r + row_offset) * t->cols + c];
+        }
+    }
+
+    if (t->cells) zenith::mfree(t->cells);
+    if (t->alt_cells) zenith::mfree(t->alt_cells);
+
+    t->cells = new_cells;
+    t->alt_cells = new_alt;
+
+    int old_cols = t->cols;
+    t->cols = new_cols;
+    t->rows = new_rows;
+
+    // Adjust cursor position
+    t->cursor_y -= row_offset;
+    if (t->cursor_x >= new_cols) t->cursor_x = new_cols - 1;
+    if (t->cursor_y >= new_rows) t->cursor_y = new_rows - 1;
+    if (t->cursor_y < 0) t->cursor_y = 0;
+
+    // Notify child process of new terminal size
+    if (t->child_pid > 0) {
+        zenith::childio_settermsz(t->child_pid, new_cols, new_rows);
     }
 }
 

@@ -18,6 +18,25 @@ namespace gui {
 static constexpr int MAX_WINDOWS = 8;
 static constexpr int PANEL_HEIGHT = 32;
 
+struct DesktopSettings {
+    // Background
+    bool bg_gradient;       // true = gradient, false = solid
+    Color bg_solid;         // solid background color
+    Color bg_grad_top;      // gradient top color
+    Color bg_grad_bottom;   // gradient bottom color
+
+    // Panel
+    Color panel_color;      // panel background color
+
+    // Accent
+    Color accent_color;     // buttons, highlights, active indicators
+
+    // Display
+    bool show_shadows;      // window shadows on/off
+    bool clock_24h;         // 24-hour clock format
+    int ui_scale;           // 0=Small, 1=Default, 2=Large
+};
+
 struct DesktopState {
     Framebuffer fb;
     Window windows[MAX_WINDOWS];
@@ -54,6 +73,11 @@ struct DesktopState {
     SvgIcon icon_settings;
     SvgIcon icon_reboot;
 
+    SvgIcon icon_doom;
+    SvgIcon icon_procmgr;
+    SvgIcon icon_mandelbrot;
+    SvgIcon icon_devexplorer;
+
     bool ctx_menu_open;
     int ctx_menu_x, ctx_menu_y;
 
@@ -63,6 +87,8 @@ struct DesktopState {
     Rect net_icon_rect;
 
     int screen_w, screen_h;
+
+    DesktopSettings settings;
 };
 
 // Forward declarations - implemented in main.cpp
