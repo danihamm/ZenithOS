@@ -36,6 +36,20 @@ ICONS=(
     "mimetypes/symbolic/application-x-executable-symbolic.svg"
     "devices/symbolic/computer-symbolic.svg"
     "devices/symbolic/network-wired-symbolic.svg"
+    "apps/symbolic/web-browser-symbolic.svg"
+    # Scalable (colorful) icons for app menu
+    "apps/scalable/utilities-terminal.svg"
+    "apps/scalable/system-file-manager.svg"
+    "apps/scalable/preferences-desktop-apps.svg"
+    "apps/scalable/accessories-calculator.svg"
+    "apps/scalable/accessories-text-editor.svg"
+    "apps/scalable/web-browser.svg"
+    "places/scalable/folder.svg"
+    "places/scalable/user-home.svg"
+    "devices/scalable/computer.svg"
+    "devices/scalable/network-wired.svg"
+    "mimetypes/scalable/text-x-generic.svg"
+    "mimetypes/scalable/application-x-executable.svg"
 )
 
 copied=0

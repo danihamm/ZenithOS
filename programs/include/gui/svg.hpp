@@ -31,10 +31,51 @@ struct SvgEdge {
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
-static constexpr int SVG_MAX_EDGES     = 4096;
-static constexpr int SVG_MAX_PATH_LEN  = 4096;
+static constexpr int SVG_MAX_EDGES     = 8192;
+static constexpr int SVG_MAX_PATH_LEN  = 8192;
 static constexpr int SVG_MAX_FILE_SIZE = 32768;
 static constexpr int SVG_BEZIER_STEPS  = 8;
+static constexpr int SVG_MAX_GRADIENTS = 8;
+
+// Gradient color table — stores first stop color for url(#id) resolution
+struct SvgGradient {
+    char id[32];
+    Color color;   // first stop-color
+};
+
+struct SvgGradientTable {
+    SvgGradient entries[SVG_MAX_GRADIENTS];
+    int count;
+
+    void clear() { count = 0; }
+
+    void add(const char* id, Color c) {
+        if (count >= SVG_MAX_GRADIENTS) return;
+        int i = 0;
+        while (id[i] && i < 31) { entries[count].id[i] = id[i]; i++; }
+        entries[count].id[i] = '\0';
+        entries[count].color = c;
+        count++;
+    }
+
+    // Look up gradient by id. Returns true if found.
+    bool lookup(const char* id, Color* out) const {
+        for (int i = 0; i < count; i++) {
+            const char* a = entries[i].id;
+            const char* b = id;
+            bool match = true;
+            while (*a && *b) {
+                if (*a != *b) { match = false; break; }
+                a++; b++;
+            }
+            if (match && *a == '\0' && *b == '\0') {
+                *out = entries[i].color;
+                return true;
+            }
+        }
+        return false;
+    }
+};
 
 // ---------------------------------------------------------------------------
 // Fixed-point number parser (NO floating point)
@@ -196,7 +237,7 @@ inline int svg_parse_int(const char* s) {
     return v;
 }
 
-// Parse a hex color like "#5c616c" into a Color.
+// Parse a hex color like "#5c616c" or "#fff" into a Color.
 inline Color svg_parse_hex_color(const char* s) {
     if (*s == '#') ++s;
     auto hexval = [](char c) -> uint8_t {
@@ -205,6 +246,20 @@ inline Color svg_parse_hex_color(const char* s) {
         if (c >= 'A' && c <= 'F') return 10 + (c - 'A');
         return 0;
     };
+    // Count hex digits
+    int len = 0;
+    for (const char* p = s; *p; ++p) {
+        if ((*p >= '0' && *p <= '9') || (*p >= 'a' && *p <= 'f') || (*p >= 'A' && *p <= 'F'))
+            ++len;
+        else break;
+    }
+    if (len == 3) {
+        // 3-digit shorthand: #rgb → #rrggbb
+        uint8_t r = hexval(s[0]); r = (r << 4) | r;
+        uint8_t g = hexval(s[1]); g = (g << 4) | g;
+        uint8_t b = hexval(s[2]); b = (b << 4) | b;
+        return Color::from_rgb(r, g, b);
+    }
     uint8_t r = (hexval(s[0]) << 4) | hexval(s[1]);
     uint8_t g = (hexval(s[2]) << 4) | hexval(s[3]);
     uint8_t b = (hexval(s[4]) << 4) | hexval(s[5]);
@@ -224,6 +279,8 @@ struct SvgEdgeList {
         count = 0;
         capacity = cap;
     }
+
+    void clear() { count = 0; }
 
     void add(fixed_t x0, fixed_t y0, fixed_t x1, fixed_t y1) {
         if (count >= capacity) return;
@@ -759,6 +816,160 @@ inline void svg_rasterize(const SvgEdgeList& el, uint32_t* pixels, int w, int h,
 }
 
 // ---------------------------------------------------------------------------
+// Resolve a fill value that might be url(#id) against gradient table
+// Returns: 1 = resolved, 0 = not a url() ref, -1 = fill="none"
+// ---------------------------------------------------------------------------
+inline int svg_resolve_fill_value(const char* val, Color* out_color, const SvgGradientTable* grads) {
+    if (svg_strncmp(val, "none", 4)) return -1;
+    if (*val == '#') { *out_color = svg_parse_hex_color(val); return 1; }
+    if (grads && svg_strncmp(val, "url(#", 5)) {
+        // Extract id from url(#id)
+        const char* id_start = val + 5;
+        char id_buf[32];
+        int i = 0;
+        while (id_start[i] && id_start[i] != ')' && i < 31) {
+            id_buf[i] = id_start[i];
+            i++;
+        }
+        id_buf[i] = '\0';
+        if (grads->lookup(id_buf, out_color)) return 1;
+    }
+    return 0; // currentColor or unresolved
+}
+
+// ---------------------------------------------------------------------------
+// Per-element fill color extraction
+// Returns: 1 = color found in out_color, 0 = use default, -1 = fill="none"
+// ---------------------------------------------------------------------------
+inline int svg_get_element_fill(const char* elem, int elemLen, Color* out_color,
+                                const SvgGradientTable* grads = nullptr) {
+    char buf[128];
+
+    // Check style="..." first (higher CSS priority)
+    int sLen = svg_get_attr(elem, elemLen, " style", buf, sizeof(buf));
+    if (sLen > 0) {
+        // Search for "fill:" that isn't part of "fill-rule:" or "fill-opacity:"
+        const char* fp = svg_strstr(buf, sLen, "fill:");
+        if (fp) {
+            // Verify this is standalone "fill:" not "-fill:" or similar
+            if (fp > buf && *(fp - 1) != ';' && *(fp - 1) != ' ' && *(fp - 1) != '\t') {
+                // Part of another property name, skip
+            } else {
+                fp += 5;
+                while (*fp == ' ') ++fp;
+                return svg_resolve_fill_value(fp, out_color, grads);
+            }
+        }
+    }
+
+    // Check fill="..." attribute
+    int fLen = svg_get_attr(elem, elemLen, " fill", buf, sizeof(buf));
+    if (fLen > 0) {
+        return svg_resolve_fill_value(buf, out_color, grads);
+    }
+
+    return 0; // no fill specified
+}
+
+// ---------------------------------------------------------------------------
+// Per-element opacity (0-255)
+// ---------------------------------------------------------------------------
+inline int svg_get_element_opacity(const char* elem, int elemLen) {
+    char buf[32];
+    if (svg_get_attr(elem, elemLen, " opacity", buf, sizeof(buf)) > 0) {
+        fixed_t val;
+        svg_parse_fixed(buf, &val);
+        int alpha = (int)(((int64_t)val * 255) >> 16);
+        if (alpha < 0) alpha = 0;
+        if (alpha > 255) alpha = 255;
+        return alpha;
+    }
+    return 255;
+}
+
+// ---------------------------------------------------------------------------
+// Check if element references a filter (shadow/blur layers)
+// ---------------------------------------------------------------------------
+inline bool svg_element_has_filter(const char* elem, int elemLen) {
+    char buf[64];
+    return svg_get_attr(elem, elemLen, " filter", buf, sizeof(buf)) > 0;
+}
+
+// ---------------------------------------------------------------------------
+// Scanline rasterizer with alpha blending (for multi-color SVGs)
+// ---------------------------------------------------------------------------
+inline void svg_rasterize_blend(const SvgEdgeList& el, uint32_t* pixels, int w, int h,
+                                uint32_t fill, int alpha) {
+    if (el.count == 0) return;
+
+    int maxIsect = el.count + 16;
+    fixed_t* isect = (fixed_t*)zenith::alloc(maxIsect * sizeof(fixed_t));
+
+    uint32_t fr = (fill >> 16) & 0xFF;
+    uint32_t fg = (fill >> 8) & 0xFF;
+    uint32_t fb = fill & 0xFF;
+
+    for (int y = 0; y < h; ++y) {
+        fixed_t scanY = int_to_fixed(y) + (1 << 15);
+        int isectCount = 0;
+
+        for (int i = 0; i < el.count; ++i) {
+            const SvgEdge& e = el.edges[i];
+            fixed_t ey0 = e.y0, ey1 = e.y1;
+            fixed_t emin = ey0 < ey1 ? ey0 : ey1;
+            fixed_t emax = ey0 > ey1 ? ey0 : ey1;
+            if (scanY < emin || scanY >= emax) continue;
+            fixed_t dy = ey1 - ey0;
+            if (dy == 0) continue;
+            fixed_t dx = e.x1 - e.x0;
+            fixed_t t_num = scanY - ey0;
+            fixed_t x_int = e.x0 + (int32_t)(((int64_t)dx * t_num) / dy);
+            if (isectCount < maxIsect)
+                isect[isectCount++] = x_int;
+        }
+
+        for (int i = 1; i < isectCount; ++i) {
+            fixed_t key = isect[i];
+            int j = i - 1;
+            while (j >= 0 && isect[j] > key) {
+                isect[j + 1] = isect[j];
+                --j;
+            }
+            isect[j + 1] = key;
+        }
+
+        for (int i = 0; i + 1 < isectCount; i += 2) {
+            int x0 = fixed_to_int(isect[i]);
+            int x1 = fixed_to_int(isect[i + 1]);
+            if (x0 < 0) x0 = 0;
+            if (x1 > w) x1 = w;
+
+            if (alpha >= 255) {
+                for (int x = x0; x < x1; ++x)
+                    pixels[y * w + x] = fill;
+            } else {
+                uint32_t sa = (uint32_t)alpha;
+                uint32_t inv_sa = 255 - sa;
+                for (int x = x0; x < x1; ++x) {
+                    uint32_t dst = pixels[y * w + x];
+                    uint32_t da = (dst >> 24) & 0xFF;
+                    uint32_t dr = (dst >> 16) & 0xFF;
+                    uint32_t dg = (dst >> 8) & 0xFF;
+                    uint32_t db = dst & 0xFF;
+                    uint32_t out_a = sa + (da * inv_sa + 127) / 255;
+                    uint32_t rr = (fr * sa + dr * inv_sa + 128) / 255;
+                    uint32_t gg = (fg * sa + dg * inv_sa + 128) / 255;
+                    uint32_t bb = (fb * sa + db * inv_sa + 128) / 255;
+                    pixels[y * w + x] = (out_a << 24) | (rr << 16) | (gg << 8) | bb;
+                }
+            }
+        }
+    }
+
+    zenith::free(isect);
+}
+
+// ---------------------------------------------------------------------------
 // SVG document parser: extract paths, circles, rects and rasterize
 // ---------------------------------------------------------------------------
 inline SvgIcon svg_render(const char* svg_data, int svg_len, int target_w, int target_h, Color fill_color) {
@@ -768,8 +979,6 @@ inline SvgIcon svg_render(const char* svg_data, int svg_len, int target_w, int t
     icon.pixels = (uint32_t*)zenith::alloc(target_w * target_h * sizeof(uint32_t));
     // Clear to transparent
     svg_memset(icon.pixels, 0, target_w * target_h * sizeof(uint32_t));
-
-    uint32_t fill_px = fill_color.to_pixel();
 
     // Parse SVG dimensions: width and height
     int svg_w = 16, svg_h = 16;
@@ -818,11 +1027,55 @@ inline SvgIcon svg_render(const char* svg_data, int svg_len, int target_w, int t
     fixed_t scale_x = vb_w > 0 ? fixed_div(int_to_fixed(target_w), vb_w) : int_to_fixed(1);
     fixed_t scale_y = vb_h > 0 ? fixed_div(int_to_fixed(target_h), vb_h) : int_to_fixed(1);
 
-    // Edge list
+    // Pre-parse gradient definitions from <defs> for url(#id) fill resolution
+    SvgGradientTable grads;
+    grads.clear();
+    {
+        const char* dp = svg_data;
+        const char* dend = svg_data + svg_len;
+        while (dp < dend) {
+            const char* gp = svg_strstr(dp, (int)(dend - dp), "<linearGradient");
+            if (!gp) {
+                gp = svg_strstr(dp, (int)(dend - dp), "<radialGradient");
+            }
+            if (!gp) break;
+
+            // Find end of gradient block (</linearGradient> or </radialGradient>)
+            const char* gend = svg_strstr(gp, (int)(dend - gp), "</linearGradient>");
+            if (!gend) gend = svg_strstr(gp, (int)(dend - gp), "</radialGradient>");
+            if (!gend) gend = svg_strstr(gp, (int)(dend - gp), "/>");
+            if (!gend) break;
+
+            // Extract gradient id
+            int gtag_end = 0;
+            while (gp + gtag_end < dend && gp[gtag_end] != '>') ++gtag_end;
+            char grad_id[32];
+            int id_len = svg_get_attr(gp, gtag_end + 1, " id", grad_id, sizeof(grad_id));
+
+            if (id_len > 0) {
+                // Find first <stop and extract stop-color
+                const char* stop = svg_strstr(gp, (int)(gend - gp), "<stop");
+                if (stop) {
+                    int stop_end = 0;
+                    while (stop + stop_end < dend && stop[stop_end] != '>') ++stop_end;
+                    char sc_buf[32];
+                    if (svg_get_attr(stop, stop_end + 1, " stop-color", sc_buf, sizeof(sc_buf)) > 0) {
+                        if (sc_buf[0] == '#') {
+                            grads.add(grad_id, svg_parse_hex_color(sc_buf));
+                        }
+                    }
+                }
+            }
+            dp = gend + 1;
+        }
+    }
+
+    // Shared edge list (cleared per element for multi-color support)
     SvgEdgeList el;
     el.init(SVG_MAX_EDGES);
 
-    // Scan for <path, <circle, <rect elements
+    // Scan for <path, <circle, <rect elements — rasterize each individually
+    // Skip elements inside <defs> blocks (they define reusable items, not rendered directly)
     const char* p = svg_data;
     const char* end = svg_data + svg_len;
 
@@ -833,20 +1086,46 @@ inline SvgIcon svg_render(const char* svg_data, int svg_len, int target_w, int t
 
         int remaining = (int)(end - p);
 
+        // Skip <defs>...</defs> blocks entirely
+        if (remaining > 5 && svg_strncmp(p, "<defs", 5) && (svg_char_is_ws(p[5]) || p[5] == '>')) {
+            const char* defs_end = svg_strstr(p, remaining, "</defs>");
+            if (defs_end) {
+                p = defs_end + 7; // skip past </defs>
+            } else {
+                p += 5;
+            }
+            continue;
+        }
+
         // Check for <path
         if (remaining > 5 && svg_strncmp(p, "<path", 5) && (svg_char_is_ws(p[5]) || p[5] == '/')) {
-            // Find end of this element
             const char* elem_start = p;
             const char* elem_end = p;
             while (elem_end < end && *elem_end != '>') ++elem_end;
-            if (elem_end < end) ++elem_end; // include '>'
+            if (elem_end < end) ++elem_end;
             int elem_len = (int)(elem_end - elem_start);
 
-            // Extract d attribute
+            // Skip filter-referenced elements (shadow/blur layers)
+            if (svg_element_has_filter(elem_start, elem_len)) {
+                p = elem_end;
+                continue;
+            }
+
+            // Determine fill color for this element
+            Color elem_color = fill_color;
+            int fillResult = svg_get_element_fill(elem_start, elem_len, &elem_color, &grads);
+            if (fillResult == -1) { p = elem_end; continue; } // fill="none"
+
+            int alpha = svg_get_element_opacity(elem_start, elem_len);
+
+            // Extract and rasterize path
             char d_buf[SVG_MAX_PATH_LEN];
             int d_len = svg_get_attr(elem_start, elem_len, " d", d_buf, SVG_MAX_PATH_LEN);
             if (d_len > 0) {
+                el.clear();
                 svg_path_to_edges(el, d_buf, d_len, scale_x, scale_y, vb_x, vb_y);
+                if (el.count > 0)
+                    svg_rasterize_blend(el, icon.pixels, target_w, target_h, elem_color.to_pixel(), alpha);
             }
 
             p = elem_end;
@@ -861,6 +1140,17 @@ inline SvgIcon svg_render(const char* svg_data, int svg_len, int target_w, int t
             if (elem_end < end) ++elem_end;
             int elem_len = (int)(elem_end - elem_start);
 
+            if (svg_element_has_filter(elem_start, elem_len)) {
+                p = elem_end;
+                continue;
+            }
+
+            Color elem_color = fill_color;
+            int fillResult = svg_get_element_fill(elem_start, elem_len, &elem_color, &grads);
+            if (fillResult == -1) { p = elem_end; continue; }
+
+            int alpha = svg_get_element_opacity(elem_start, elem_len);
+
             char attr_buf[32];
             fixed_t cx = 0, cy = 0, r = 0;
             if (svg_get_attr(elem_start, elem_len, " cx", attr_buf, sizeof(attr_buf)) > 0)
@@ -870,15 +1160,16 @@ inline SvgIcon svg_render(const char* svg_data, int svg_len, int target_w, int t
             if (svg_get_attr(elem_start, elem_len, " r", attr_buf, sizeof(attr_buf)) > 0)
                 svg_parse_fixed(attr_buf, &r);
 
-            // Scale to target coordinates
             fixed_t scx = fixed_mul(cx - vb_x, scale_x);
             fixed_t scy = fixed_mul(cy - vb_y, scale_y);
             fixed_t srx = fixed_mul(r, scale_x);
             fixed_t sry = fixed_mul(r, scale_y);
-            // Use average of scaled radii
             fixed_t sr = (srx + sry) >> 1;
 
+            el.clear();
             svg_circle_edges(el, scx, scy, sr);
+            if (el.count > 0)
+                svg_rasterize_blend(el, icon.pixels, target_w, target_h, elem_color.to_pixel(), alpha);
 
             p = elem_end;
             continue;
@@ -891,6 +1182,17 @@ inline SvgIcon svg_render(const char* svg_data, int svg_len, int target_w, int t
             while (elem_end < end && *elem_end != '>') ++elem_end;
             if (elem_end < end) ++elem_end;
             int elem_len = (int)(elem_end - elem_start);
+
+            if (svg_element_has_filter(elem_start, elem_len)) {
+                p = elem_end;
+                continue;
+            }
+
+            Color elem_color = fill_color;
+            int fillResult = svg_get_element_fill(elem_start, elem_len, &elem_color, &grads);
+            if (fillResult == -1) { p = elem_end; continue; }
+
+            int alpha = svg_get_element_opacity(elem_start, elem_len);
 
             char attr_buf[32];
             fixed_t rx_val = 0, ry_val = 0, rw = 0, rh = 0, rrx = 0, rry = 0;
@@ -908,7 +1210,6 @@ inline SvgIcon svg_render(const char* svg_data, int svg_len, int target_w, int t
             if (svg_get_attr(elem_start, elem_len, " ry", attr_buf, sizeof(attr_buf)) > 0)
                 svg_parse_fixed(attr_buf, &rry);
 
-            // Scale all to target pixel space
             fixed_t sx = fixed_mul(rx_val - vb_x, scale_x);
             fixed_t sy = fixed_mul(ry_val - vb_y, scale_y);
             fixed_t sw = fixed_mul(rw, scale_x);
@@ -916,18 +1217,16 @@ inline SvgIcon svg_render(const char* svg_data, int svg_len, int target_w, int t
             fixed_t srx = fixed_mul(rrx, scale_x);
             fixed_t sry = fixed_mul(rry, scale_y);
 
+            el.clear();
             svg_rect_edges(el, sx, sy, sw, sh, srx, sry);
+            if (el.count > 0)
+                svg_rasterize_blend(el, icon.pixels, target_w, target_h, elem_color.to_pixel(), alpha);
 
             p = elem_end;
             continue;
         }
 
         ++p;
-    }
-
-    // Rasterize all accumulated edges
-    if (el.count > 0) {
-        svg_rasterize(el, icon.pixels, target_w, target_h, fill_px);
     }
 
     zenith::free(el.edges);
@@ -954,9 +1253,57 @@ inline SvgIcon svg_load(const char* vfs_path, int target_w, int target_h, Color 
     zenith::close(fd);
     buf[size] = '\0';
 
-    SvgIcon icon = svg_render(buf, (int)size, target_w, target_h, fill_color);
+    // 4x supersampling: render at 4x resolution, then downsample with box filter
+    static constexpr int SS = 4;
+    int hi_w = target_w * SS;
+    int hi_h = target_h * SS;
+
+    SvgIcon hi = svg_render(buf, (int)size, hi_w, hi_h, fill_color);
     zenith::free(buf);
-    return icon;
+
+    if (!hi.pixels) return {nullptr, 0, 0};
+
+    // Allocate final icon at target resolution
+    uint32_t* out = (uint32_t*)zenith::alloc(target_w * target_h * 4);
+    for (int i = 0; i < target_w * target_h; i++) out[i] = 0;
+
+    // Downsample: average each SSxSS block using premultiplied alpha
+    for (int dy = 0; dy < target_h; dy++) {
+        for (int dx = 0; dx < target_w; dx++) {
+            uint32_t sum_a = 0, sum_pr = 0, sum_pg = 0, sum_pb = 0;
+            for (int sy = 0; sy < SS; sy++) {
+                for (int sx = 0; sx < SS; sx++) {
+                    uint32_t px = hi.pixels[(dy * SS + sy) * hi_w + (dx * SS + sx)];
+                    uint32_t a = (px >> 24) & 0xFF;
+                    uint32_t r = (px >> 16) & 0xFF;
+                    uint32_t g = (px >>  8) & 0xFF;
+                    uint32_t b =  px        & 0xFF;
+                    // Premultiply before averaging (rasterizer outputs straight alpha)
+                    sum_a  += a;
+                    sum_pr += r * a;
+                    sum_pg += g * a;
+                    sum_pb += b * a;
+                }
+            }
+            uint32_t avg_a = sum_a / (SS * SS);
+
+            // Un-premultiply for final straight-alpha output
+            uint32_t avg_r = 0, avg_g = 0, avg_b = 0;
+            if (sum_a > 0) {
+                avg_r = sum_pr / sum_a;
+                avg_g = sum_pg / sum_a;
+                avg_b = sum_pb / sum_a;
+                if (avg_r > 255) avg_r = 255;
+                if (avg_g > 255) avg_g = 255;
+                if (avg_b > 255) avg_b = 255;
+            }
+
+            out[dy * target_w + dx] = (avg_a << 24) | (avg_r << 16) | (avg_g << 8) | avg_b;
+        }
+    }
+
+    zenith::free(hi.pixels);
+    return {out, target_w, target_h};
 }
 
 // ---------------------------------------------------------------------------

@@ -248,3 +248,4 @@ void open_calculator(DesktopState* ds);
 void open_texteditor(DesktopState* ds);
 void open_texteditor_with_file(DesktopState* ds, const char* path);
 void open_klog(DesktopState* ds);
+void open_wiki(DesktopState* ds);

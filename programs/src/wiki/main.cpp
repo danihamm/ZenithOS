@@ -25,7 +25,7 @@ static const char WIKI_HOST[] = "en.wikipedia.org";
 static constexpr int MAX_LINES = 4096;
 static constexpr int MAX_SEARCH_RESULTS = 10;
 
-enum Mode { MODE_SUMMARY, MODE_FULL, MODE_SEARCH };
+enum Mode { MODE_SUMMARY, MODE_FULL, MODE_SEARCH, MODE_DUMP };
 enum LineType { LINE_BLANK, LINE_TITLE, LINE_DESC, LINE_SECTION, LINE_BODY };
 
 struct WikiLine {
@@ -1002,6 +1002,9 @@ extern "C" void _start() {
     } else if (arg[0] == '-' && arg[1] == 's' && (arg[2] == ' ' || arg[2] == '\0')) {
         mode = MODE_SEARCH;
         arg = skip_spaces(arg + 2);
+    } else if (arg[0] == '-' && arg[1] == 'd' && (arg[2] == ' ' || arg[2] == '\0')) {
+        mode = MODE_DUMP;
+        arg = skip_spaces(arg + 2);
     }
 
     if (*arg == '\0') {
@@ -1017,16 +1020,19 @@ extern "C" void _start() {
     query[qlen] = '\0';
 
     // Initialize: resolve DNS and load certs
-    zenith::print("\033[1;33mConnecting to Wikipedia...\033[0m\n");
+    if (mode != MODE_DUMP)
+        zenith::print("\033[1;33mConnecting to Wikipedia...\033[0m\n");
 
     g_serverIp = zenith::resolve(WIKI_HOST);
     if (g_serverIp == 0) {
+        if (mode == MODE_DUMP) { zenith::print("\x01"); zenith::sleep_ms(100); zenith::exit(1); }
         zenith::print("\033[1;31mError:\033[0m could not resolve en.wikipedia.org\n");
         zenith::exit(1);
     }
 
     g_tas = load_trust_anchors();
     if (g_tas.count == 0) {
+        if (mode == MODE_DUMP) { zenith::print("\x01"); zenith::sleep_ms(100); zenith::exit(1); }
         zenith::print("\033[1;31mError:\033[0m no CA certificates loaded\n");
         zenith::exit(1);
     }
@@ -1040,7 +1046,56 @@ extern "C" void _start() {
         zenith::exit(1);
     }
 
-    if (mode == MODE_SEARCH) {
+    if (mode == MODE_DUMP) {
+        // ---- Dump mode: output raw JSON body for desktop GUI ----
+        static char path[2048], encoded[1024];
+        url_encode_title(query, encoded, sizeof(encoded));
+        snprintf(path, sizeof(path),
+            "/w/api.php?action=query&format=json&formatversion=2"
+            "&prop=extracts&explaintext=1&titles=%s", encoded);
+
+        int respLen = wiki_fetch(path, respBuf, RESP_MAX);
+        if (respLen <= 0) {
+            zenith::print("\x01");  // error sentinel
+            zenith::sleep_ms(100);
+            zenith::exit(1);
+        }
+        respBuf[respLen] = '\0';
+
+        int headerEnd = find_header_end(respBuf, respLen);
+        if (headerEnd < 0) {
+            zenith::print("\x01");
+            zenith::sleep_ms(100);
+            zenith::exit(1);
+        }
+
+        int statusCode = parse_status_code(respBuf, headerEnd);
+        if (statusCode == 404) {
+            zenith::print("\x01");
+            zenith::sleep_ms(100);
+            zenith::exit(1);
+        }
+
+        // Output raw JSON body in chunks to avoid overflowing
+        // the 4KB kernel ring buffer (parent polls at ~60fps)
+        const char* body = respBuf + headerEnd;
+        int bodyLen = respLen - headerEnd;
+        static char chunk[2049];
+        int sent = 0;
+        while (sent < bodyLen) {
+            int n = bodyLen - sent;
+            if (n > 2048) n = 2048;
+            for (int ci = 0; ci < n; ci++) chunk[ci] = body[sent + ci];
+            chunk[n] = '\0';
+            zenith::print(chunk);
+            sent += n;
+            if (sent < bodyLen) zenith::sleep_ms(20);
+        }
+        zenith::putchar('\x04');  // EOT sentinel
+        // Brief delay so parent can drain the ring buffer before we exit
+        zenith::sleep_ms(100);
+        zenith::exit(0);
+    } else if (mode == MODE_SEARCH) {
         // ---- Search mode ----
         static char path[2048], encoded[1024];
         url_encode_query(query, encoded, sizeof(encoded));

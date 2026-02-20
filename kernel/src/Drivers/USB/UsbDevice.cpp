@@ -13,8 +13,27 @@
 #include <Memory/HHDM.hpp>
 #include <Memory/PageFrameAllocator.hpp>
 #include <Libraries/Memory.hpp>
+#include <Timekeeping/ApicTimer.hpp>
 
 using namespace Kt;
+
+static void BusyWaitMs(uint64_t ms) {
+    uint64_t flags;
+    asm volatile("pushfq; pop %0" : "=r"(flags));
+    if (flags & (1 << 9)) {
+        // Interrupts enabled — use timer-based delay
+        uint64_t start = Timekeeping::GetMilliseconds();
+        while (Timekeeping::GetMilliseconds() - start < ms) {
+            asm volatile("pause" ::: "memory");
+        }
+    } else {
+        // Interrupts disabled (e.g. timer tick context) — use I/O port delay
+        // Each outb to port 0x80 takes ~1µs on x86
+        for (uint64_t i = 0; i < ms * 1000; i++) {
+            asm volatile("outb %%al, $0x80" ::: "memory");
+        }
+    }
+}
 
 // Access xHCI internal state needed during enumeration
 namespace Drivers::USB::Xhci {
@@ -163,16 +182,99 @@ namespace Drivers::USB::UsbDevice {
         inputCtx->EP[0].Field2 = 8;
 
         // -----------------------------------------------------------------
-        // Step 4: Address Device command
+        // Step 4a: Address Device (BSR=1) — initialize slot without SET_ADDRESS
         // -----------------------------------------------------------------
         Xhci::TRB addrTrb = {};
         uint64_t inputCtxPhys = Memory::SubHHDM(inputCtx);
         addrTrb.Parameter0 = (uint32_t)(inputCtxPhys & 0xFFFFFFFF);
         addrTrb.Parameter1 = (uint32_t)(inputCtxPhys >> 32);
         addrTrb.Control    = (Xhci::TRB_ADDRESS_DEVICE << Xhci::TRB_TYPE_SHIFT)
+                           | Xhci::TRB_BSR
                            | ((uint32_t)slotId << 24);
 
         cc = Xhci::SendCommand(addrTrb);
+        if (cc != Xhci::CC_SUCCESS) {
+            KernelLogStream(ERROR, "USB") << "Address Device (BSR=1) failed, slot="
+                << (uint64_t)slotId << " cc=" << (uint64_t)cc;
+            dev->Active = false;
+            return 0;
+        }
+
+        KernelLogStream(INFO, "USB") << "Slot " << (uint64_t)slotId << " initialized (BSR=1)";
+
+        // -----------------------------------------------------------------
+        // Step 4b: GET_DESCRIPTOR (Device, 8 bytes) — read bMaxPacketSize0
+        // -----------------------------------------------------------------
+        uint8_t partialDesc[8] = {};
+        cc = Xhci::ControlTransfer(slotId, REQTYPE_DEV_TO_HOST, REQ_GET_DESCRIPTOR,
+                                   (DESC_DEVICE << 8), 0, 8,
+                                   partialDesc, true);
+        if (cc != Xhci::CC_SUCCESS && cc != Xhci::CC_SHORT_PACKET) {
+            KernelLogStream(ERROR, "USB") << "GET_DESCRIPTOR(8-byte) failed, cc=" << (uint64_t)cc;
+            dev->Active = false;
+            return 0;
+        }
+
+        uint8_t bMaxPacketSize0 = partialDesc[7];
+        if (bMaxPacketSize0 == 0) bMaxPacketSize0 = maxPacket; // fallback
+
+        KernelLogStream(INFO, "USB") << "Slot " << (uint64_t)slotId
+            << ": bMaxPacketSize0=" << (uint64_t)bMaxPacketSize0;
+
+        // -----------------------------------------------------------------
+        // Step 4c: Evaluate Context — update EP0 max packet size if needed
+        // -----------------------------------------------------------------
+        if (bMaxPacketSize0 != maxPacket) {
+            auto* evalCtx = (Xhci::InputContext*)Memory::g_pfa->AllocateZeroed();
+
+            // Only updating EP0 — set AddFlags bit 1 (EP0), no slot context needed
+            evalCtx->ICC.AddFlags = (1 << 1);
+
+            // Copy current EP0 context and update max packet size
+            evalCtx->EP[0] = dev->OutputContext->EP[0];
+            evalCtx->EP[0].Field1 = (evalCtx->EP[0].Field1 & 0x0000FFFF)
+                                  | ((uint32_t)bMaxPacketSize0 << 16);
+
+            Xhci::TRB evalTrb = {};
+            uint64_t evalCtxPhys = Memory::SubHHDM(evalCtx);
+            evalTrb.Parameter0 = (uint32_t)(evalCtxPhys & 0xFFFFFFFF);
+            evalTrb.Parameter1 = (uint32_t)(evalCtxPhys >> 32);
+            evalTrb.Control    = (Xhci::TRB_EVALUATE_CONTEXT << Xhci::TRB_TYPE_SHIFT)
+                               | ((uint32_t)slotId << 24);
+
+            cc = Xhci::SendCommand(evalTrb);
+            if (cc != Xhci::CC_SUCCESS) {
+                KernelLogStream(WARNING, "USB") << "Evaluate Context failed, slot="
+                    << (uint64_t)slotId << " cc=" << (uint64_t)cc;
+                // Non-fatal: continue with original max packet size
+            } else {
+                KernelLogStream(INFO, "USB") << "Slot " << (uint64_t)slotId
+                    << ": EP0 max packet updated to " << (uint64_t)bMaxPacketSize0;
+            }
+        }
+
+        // -----------------------------------------------------------------
+        // Step 4d: Address Device (BSR=0) — actually send SET_ADDRESS
+        // -----------------------------------------------------------------
+        // Update input context EP0 to current ring position and actual max
+        // packet size.  BSR=0 re-initializes the output EP0 context from the
+        // input context, so both fields must reflect reality.
+        uint64_t curDeq = dev->EP0RingPhys + (uint64_t)dev->EP0RingEnqueue * sizeof(Xhci::TRB);
+        if (dev->EP0RingCCS) {
+            curDeq |= 1; // DCS bit
+        }
+        inputCtx->EP[0].TRDequeuePtr = curDeq;
+        inputCtx->EP[0].Field1 = (3 << 1)
+                                | (Xhci::EP_TYPE_CONTROL << 3)
+                                | ((uint32_t)bMaxPacketSize0 << 16);
+
+        Xhci::TRB addrTrb2 = {};
+        addrTrb2.Parameter0 = (uint32_t)(inputCtxPhys & 0xFFFFFFFF);
+        addrTrb2.Parameter1 = (uint32_t)(inputCtxPhys >> 32);
+        addrTrb2.Control    = (Xhci::TRB_ADDRESS_DEVICE << Xhci::TRB_TYPE_SHIFT)
+                            | ((uint32_t)slotId << 24);
+
+        cc = Xhci::SendCommand(addrTrb2);
         if (cc != Xhci::CC_SUCCESS) {
             KernelLogStream(ERROR, "USB") << "Address Device failed, slot="
                 << (uint64_t)slotId << " cc=" << (uint64_t)cc;
@@ -180,10 +282,13 @@ namespace Drivers::USB::UsbDevice {
             return 0;
         }
 
+        // Set-address recovery time (USB spec requires >= 2ms, use 10ms for safety)
+        BusyWaitMs(10);
+
         KernelLogStream(INFO, "USB") << "Slot " << (uint64_t)slotId << " addressed";
 
         // -----------------------------------------------------------------
-        // Step 5: GET_DESCRIPTOR (Device)
+        // Step 5: GET_DESCRIPTOR (Device, full 18 bytes)
         // -----------------------------------------------------------------
         DeviceDescriptor devDesc = {};
         cc = Xhci::ControlTransfer(slotId, REQTYPE_DEV_TO_HOST, REQ_GET_DESCRIPTOR,

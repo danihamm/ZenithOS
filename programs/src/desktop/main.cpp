@@ -31,23 +31,29 @@ void gui::desktop_init(DesktopState* ds) {
     zenith::memset(&ds->mouse, 0, sizeof(Zenith::MouseState));
     zenith::set_mouse_bounds(ds->screen_w - 1, ds->screen_h - 1);
 
-    // Load SVG icons
-    ds->icon_terminal    = svg_load("0:/icons/utilities-terminal-symbolic.svg",        20, 20, colors::ICON_COLOR);
-    ds->icon_filemanager = svg_load("0:/icons/system-file-manager-symbolic.svg",       20, 20, colors::ICON_COLOR);
-    ds->icon_sysinfo     = svg_load("0:/icons/preferences-desktop-apps-symbolic.svg",  20, 20, colors::ICON_COLOR);
-    ds->icon_appmenu     = svg_load("0:/icons/view-app-grid-symbolic.svg",             20, 20, colors::PANEL_TEXT);
-    ds->icon_folder      = svg_load("0:/icons/folder-symbolic.svg",                    16, 16, Color::from_rgb(0xFF, 0xBD, 0x2E));
-    ds->icon_file        = svg_load("0:/icons/text-x-generic-symbolic.svg",            16, 16, colors::ICON_COLOR);
-    ds->icon_computer    = svg_load("0:/icons/computer-symbolic.svg",                  20, 20, colors::ICON_COLOR);
-    ds->icon_network     = svg_load("0:/icons/network-wired-symbolic.svg",             16, 16, colors::PANEL_TEXT);
-    ds->icon_calculator  = svg_load("0:/icons/accessories-calculator-symbolic.svg",    20, 20, colors::ICON_COLOR);
-    ds->icon_texteditor  = svg_load("0:/icons/accessories-text-editor-symbolic.svg",   20, 20, colors::ICON_COLOR);
-    ds->icon_go_up       = svg_load("0:/icons/go-up-symbolic.svg",                    16, 16, colors::ICON_COLOR);
-    ds->icon_go_back     = svg_load("0:/icons/go-previous-symbolic.svg",              16, 16, colors::ICON_COLOR);
-    ds->icon_go_forward  = svg_load("0:/icons/go-next-symbolic.svg",                  16, 16, colors::ICON_COLOR);
-    ds->icon_save        = svg_load("0:/icons/document-save-symbolic.svg",            16, 16, colors::ICON_COLOR);
-    ds->icon_home        = svg_load("0:/icons/user-home-symbolic.svg",                16, 16, colors::ICON_COLOR);
-    ds->icon_exec        = svg_load("0:/icons/application-x-executable-symbolic.svg", 16, 16, Color::from_rgb(0x4E, 0x9A, 0x06));
+    // Load SVG icons — scalable (colorful) for app menu, symbolic for toolbar/panel
+    Color defColor = colors::ICON_COLOR;
+    ds->icon_terminal    = svg_load("0:/icons/utilities-terminal.svg",        20, 20, defColor);
+    ds->icon_filemanager = svg_load("0:/icons/system-file-manager.svg",      20, 20, defColor);
+    ds->icon_sysinfo     = svg_load("0:/icons/preferences-desktop-apps.svg", 20, 20, defColor);
+    ds->icon_appmenu     = svg_load("0:/icons/view-app-grid-symbolic.svg",   20, 20, colors::PANEL_TEXT);
+    ds->icon_folder      = svg_load("0:/icons/folder.svg",                   16, 16, defColor);
+    ds->icon_file        = svg_load("0:/icons/text-x-generic.svg",           16, 16, defColor);
+    ds->icon_computer    = svg_load("0:/icons/computer.svg",                 20, 20, defColor);
+    ds->icon_network     = svg_load("0:/icons/network-wired-symbolic.svg",   16, 16, colors::PANEL_TEXT);
+    ds->icon_calculator  = svg_load("0:/icons/accessories-calculator.svg",   20, 20, defColor);
+    ds->icon_texteditor  = svg_load("0:/icons/accessories-text-editor.svg",  20, 20, defColor);
+    ds->icon_go_up       = svg_load("0:/icons/go-up-symbolic.svg",           16, 16, defColor);
+    ds->icon_go_back     = svg_load("0:/icons/go-previous-symbolic.svg",     16, 16, defColor);
+    ds->icon_go_forward  = svg_load("0:/icons/go-next-symbolic.svg",         16, 16, defColor);
+    ds->icon_save        = svg_load("0:/icons/document-save-symbolic.svg",   16, 16, defColor);
+    ds->icon_home        = svg_load("0:/icons/user-home.svg",                16, 16, defColor);
+    ds->icon_exec        = svg_load("0:/icons/utilities-terminal.svg",        16, 16, defColor);
+    ds->icon_wikipedia   = svg_load("0:/icons/web-browser.svg",              20, 20, defColor);
+
+    ds->icon_folder_lg = svg_load("0:/icons/folder.svg",                   48, 48, defColor);
+    ds->icon_file_lg   = svg_load("0:/icons/text-x-generic.svg",           48, 48, defColor);
+    ds->icon_exec_lg   = svg_load("0:/icons/utilities-terminal.svg",        48, 48, defColor);
 
     ds->net_popup_open = false;
     zenith::get_netcfg(&ds->cached_net_cfg);
@@ -334,7 +340,7 @@ void gui::desktop_draw_panel(DesktopState* ds) {
 // App Menu (5 items with separator and rounded corners)
 // ============================================================================
 
-static constexpr int MENU_ITEM_COUNT = 6;
+static constexpr int MENU_ITEM_COUNT = 7;
 static constexpr int MENU_W = 220;
 static constexpr int MENU_ITEM_H = 40;
 
@@ -364,6 +370,7 @@ static void desktop_draw_app_menu(DesktopState* ds) {
         { "Calculator",   &ds->icon_calculator },
         { "Text Editor",  &ds->icon_texteditor },
         { "Kernel Log",   &ds->icon_terminal },
+        { "Wikipedia",    &ds->icon_wikipedia },
     };
 
     int mx = ds->mouse.x;
@@ -558,6 +565,7 @@ void gui::desktop_handle_mouse(DesktopState* ds) {
                 case 3: open_calculator(ds); break;
                 case 4: open_texteditor(ds); break;
                 case 5: open_klog(ds); break;
+                case 6: open_wiki(ds); break;
                 }
                 ds->app_menu_open = false;
             }
@@ -598,7 +606,6 @@ void gui::desktop_handle_mouse(DesktopState* ds) {
             ds->app_menu_open = false;
             return;
         }
-
         // Window indicator buttons
         int indicator_x = 40;
         for (int i = 0; i < ds->window_count; i++) {

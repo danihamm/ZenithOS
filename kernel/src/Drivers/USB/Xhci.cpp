@@ -16,8 +16,27 @@
 #include <Memory/PageFrameAllocator.hpp>
 #include <Libraries/Memory.hpp>
 #include <Hal/Apic/Interrupts.hpp>
+#include <Timekeeping/ApicTimer.hpp>
 
 using namespace Kt;
+
+static void BusyWaitMs(uint64_t ms) {
+    uint64_t flags;
+    asm volatile("pushfq; pop %0" : "=r"(flags));
+    if (flags & (1 << 9)) {
+        // Interrupts enabled — use timer-based delay
+        uint64_t start = Timekeeping::GetMilliseconds();
+        while (Timekeeping::GetMilliseconds() - start < ms) {
+            asm volatile("pause" ::: "memory");
+        }
+    } else {
+        // Interrupts disabled (e.g. timer tick context) — use I/O port delay
+        // Each outb to port 0x80 takes ~1µs on x86
+        for (uint64_t i = 0; i < ms * 1000; i++) {
+            asm volatile("outb %%al, $0x80" ::: "memory");
+        }
+    }
+}
 
 namespace Drivers::USB::Xhci {
 
@@ -568,8 +587,9 @@ namespace Drivers::USB::Xhci {
                 if (alreadyActive) continue;
 
                 if (portsc & PORTSC_PED) {
-                    // Already enabled — enumerate directly
+                    // Already enabled — enumerate after recovery delay
                     uint32_t speed = (portsc >> 10) & 0xF;
+                    BusyWaitMs(10);
                     UsbDevice::EnumerateDevice(port + 1, speed);
                 } else {
                     // Need port reset first
@@ -601,6 +621,9 @@ namespace Drivers::USB::Xhci {
                     // Clear change bits
                     WriteOp(OP_PORTSC_BASE + port * OP_PORTSC_STRIDE,
                             (portsc & PORTSC_PRESERVE) | PORTSC_CHANGE_BITS);
+
+                    // Post-reset recovery delay (USB spec requires >= 10ms)
+                    BusyWaitMs(10);
 
                     UsbDevice::EnumerateDevice(port + 1, speed);
                 }
@@ -901,9 +924,7 @@ namespace Drivers::USB::Xhci {
             }
         }
         // Wait for port power to stabilize (~20ms)
-        for (int i = 0; i < 20000000; i++) {
-            asm volatile("" ::: "memory");
-        }
+        BusyWaitMs(20);
         KernelLogStream(OK, "xHCI") << "All ports powered";
 
         // -----------------------------------------------------------------
@@ -961,6 +982,9 @@ namespace Drivers::USB::Xhci {
 
             KernelLogStream(OK, "xHCI") << "Port " << base::dec << (uint64_t)(port + 1)
                 << ": reset complete, speed=" << speedStr;
+
+            // Post-reset recovery delay (USB spec requires >= 10ms)
+            BusyWaitMs(10);
 
             // Enumerate the device (port IDs are 1-based)
             UsbDevice::EnumerateDevice(port + 1, speed);

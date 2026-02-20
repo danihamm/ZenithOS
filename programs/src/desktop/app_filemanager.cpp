@@ -26,6 +26,7 @@ struct FileManagerState {
     uint64_t last_click_time;
     Scrollbar scrollbar;
     DesktopState* desktop;
+    bool grid_view;
 };
 
 static constexpr int FM_TOOLBAR_H = 32;
@@ -33,6 +34,10 @@ static constexpr int FM_PATHBAR_H = 24;
 static constexpr int FM_HEADER_H  = 20;
 static constexpr int FM_ITEM_H    = 24;
 static constexpr int FM_SCROLLBAR_W = 12;
+static constexpr int FM_GRID_CELL_W = 80;
+static constexpr int FM_GRID_CELL_H = 80;
+static constexpr int FM_GRID_ICON   = 48;
+static constexpr int FM_GRID_PAD    = 4;
 
 // ============================================================================
 // File type detection
@@ -287,6 +292,32 @@ static void filemanager_on_draw(Window* win, Framebuffer& fb) {
         }
     }
 
+    // Toggle view button (5th toolbar button)
+    {
+        int bx = 120, by = 4;
+        uint32_t btn_px = Color::from_rgb(0xE8, 0xE8, 0xE8).to_pixel();
+        for (int dy = 0; dy < 24 && by + dy < ch; dy++)
+            for (int dx = 0; dx < 24 && bx + dx < cw; dx++)
+                pixels[(by + dy) * cw + (bx + dx)] = btn_px;
+        uint32_t glyph_px = colors::TEXT_COLOR.to_pixel();
+        if (fm->grid_view) {
+            // Draw 4 small squares to indicate grid mode
+            for (int r = 0; r < 2; r++)
+                for (int c = 0; c < 2; c++)
+                    for (int dy = 0; dy < 6; dy++)
+                        for (int dx = 0; dx < 6; dx++)
+                            if (by + 5 + r * 8 + dy < ch && bx + 5 + c * 8 + dx < cw)
+                                pixels[(by + 5 + r * 8 + dy) * cw + (bx + 5 + c * 8 + dx)] = glyph_px;
+        } else {
+            // Draw 3 horizontal lines to indicate list mode
+            for (int r = 0; r < 3; r++)
+                for (int dx = 0; dx < 14; dx++)
+                    for (int dy = 0; dy < 2; dy++)
+                        if (by + 5 + r * 5 + dy < ch && bx + 5 + dx < cw)
+                            pixels[(by + 5 + r * 5 + dy) * cw + (bx + 5 + dx)] = glyph_px;
+        }
+    }
+
     // Toolbar separator
     int sep_y = FM_TOOLBAR_H - 1;
     if (sep_y < ch) {
@@ -310,100 +341,171 @@ static void filemanager_on_draw(Window* win, Framebuffer& fb) {
             pixels[sep_y * cw + x] = sep_px;
     }
 
-    // ---- Column headers ----
-    int header_y = FM_TOOLBAR_H + FM_PATHBAR_H;
-    uint32_t header_px = Color::from_rgb(0xF8, 0xF8, 0xF8).to_pixel();
-    for (int y = header_y; y < header_y + FM_HEADER_H && y < ch; y++)
-        for (int x = 0; x < cw; x++)
-            pixels[y * cw + x] = header_px;
+    if (fm->grid_view) {
+        // ---- Grid View ----
+        int list_y = FM_TOOLBAR_H + FM_PATHBAR_H;
+        int list_h = ch - list_y;
+        int cols = (cw - FM_SCROLLBAR_W) / FM_GRID_CELL_W;
+        if (cols < 1) cols = 1;
+        int rows = (fm->entry_count + cols - 1) / cols;
+        int content_h = rows * FM_GRID_CELL_H;
 
-    uint32_t dim_px = Color::from_rgb(0x88, 0x88, 0x88).to_pixel();
-    int name_col_x = 8;
-    int size_col_x = cw - FM_SCROLLBAR_W - 120;
-    int type_col_x = cw - FM_SCROLLBAR_W - 60;
+        // Update scrollbar
+        fm->scrollbar.bounds = {cw - FM_SCROLLBAR_W, list_y, FM_SCROLLBAR_W, list_h};
+        fm->scrollbar.content_height = content_h;
+        fm->scrollbar.view_height = list_h;
 
-    draw_text_to_pixels(pixels, cw, ch, name_col_x, header_y + 2, "Name", dim_px);
-    if (size_col_x > 100)
-        draw_text_to_pixels(pixels, cw, ch, size_col_x, header_y + 2, "Size", dim_px);
-    if (type_col_x > 160)
-        draw_text_to_pixels(pixels, cw, ch, type_col_x, header_y + 2, "Type", dim_px);
+        for (int i = 0; i < fm->entry_count; i++) {
+            int col = i % cols;
+            int row = i / cols;
+            int cell_x = col * FM_GRID_CELL_W;
+            int cell_y = list_y + row * FM_GRID_CELL_H - fm->scrollbar.scroll_offset;
 
-    // Header separator
-    sep_y = header_y + FM_HEADER_H - 1;
-    if (sep_y < ch) {
-        for (int x = 0; x < cw; x++)
-            pixels[sep_y * cw + x] = sep_px;
-    }
+            // Skip if entirely off-screen
+            if (cell_y + FM_GRID_CELL_H <= list_y || cell_y >= ch) continue;
 
-    // Column separator lines
-    if (size_col_x > 100) {
-        for (int y = header_y; y < ch; y++)
-            if (size_col_x - 4 >= 0 && size_col_x - 4 < cw)
-                pixels[y * cw + (size_col_x - 4)] = sep_px;
-    }
+            // Selection highlight
+            if (i == fm->selected) {
+                uint32_t sel_px = colors::MENU_HOVER.to_pixel();
+                for (int y = gui_max(cell_y, list_y); y < gui_min(cell_y + FM_GRID_CELL_H, ch); y++)
+                    for (int x = cell_x; x < gui_min(cell_x + FM_GRID_CELL_W, cw - FM_SCROLLBAR_W); x++)
+                        pixels[y * cw + x] = sel_px;
+            }
 
-    // ---- File entries ----
-    int list_y = header_y + FM_HEADER_H;
-    int list_h = ch - list_y;
-    int visible_items = list_h / FM_ITEM_H;
-    int content_h = fm->entry_count * FM_ITEM_H;
+            // Large icon centered horizontally
+            int icon_x = cell_x + (FM_GRID_CELL_W - FM_GRID_ICON) / 2;
+            int icon_y = cell_y + FM_GRID_PAD;
+            if (ds && fm->entry_types[i] == 1 && ds->icon_folder_lg.pixels) {
+                blit_icon_to_pixels(pixels, cw, ch, icon_x, icon_y, ds->icon_folder_lg);
+            } else if (ds && fm->entry_types[i] == 2 && ds->icon_exec_lg.pixels) {
+                blit_icon_to_pixels(pixels, cw, ch, icon_x, icon_y, ds->icon_exec_lg);
+            } else if (ds && ds->icon_file_lg.pixels) {
+                blit_icon_to_pixels(pixels, cw, ch, icon_x, icon_y, ds->icon_file_lg);
+            } else {
+                uint32_t icon_px = fm->is_dir[i]
+                    ? Color::from_rgb(0xFF, 0xBD, 0x2E).to_pixel()
+                    : Color::from_rgb(0x90, 0x90, 0x90).to_pixel();
+                for (int dy = 0; dy < FM_GRID_ICON && icon_y + dy < ch && icon_y + dy >= list_y; dy++)
+                    for (int dx = 0; dx < FM_GRID_ICON && icon_x + dx < cw; dx++)
+                        pixels[(icon_y + dy) * cw + (icon_x + dx)] = icon_px;
+            }
 
-    // Update scrollbar
-    fm->scrollbar.bounds = {cw - FM_SCROLLBAR_W, list_y, FM_SCROLLBAR_W, list_h};
-    fm->scrollbar.content_height = content_h;
-    fm->scrollbar.view_height = list_h;
+            // Filename centered below icon, truncated if needed
+            char label[16];
+            int nlen = zenith::slen(fm->entry_names[i]);
+            if (nlen > 9) {
+                for (int k = 0; k < 9; k++) label[k] = fm->entry_names[i][k];
+                label[9] = '.';
+                label[10] = '.';
+                label[11] = '\0';
+            } else {
+                zenith::strncpy(label, fm->entry_names[i], 15);
+            }
+            int tw = text_width(label);
+            int tx = cell_x + (FM_GRID_CELL_W - tw) / 2;
+            if (tx < cell_x) tx = cell_x;
+            int ty = icon_y + FM_GRID_ICON + 2;
+            if (ty >= list_y && ty + FONT_HEIGHT <= ch)
+                draw_text_to_pixels(pixels, cw, ch, tx, ty, label, text_px);
+        }
+    } else {
+        // ---- List View ----
 
-    int scroll_items = fm->scrollbar.scroll_offset / FM_ITEM_H;
+        // ---- Column headers ----
+        int header_y = FM_TOOLBAR_H + FM_PATHBAR_H;
+        uint32_t header_px = Color::from_rgb(0xF8, 0xF8, 0xF8).to_pixel();
+        for (int y = header_y; y < header_y + FM_HEADER_H && y < ch; y++)
+            for (int x = 0; x < cw; x++)
+                pixels[y * cw + x] = header_px;
 
-    for (int i = scroll_items; i < fm->entry_count && (i - scroll_items) < visible_items + 1; i++) {
-        int iy = list_y + (i - scroll_items) * FM_ITEM_H - (fm->scrollbar.scroll_offset % FM_ITEM_H);
-        if (iy + FM_ITEM_H <= list_y || iy >= ch) continue;
+        uint32_t dim_px = Color::from_rgb(0x88, 0x88, 0x88).to_pixel();
+        int name_col_x = 8;
+        int size_col_x = cw - FM_SCROLLBAR_W - 120;
+        int type_col_x = cw - FM_SCROLLBAR_W - 60;
 
-        // Highlight selected
-        if (i == fm->selected) {
-            uint32_t sel_px = colors::MENU_HOVER.to_pixel();
-            for (int y = gui_max(iy, list_y); y < gui_min(iy + FM_ITEM_H, ch); y++)
-                for (int x = 0; x < cw - FM_SCROLLBAR_W; x++)
-                    pixels[y * cw + x] = sel_px;
+        draw_text_to_pixels(pixels, cw, ch, name_col_x, header_y + 2, "Name", dim_px);
+        if (size_col_x > 100)
+            draw_text_to_pixels(pixels, cw, ch, size_col_x, header_y + 2, "Size", dim_px);
+        if (type_col_x > 160)
+            draw_text_to_pixels(pixels, cw, ch, type_col_x, header_y + 2, "Type", dim_px);
+
+        // Header separator
+        sep_y = header_y + FM_HEADER_H - 1;
+        if (sep_y < ch) {
+            for (int x = 0; x < cw; x++)
+                pixels[sep_y * cw + x] = sep_px;
         }
 
-        // Icon
-        int icon_x = 8;
-        int icon_y = iy + (FM_ITEM_H - 16) / 2;
-        if (ds && fm->entry_types[i] == 1 && ds->icon_folder.pixels) {
-            blit_icon_to_pixels(pixels, cw, ch, icon_x, icon_y, ds->icon_folder);
-        } else if (ds && fm->entry_types[i] == 2 && ds->icon_exec.pixels) {
-            blit_icon_to_pixels(pixels, cw, ch, icon_x, icon_y, ds->icon_exec);
-        } else if (ds && ds->icon_file.pixels) {
-            blit_icon_to_pixels(pixels, cw, ch, icon_x, icon_y, ds->icon_file);
-        } else {
-            uint32_t icon_px = fm->is_dir[i]
-                ? Color::from_rgb(0xFF, 0xBD, 0x2E).to_pixel()
-                : Color::from_rgb(0x90, 0x90, 0x90).to_pixel();
-            for (int dy = 0; dy < 16 && icon_y + dy < ch && icon_y + dy >= list_y; dy++)
-                for (int dx = 0; dx < 16 && icon_x + dx < cw; dx++)
-                    pixels[(icon_y + dy) * cw + (icon_x + dx)] = icon_px;
+        // Column separator lines
+        if (size_col_x > 100) {
+            for (int y = header_y; y < ch; y++)
+                if (size_col_x - 4 >= 0 && size_col_x - 4 < cw)
+                    pixels[y * cw + (size_col_x - 4)] = sep_px;
         }
 
-        // Name
-        int tx = 30;
-        int ty = iy + (FM_ITEM_H - FONT_HEIGHT) / 2;
-        if (ty >= list_y && ty + FONT_HEIGHT <= ch)
-            draw_text_to_pixels(pixels, cw, ch, tx, ty, fm->entry_names[i], text_px);
+        // ---- File entries ----
+        int list_y = header_y + FM_HEADER_H;
+        int list_h = ch - list_y;
+        int visible_items = list_h / FM_ITEM_H;
+        int content_h = fm->entry_count * FM_ITEM_H;
 
-        // Size
-        if (size_col_x > 100 && !fm->is_dir[i] && ty >= list_y && ty + FONT_HEIGHT <= ch) {
-            char size_str[16];
-            format_size(size_str, fm->entry_sizes[i]);
-            draw_text_to_pixels(pixels, cw, ch, size_col_x, ty, size_str, dim_px);
-        }
+        // Update scrollbar
+        fm->scrollbar.bounds = {cw - FM_SCROLLBAR_W, list_y, FM_SCROLLBAR_W, list_h};
+        fm->scrollbar.content_height = content_h;
+        fm->scrollbar.view_height = list_h;
 
-        // Type
-        if (type_col_x > 160 && ty >= list_y && ty + FONT_HEIGHT <= ch) {
-            const char* type_str = "File";
-            if (fm->entry_types[i] == 1) type_str = "Dir";
-            else if (fm->entry_types[i] == 2) type_str = "Exec";
-            draw_text_to_pixels(pixels, cw, ch, type_col_x, ty, type_str, dim_px);
+        int scroll_items = fm->scrollbar.scroll_offset / FM_ITEM_H;
+
+        for (int i = scroll_items; i < fm->entry_count && (i - scroll_items) < visible_items + 1; i++) {
+            int iy = list_y + (i - scroll_items) * FM_ITEM_H - (fm->scrollbar.scroll_offset % FM_ITEM_H);
+            if (iy + FM_ITEM_H <= list_y || iy >= ch) continue;
+
+            // Highlight selected
+            if (i == fm->selected) {
+                uint32_t sel_px = colors::MENU_HOVER.to_pixel();
+                for (int y = gui_max(iy, list_y); y < gui_min(iy + FM_ITEM_H, ch); y++)
+                    for (int x = 0; x < cw - FM_SCROLLBAR_W; x++)
+                        pixels[y * cw + x] = sel_px;
+            }
+
+            // Icon
+            int icon_x = 8;
+            int icon_y = iy + (FM_ITEM_H - 16) / 2;
+            if (ds && fm->entry_types[i] == 1 && ds->icon_folder.pixels) {
+                blit_icon_to_pixels(pixels, cw, ch, icon_x, icon_y, ds->icon_folder);
+            } else if (ds && fm->entry_types[i] == 2 && ds->icon_exec.pixels) {
+                blit_icon_to_pixels(pixels, cw, ch, icon_x, icon_y, ds->icon_exec);
+            } else if (ds && ds->icon_file.pixels) {
+                blit_icon_to_pixels(pixels, cw, ch, icon_x, icon_y, ds->icon_file);
+            } else {
+                uint32_t icon_px = fm->is_dir[i]
+                    ? Color::from_rgb(0xFF, 0xBD, 0x2E).to_pixel()
+                    : Color::from_rgb(0x90, 0x90, 0x90).to_pixel();
+                for (int dy = 0; dy < 16 && icon_y + dy < ch && icon_y + dy >= list_y; dy++)
+                    for (int dx = 0; dx < 16 && icon_x + dx < cw; dx++)
+                        pixels[(icon_y + dy) * cw + (icon_x + dx)] = icon_px;
+            }
+
+            // Name
+            int tx = 30;
+            int ty = iy + (FM_ITEM_H - FONT_HEIGHT) / 2;
+            if (ty >= list_y && ty + FONT_HEIGHT <= ch)
+                draw_text_to_pixels(pixels, cw, ch, tx, ty, fm->entry_names[i], text_px);
+
+            // Size
+            if (size_col_x > 100 && !fm->is_dir[i] && ty >= list_y && ty + FONT_HEIGHT <= ch) {
+                char size_str[16];
+                format_size(size_str, fm->entry_sizes[i]);
+                draw_text_to_pixels(pixels, cw, ch, size_col_x, ty, size_str, dim_px);
+            }
+
+            // Type
+            if (type_col_x > 160 && ty >= list_y && ty + FONT_HEIGHT <= ch) {
+                const char* type_str = "File";
+                if (fm->entry_types[i] == 1) type_str = "Dir";
+                else if (fm->entry_types[i] == 2) type_str = "Exec";
+                draw_text_to_pixels(pixels, cw, ch, type_col_x, ty, type_str, dim_px);
+            }
         }
     }
 
@@ -457,42 +559,86 @@ static void filemanager_on_mouse(Window* win, MouseEvent& ev) {
             else if (local_x >= 32 && local_x < 56) filemanager_go_forward(fm);
             else if (local_x >= 60 && local_x < 84) filemanager_go_up(fm);
             else if (local_x >= 88 && local_x < 112) filemanager_go_home(fm);
+            else if (local_x >= 120 && local_x < 144) {
+                fm->grid_view = !fm->grid_view;
+                fm->scrollbar.scroll_offset = 0;
+            }
             return;
         }
 
-        // File list clicks
-        int list_y = FM_TOOLBAR_H + FM_PATHBAR_H + FM_HEADER_H;
-        if (local_y >= list_y && local_x < cw - FM_SCROLLBAR_W) {
-            int rel_y = local_y - list_y + fm->scrollbar.scroll_offset;
-            int clicked_idx = rel_y / FM_ITEM_H;
+        // File clicks (grid vs list)
+        if (fm->grid_view) {
+            int list_y = FM_TOOLBAR_H + FM_PATHBAR_H;
+            if (local_y >= list_y && local_x < cw - FM_SCROLLBAR_W) {
+                int cols = (cw - FM_SCROLLBAR_W) / FM_GRID_CELL_W;
+                if (cols < 1) cols = 1;
+                int col = local_x / FM_GRID_CELL_W;
+                int row = (local_y - list_y + fm->scrollbar.scroll_offset) / FM_GRID_CELL_H;
+                int clicked_idx = row * cols + col;
 
-            if (clicked_idx >= 0 && clicked_idx < fm->entry_count) {
-                uint64_t now = zenith::get_milliseconds();
+                if (clicked_idx >= 0 && clicked_idx < fm->entry_count && col < cols) {
+                    uint64_t now = zenith::get_milliseconds();
 
-                // Double-click detection
-                if (fm->last_click_item == clicked_idx &&
-                    (now - fm->last_click_time) < 400) {
-                    if (fm->is_dir[clicked_idx]) {
-                        filemanager_navigate(fm, fm->entry_names[clicked_idx]);
+                    if (fm->last_click_item == clicked_idx &&
+                        (now - fm->last_click_time) < 400) {
+                        if (fm->is_dir[clicked_idx]) {
+                            filemanager_navigate(fm, fm->entry_names[clicked_idx]);
+                        } else {
+                            char fullpath[512];
+                            zenith::strcpy(fullpath, fm->current_path);
+                            int plen = zenith::slen(fullpath);
+                            if (plen > 0 && fullpath[plen - 1] != '/') {
+                                str_append(fullpath, "/", 512);
+                            }
+                            str_append(fullpath, fm->entry_names[clicked_idx], 512);
+                            if (fm->desktop) {
+                                open_texteditor_with_file(fm->desktop, fullpath);
+                            }
+                        }
+                        fm->last_click_item = -1;
+                        fm->last_click_time = 0;
                     } else {
-                        // Open file in text editor
-                        char fullpath[512];
-                        zenith::strcpy(fullpath, fm->current_path);
-                        int plen = zenith::slen(fullpath);
-                        if (plen > 0 && fullpath[plen - 1] != '/') {
-                            str_append(fullpath, "/", 512);
-                        }
-                        str_append(fullpath, fm->entry_names[clicked_idx], 512);
-                        if (fm->desktop) {
-                            open_texteditor_with_file(fm->desktop, fullpath);
-                        }
+                        fm->selected = clicked_idx;
+                        fm->last_click_item = clicked_idx;
+                        fm->last_click_time = now;
                     }
-                    fm->last_click_item = -1;
-                    fm->last_click_time = 0;
-                } else {
-                    fm->selected = clicked_idx;
-                    fm->last_click_item = clicked_idx;
-                    fm->last_click_time = now;
+                }
+            }
+        } else {
+            // List view clicks
+            int list_y = FM_TOOLBAR_H + FM_PATHBAR_H + FM_HEADER_H;
+            if (local_y >= list_y && local_x < cw - FM_SCROLLBAR_W) {
+                int rel_y = local_y - list_y + fm->scrollbar.scroll_offset;
+                int clicked_idx = rel_y / FM_ITEM_H;
+
+                if (clicked_idx >= 0 && clicked_idx < fm->entry_count) {
+                    uint64_t now = zenith::get_milliseconds();
+
+                    // Double-click detection
+                    if (fm->last_click_item == clicked_idx &&
+                        (now - fm->last_click_time) < 400) {
+                        if (fm->is_dir[clicked_idx]) {
+                            filemanager_navigate(fm, fm->entry_names[clicked_idx]);
+                        } else {
+                            // Open file in text editor
+                            char fullpath[512];
+                            zenith::strcpy(fullpath, fm->current_path);
+                            int plen = zenith::slen(fullpath);
+                            if (plen > 0 && fullpath[plen - 1] != '/') {
+                                str_append(fullpath, "/", 512);
+                            }
+                            str_append(fullpath, fm->entry_names[clicked_idx], 512);
+                            if (fm->desktop) {
+                                open_texteditor_with_file(fm->desktop, fullpath);
+                            }
+                        }
+                        fm->last_click_item = -1;
+                        fm->last_click_time = 0;
+                    } else {
+                        fm->selected = clicked_idx;
+                        fm->last_click_item = clicked_idx;
+                        fm->last_click_time = now;
+                    }
                 }
             }
         }
@@ -500,9 +646,12 @@ static void filemanager_on_mouse(Window* win, MouseEvent& ev) {
 
     // Scroll handling
     if (ev.scroll != 0) {
-        int list_y_start = FM_TOOLBAR_H + FM_PATHBAR_H + FM_HEADER_H;
+        int list_y_start = fm->grid_view
+            ? FM_TOOLBAR_H + FM_PATHBAR_H
+            : FM_TOOLBAR_H + FM_PATHBAR_H + FM_HEADER_H;
+        int scroll_step = fm->grid_view ? FM_GRID_CELL_H : FM_ITEM_H;
         if (local_y >= list_y_start) {
-            fm->scrollbar.scroll_offset -= ev.scroll * FM_ITEM_H;
+            fm->scrollbar.scroll_offset -= ev.scroll * scroll_step;
             int ms = fm->scrollbar.max_scroll();
             if (fm->scrollbar.scroll_offset < 0) fm->scrollbar.scroll_offset = 0;
             if (fm->scrollbar.scroll_offset > ms) fm->scrollbar.scroll_offset = ms;
@@ -522,9 +671,29 @@ static void filemanager_on_key(Window* win, const Zenith::KeyEvent& key) {
         filemanager_go_up(fm);
     } else if (key.scancode == 0x48) {
         // Up arrow
-        if (fm->selected > 0) fm->selected--;
+        if (fm->grid_view) {
+            Rect cr = win->content_rect();
+            int cols = (cr.w - FM_SCROLLBAR_W) / FM_GRID_CELL_W;
+            if (cols < 1) cols = 1;
+            if (fm->selected >= cols) fm->selected -= cols;
+        } else {
+            if (fm->selected > 0) fm->selected--;
+        }
     } else if (key.scancode == 0x50) {
         // Down arrow
+        if (fm->grid_view) {
+            Rect cr = win->content_rect();
+            int cols = (cr.w - FM_SCROLLBAR_W) / FM_GRID_CELL_W;
+            if (cols < 1) cols = 1;
+            if (fm->selected + cols < fm->entry_count) fm->selected += cols;
+        } else {
+            if (fm->selected < fm->entry_count - 1) fm->selected++;
+        }
+    } else if (key.scancode == 0x4B && !key.alt && fm->grid_view) {
+        // Left arrow (grid view only)
+        if (fm->selected > 0) fm->selected--;
+    } else if (key.scancode == 0x4D && !key.alt && fm->grid_view) {
+        // Right arrow (grid view only)
         if (fm->selected < fm->entry_count - 1) fm->selected++;
     } else if (key.ascii == '\n' || key.ascii == '\r') {
         if (fm->selected >= 0 && fm->selected < fm->entry_count) {
@@ -565,6 +734,7 @@ void open_filemanager(DesktopState* ds) {
     fm->history_pos = -1;
     fm->history_count = 0;
     fm->desktop = ds;
+    fm->grid_view = true;
 
     fm->scrollbar.init(0, 0, FM_SCROLLBAR_W, 100);
 
