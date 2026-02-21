@@ -833,6 +833,15 @@ namespace Zenith {
         return WinServer::SendEvent(windowId, event);
     }
 
+    static uint64_t Sys_WinResize(int windowId, int newW, int newH) {
+        auto* proc = Sched::GetCurrentProcessPtr();
+        if (proc == nullptr) return 0;
+        uint64_t outVa = 0;
+        int r = WinServer::Resize(windowId, proc->pid, proc->pml4Phys, newW, newH,
+                                  proc->heapNext, outVa);
+        return (r == 0) ? outVa : 0;
+    }
+
     // ---- Dispatch ----
 
     extern "C" int64_t SyscallDispatch(SyscallFrame* frame) {
@@ -986,6 +995,8 @@ namespace Zenith {
                 return (int64_t)Sys_WinMap((int)frame->arg1);
             case SYS_WINSENDEVENT:
                 return (int64_t)Sys_WinSendEvent((int)frame->arg1, (const WinEvent*)frame->arg2);
+            case SYS_WINRESIZE:
+                return (int64_t)Sys_WinResize((int)frame->arg1, (int)frame->arg2, (int)frame->arg3);
             case SYS_PROCLIST:
                 return (int64_t)Sys_ProcList((ProcInfo*)frame->arg1, (int)frame->arg2);
             case SYS_KILL:

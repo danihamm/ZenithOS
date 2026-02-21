@@ -74,6 +74,7 @@ namespace Zenith {
     static constexpr uint64_t SYS_WINENUM      = 58;
     static constexpr uint64_t SYS_WINMAP       = 59;
     static constexpr uint64_t SYS_WINSENDEVENT = 60;
+    static constexpr uint64_t SYS_WINRESIZE   = 64;
 
     // Process management syscalls
     static constexpr uint64_t SYS_PROCLIST    = 61;

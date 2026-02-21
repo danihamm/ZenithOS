@@ -339,6 +339,7 @@ namespace Drivers::USB::UsbDevice {
         uint16_t offset = 0;
         bool foundHid = false;
         bool foundEp = false;
+        uint16_t hidReportDescLen = 0;
 
         while (offset + 2 <= totalLen) {
             uint8_t len  = cfgBuf[offset];
@@ -358,6 +359,12 @@ namespace Drivers::USB::UsbDevice {
                     dev->InterfaceProtocol = iface->bInterfaceProtocol;
                     foundHid = true;
                 }
+            }
+
+            // HID descriptor (0x21): extract report descriptor length
+            if (type == DESC_HID && foundHid && !foundEp && len >= 9 && offset + 8 < totalLen) {
+                hidReportDescLen = (uint16_t)cfgBuf[offset + 7]
+                                 | ((uint16_t)cfgBuf[offset + 8] << 8);
             }
 
             if (type == DESC_ENDPOINT && foundHid && !foundEp &&
@@ -463,14 +470,33 @@ namespace Drivers::USB::UsbDevice {
         // -----------------------------------------------------------------
         // Step 10: SET_PROTOCOL -- Boot Protocol for keyboards only
         // -----------------------------------------------------------------
-        // Boot Protocol constrains mice to 3-byte reports (no scroll wheel).
-        // Keep mice in Report Protocol (the default) so scroll data is included.
+        // Set Boot Protocol for keyboards only.
+        // Mice stay in Report Protocol (the default) for scroll wheel support;
+        // HidMouse parses the HID Report Descriptor to handle variable formats.
         if (foundEp && dev->InterfaceProtocol == PROTOCOL_KEYBOARD) {
             cc = Xhci::ControlTransfer(slotId, REQTYPE_CLASS_IFACE, REQ_SET_PROTOCOL,
                                        0, 0, 0, nullptr, false);
             if (cc != Xhci::CC_SUCCESS) {
                 KernelLogStream(WARNING, "USB") << "SET_PROTOCOL(Boot) failed, cc=" << (uint64_t)cc;
                 // Non-fatal: some devices only support boot protocol anyway
+            }
+        }
+
+        // -----------------------------------------------------------------
+        // Step 10b: Fetch HID Report Descriptor for mice
+        // -----------------------------------------------------------------
+        if (foundEp && dev->InterfaceProtocol == PROTOCOL_MOUSE && hidReportDescLen > 0) {
+            uint8_t rdBuf[256] = {};
+            uint16_t rdLen = hidReportDescLen;
+            if (rdLen > 256) rdLen = 256;
+
+            cc = Xhci::ControlTransfer(slotId, REQTYPE_STD_IFACE_IN, REQ_GET_DESCRIPTOR,
+                                       (DESC_HID_REPORT << 8), 0, rdLen,
+                                       rdBuf, true);
+            if (cc == Xhci::CC_SUCCESS || cc == Xhci::CC_SHORT_PACKET) {
+                HidMouse::ParseReportDescriptor(rdBuf, rdLen);
+            } else {
+                KernelLogStream(WARNING, "USB") << "GET_DESCRIPTOR(HID Report) failed, cc=" << (uint64_t)cc;
             }
         }
 

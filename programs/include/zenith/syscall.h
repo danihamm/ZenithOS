@@ -317,5 +317,8 @@ namespace zenith {
     inline int win_sendevent(int id, const Zenith::WinEvent* event) {
         return (int)syscall2(Zenith::SYS_WINSENDEVENT, (uint64_t)id, (uint64_t)event);
     }
+    inline uint64_t win_resize(int id, int w, int h) {
+        return (uint64_t)syscall3(Zenith::SYS_WINRESIZE, (uint64_t)id, (uint64_t)w, (uint64_t)h);
+    }
 
 }

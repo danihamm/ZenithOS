@@ -71,6 +71,8 @@ namespace Drivers::USB::UsbDevice {
     constexpr uint8_t DESC_CONFIGURATION = 2;
     constexpr uint8_t DESC_INTERFACE     = 4;
     constexpr uint8_t DESC_ENDPOINT      = 5;
+    constexpr uint8_t DESC_HID           = 0x21;
+    constexpr uint8_t DESC_HID_REPORT    = 0x22;
 
     // USB class codes
     constexpr uint8_t CLASS_HID          = 0x03;
@@ -91,6 +93,7 @@ namespace Drivers::USB::UsbDevice {
     constexpr uint8_t REQTYPE_DEV_TO_HOST    = 0x80;
     constexpr uint8_t REQTYPE_HOST_TO_DEV    = 0x00;
     constexpr uint8_t REQTYPE_CLASS_IFACE    = 0x21;  // Host-to-device, class, interface
+    constexpr uint8_t REQTYPE_STD_IFACE_IN   = 0x81;  // Dev-to-host, standard, interface
 
     // Endpoint direction mask
     constexpr uint8_t EP_DIR_IN = 0x80;

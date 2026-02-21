@@ -315,7 +315,7 @@ static void devexplorer_on_mouse(Window* win, MouseEvent& ev) {
 
     // Scroll
     if (ev.scroll != 0) {
-        de->scroll_y -= ev.scroll;
+        de->scroll_y += ev.scroll;
         if (de->scroll_y < 0) de->scroll_y = 0;
         return;
     }

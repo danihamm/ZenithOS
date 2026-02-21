@@ -162,6 +162,45 @@ namespace WinServer {
         return 0;
     }
 
+    int Resize(int windowId, int callerPid, uint64_t ownerPml4, int newW, int newH,
+               uint64_t& heapNext, uint64_t& outVa) {
+        if (windowId < 0 || windowId >= MaxWindows) return -1;
+        WindowSlot& slot = g_slots[windowId];
+        if (!slot.used || slot.ownerPid != callerPid) return -1;
+        if (newW <= 0 || newH <= 0) return -1;
+        if (newW == slot.width && newH == slot.height) {
+            outVa = slot.ownerVa;
+            return 0;
+        }
+
+        uint64_t bufSize = (uint64_t)newW * newH * 4;
+        int numPages = (int)((bufSize + 0xFFF) / 0x1000);
+        if (numPages > MaxPixelPages) return -1;
+
+        // Allocate new pages and map into owner's address space
+        uint64_t userVa = heapNext;
+        for (int i = 0; i < numPages; i++) {
+            void* page = Memory::g_pfa->AllocateZeroed();
+            if (page == nullptr) return -1;
+            uint64_t physAddr = Memory::SubHHDM((uint64_t)page);
+            slot.pixelPhysPages[i] = physAddr;
+            Memory::VMM::Paging::MapUserIn(ownerPml4, physAddr, userVa + (uint64_t)i * 0x1000);
+        }
+
+        slot.width = newW;
+        slot.height = newH;
+        slot.pixelNumPages = numPages;
+        slot.ownerVa = userVa;
+        heapNext += (uint64_t)numPages * 0x1000;
+
+        // Invalidate desktop mapping so it re-maps on next enumerate
+        slot.desktopVa = 0;
+        slot.desktopPid = 0;
+
+        outVa = userVa;
+        return 0;
+    }
+
     void CleanupProcess(int pid) {
         for (int i = 0; i < MaxWindows; i++) {
             if (g_slots[i].used && g_slots[i].ownerPid == pid) {

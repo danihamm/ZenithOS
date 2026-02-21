@@ -18,6 +18,8 @@ FONTS=(
     "programs/gui/fonts/Roboto/static/Roboto-Medium.ttf"
     "programs/gui/fonts/JetBrains_Mono/static/JetBrainsMono-Regular.ttf"
     "programs/gui/fonts/JetBrains_Mono/static/JetBrainsMono-Bold.ttf"
+    "programs/gui/fonts/Noto_Serif/static/NotoSerif-Regular.ttf"
+    "programs/gui/fonts/Noto_Serif/static/NotoSerif-SemiBold.ttf"
 )
 
 copied=0

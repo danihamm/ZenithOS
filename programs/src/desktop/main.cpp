@@ -407,19 +407,60 @@ void gui::desktop_draw_panel(DesktopState* ds) {
 }
 
 // ============================================================================
-// App Menu (5 items with separator and rounded corners)
+// App Menu (categorized)
 // ============================================================================
 
-static constexpr int MENU_ITEM_COUNT = 13;
 static constexpr int MENU_W = 220;
-static constexpr int MENU_ITEM_H = 40;
+static constexpr int MENU_ITEM_H = 36;
+static constexpr int MENU_CAT_H = 28;
+static constexpr int MENU_DIV_H = 10;
+
+struct MenuRow {
+    bool is_category;
+    const char* label;    // "" for divider-only rows
+    int app_id;           // -1 for category headers / dividers
+};
+
+static constexpr int MENU_ROW_COUNT = 18;
+static const MenuRow menu_rows[MENU_ROW_COUNT] = {
+    { true,  "Applications", -1 },
+    { false, "Terminal",      0 },
+    { false, "Files",         1 },
+    { false, "Text Editor",   4 },
+    { false, "Calculator",    3 },
+    { true,  "Internet",     -1 },
+    { false, "Wikipedia",     9 },
+    { true,  "System",       -1 },
+    { false, "System Info",   2 },
+    { false, "Kernel Log",    5 },
+    { false, "Processes",     6 },
+    { false, "Devices",       8 },
+    { true,  "Games",        -1 },
+    { false, "Mandelbrot",    7 },
+    { false, "DOOM",         10 },
+    { true,  "",             -1 },  // divider
+    { false, "Settings",     11 },
+    { false, "Reboot",       12 },
+};
+
+static int menu_row_height(const MenuRow& row) {
+    if (!row.is_category) return MENU_ITEM_H;
+    return row.label[0] ? MENU_CAT_H : MENU_DIV_H;
+}
+
+static int menu_total_height() {
+    int h = 10; // top + bottom padding
+    for (int i = 0; i < MENU_ROW_COUNT; i++)
+        h += menu_row_height(menu_rows[i]);
+    return h;
+}
 
 static void desktop_draw_app_menu(DesktopState* ds) {
     Framebuffer& fb = ds->fb;
 
     int menu_x = 4;
     int menu_y = PANEL_HEIGHT + 2;
-    int menu_h = MENU_ITEM_H * MENU_ITEM_COUNT + 10; // +10 for padding + separator
+    int menu_h = menu_total_height();
 
     // Menu shadow
     draw_shadow(fb, menu_x, menu_y, MENU_W, menu_h, 4, colors::SHADOW);
@@ -428,59 +469,70 @@ static void desktop_draw_app_menu(DesktopState* ds) {
     fill_rounded_rect(fb, menu_x, menu_y, MENU_W, menu_h, 8, colors::MENU_BG);
     draw_rect(fb, menu_x, menu_y, MENU_W, menu_h, colors::BORDER);
 
-    // Menu items
-    struct MenuItem {
-        const char* label;
-        SvgIcon* icon;
-    };
-    MenuItem items[MENU_ITEM_COUNT] = {
-        { "Terminal",     &ds->icon_terminal },
-        { "Files",        &ds->icon_filemanager },
-        { "System Info",  &ds->icon_sysinfo },
-        { "Calculator",   &ds->icon_calculator },
-        { "Text Editor",  &ds->icon_texteditor },
-        { "Kernel Log",   &ds->icon_terminal },
-        { "Processes",    &ds->icon_procmgr },
-        { "Mandelbrot",   &ds->icon_mandelbrot },
-        { "Devices",      &ds->icon_devexplorer },
-        { "Wikipedia",    &ds->icon_wikipedia },
-        { "DOOM",         &ds->icon_doom },
-        { "Settings",     &ds->icon_settings },
-        { "Reboot",       &ds->icon_reboot },
+    // Icon lookup by app_id
+    SvgIcon* icons[13] = {
+        &ds->icon_terminal,     // 0
+        &ds->icon_filemanager,  // 1
+        &ds->icon_sysinfo,      // 2
+        &ds->icon_calculator,   // 3
+        &ds->icon_texteditor,   // 4
+        &ds->icon_terminal,     // 5 (Kernel Log)
+        &ds->icon_procmgr,      // 6
+        &ds->icon_mandelbrot,   // 7
+        &ds->icon_devexplorer,  // 8
+        &ds->icon_wikipedia,    // 9
+        &ds->icon_doom,         // 10
+        &ds->icon_settings,     // 11
+        &ds->icon_reboot,       // 12
     };
 
     int mx = ds->mouse.x;
     int my = ds->mouse.y;
+    int iy = menu_y + 5;
 
-    for (int i = 0; i < MENU_ITEM_COUNT; i++) {
-        int iy = menu_y + 4 + i * MENU_ITEM_H;
+    for (int i = 0; i < MENU_ROW_COUNT; i++) {
+        const MenuRow& row = menu_rows[i];
+        int row_h = menu_row_height(row);
 
-        // Thin separator lines before utility apps and before Settings
-        if (i == 3 || i == 11) {
-            int sep_y = iy - 1;
-            for (int sx = menu_x + 8; sx < menu_x + MENU_W - 8; sx++)
-                fb.put_pixel(sx, sep_y, colors::BORDER);
-            iy += 1;
+        if (row.is_category) {
+            // Separator line above (except first category)
+            if (i > 0) {
+                for (int sx = menu_x + 8; sx < menu_x + MENU_W - 8; sx++)
+                    fb.put_pixel(sx, iy + row_h / 2, colors::BORDER);
+            }
+
+            // Category label (dimmed), skip for divider-only rows
+            if (row.label[0]) {
+                int tx = menu_x + 12;
+                int ty = iy + (row_h - system_font_height()) / 2;
+                if (i > 0) ty += 2;
+                draw_text(fb, tx, ty, row.label, Color::from_rgb(0x88, 0x88, 0x88));
+            }
+        } else {
+            Rect item_rect = {menu_x + 4, iy, MENU_W - 8, row_h};
+
+            // Hover highlight
+            if (item_rect.contains(mx, my)) {
+                fill_rounded_rect(fb, item_rect.x, item_rect.y, item_rect.w, item_rect.h, 4, colors::MENU_HOVER);
+            }
+
+            // Icon
+            int icon_x = item_rect.x + 8;
+            int icon_y = item_rect.y + (row_h - 20) / 2;
+            if (row.app_id >= 0 && row.app_id < 13) {
+                SvgIcon* icon = icons[row.app_id];
+                if (icon && icon->pixels) {
+                    fb.blit_alpha(icon_x, icon_y, icon->width, icon->height, icon->pixels);
+                }
+            }
+
+            // Label
+            int tx = icon_x + 28;
+            int ty = item_rect.y + (row_h - system_font_height()) / 2;
+            draw_text(fb, tx, ty, row.label, colors::TEXT_COLOR);
         }
 
-        Rect item_rect = {menu_x + 4, iy, MENU_W - 8, MENU_ITEM_H};
-
-        // Hover highlight
-        if (item_rect.contains(mx, my)) {
-            fill_rounded_rect(fb, item_rect.x, item_rect.y, item_rect.w, item_rect.h, 4, colors::MENU_HOVER);
-        }
-
-        // Icon
-        int icon_x = item_rect.x + 8;
-        int icon_y = item_rect.y + (MENU_ITEM_H - 20) / 2;
-        if (items[i].icon && items[i].icon->pixels) {
-            fb.blit_alpha(icon_x, icon_y, items[i].icon->width, items[i].icon->height, items[i].icon->pixels);
-        }
-
-        // Label
-        int tx = icon_x + 28;
-        int ty = item_rect.y + (MENU_ITEM_H - system_font_height()) / 2;
-        draw_text(fb, tx, ty, items[i].label, colors::TEXT_COLOR);
+        iy += row_h;
     }
 }
 
@@ -915,6 +967,14 @@ void gui::desktop_handle_mouse(DesktopState* ds) {
                             win->content = (uint32_t*)zenith::alloc(cr.w * cr.h * 4);
                             zenith::memset(win->content, 0xFF, cr.w * cr.h * 4);
                         }
+                    } else {
+                        Rect cr = win->content_rect();
+                        Zenith::WinEvent rev;
+                        zenith::memset(&rev, 0, sizeof(rev));
+                        rev.type = 2;
+                        rev.resize.w = cr.w;
+                        rev.resize.h = cr.h;
+                        zenith::win_sendevent(win->ext_win_id, &rev);
                     }
                 } else if (mx >= ds->screen_w - 1) {
                     win->saved_frame = win->frame;
@@ -929,6 +989,14 @@ void gui::desktop_handle_mouse(DesktopState* ds) {
                             win->content = (uint32_t*)zenith::alloc(cr.w * cr.h * 4);
                             zenith::memset(win->content, 0xFF, cr.w * cr.h * 4);
                         }
+                    } else {
+                        Rect cr = win->content_rect();
+                        Zenith::WinEvent rev;
+                        zenith::memset(&rev, 0, sizeof(rev));
+                        rev.type = 2;
+                        rev.resize.w = cr.w;
+                        rev.resize.h = cr.h;
+                        zenith::win_sendevent(win->ext_win_id, &rev);
                     }
                 }
             }
@@ -987,8 +1055,16 @@ void gui::desktop_handle_mouse(DesktopState* ds) {
                         win->content = (uint32_t*)zenith::alloc(cr.w * cr.h * 4);
                         zenith::memset(win->content, 0xFF, cr.w * cr.h * 4);
                     }
+                    win->dirty = true;
+                } else {
+                    Rect cr = win->content_rect();
+                    Zenith::WinEvent rev;
+                    zenith::memset(&rev, 0, sizeof(rev));
+                    rev.type = 2;
+                    rev.resize.w = cr.w;
+                    rev.resize.h = cr.h;
+                    zenith::win_sendevent(win->ext_win_id, &rev);
                 }
-                win->dirty = true;
             }
             return;
         }
@@ -998,29 +1074,37 @@ void gui::desktop_handle_mouse(DesktopState* ds) {
     if (ds->app_menu_open && left_pressed) {
         int menu_x = 4;
         int menu_y = PANEL_HEIGHT + 2;
-        int menu_h = MENU_ITEM_H * MENU_ITEM_COUNT + 10;
+        int menu_h = menu_total_height();
         Rect menu_rect = {menu_x, menu_y, MENU_W, menu_h};
 
         if (menu_rect.contains(mx, my)) {
-            int rel_y = my - menu_y - 4;
-            int item_idx = rel_y / MENU_ITEM_H;
-            if (item_idx >= 0 && item_idx < MENU_ITEM_COUNT) {
-                switch (item_idx) {
-                case 0: open_terminal(ds); break;
-                case 1: open_filemanager(ds); break;
-                case 2: open_sysinfo(ds); break;
-                case 3: open_calculator(ds); break;
-                case 4: open_texteditor(ds); break;
-                case 5: open_klog(ds); break;
-                case 6: open_procmgr(ds); break;
-                case 7: open_mandelbrot(ds); break;
-                case 8: open_devexplorer(ds); break;
-                case 9: open_wiki(ds); break;
-                case 10: open_doom(ds); break;
-                case 11: open_settings(ds); break;
-                case 12: open_reboot_dialog(ds); break;
+            // Walk rows to find which one was clicked
+            int iy = menu_y + 5;
+            for (int i = 0; i < MENU_ROW_COUNT; i++) {
+                const MenuRow& row = menu_rows[i];
+                int row_h = menu_row_height(row);
+                if (my >= iy && my < iy + row_h) {
+                    if (!row.is_category) {
+                        switch (row.app_id) {
+                        case 0: open_terminal(ds); break;
+                        case 1: open_filemanager(ds); break;
+                        case 2: open_sysinfo(ds); break;
+                        case 3: open_calculator(ds); break;
+                        case 4: open_texteditor(ds); break;
+                        case 5: open_klog(ds); break;
+                        case 6: open_procmgr(ds); break;
+                        case 7: open_mandelbrot(ds); break;
+                        case 8: open_devexplorer(ds); break;
+                        case 9: open_wiki(ds); break;
+                        case 10: open_doom(ds); break;
+                        case 11: open_settings(ds); break;
+                        case 12: open_reboot_dialog(ds); break;
+                        }
+                        ds->app_menu_open = false;
+                    }
+                    break;
                 }
-                ds->app_menu_open = false;
+                iy += row_h;
             }
             return;
         } else {
@@ -1136,6 +1220,14 @@ void gui::desktop_handle_mouse(DesktopState* ds) {
                         win->content = (uint32_t*)zenith::alloc(cr.w * cr.h * 4);
                         zenith::memset(win->content, 0xFF, cr.w * cr.h * 4);
                     }
+                } else {
+                    Rect cr = win->content_rect();
+                    Zenith::WinEvent rev;
+                    zenith::memset(&rev, 0, sizeof(rev));
+                    rev.type = 2;
+                    rev.resize.w = cr.w;
+                    rev.resize.h = cr.h;
+                    zenith::win_sendevent(win->ext_win_id, &rev);
                 }
                 desktop_raise_window(ds, i);
                 return;
@@ -1322,6 +1414,17 @@ void desktop_poll_external_windows(DesktopState* ds) {
                 // Update dirty flag
                 if (extWins[e].dirty) {
                     ds->windows[i].dirty = true;
+                }
+                // Re-map if external app resized its buffer
+                if (extWins[e].width != ds->windows[i].content_w ||
+                    extWins[e].height != ds->windows[i].content_h) {
+                    uint64_t va = zenith::win_map(extId);
+                    if (va != 0) {
+                        ds->windows[i].content = (uint32_t*)va;
+                        ds->windows[i].content_w = extWins[e].width;
+                        ds->windows[i].content_h = extWins[e].height;
+                        ds->windows[i].dirty = true;
+                    }
                 }
                 break;
             }

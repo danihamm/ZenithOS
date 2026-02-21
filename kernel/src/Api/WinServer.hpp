@@ -37,6 +37,8 @@ namespace WinServer {
     int Enumerate(Zenith::WinInfo* outArray, int maxCount);
     uint64_t Map(int windowId, int callerPid, uint64_t callerPml4, uint64_t& heapNext);
     int SendEvent(int windowId, const Zenith::WinEvent* event);
+    int Resize(int windowId, int callerPid, uint64_t ownerPml4, int newW, int newH,
+               uint64_t& heapNext, uint64_t& outVa);
     void CleanupProcess(int pid);
 
 }

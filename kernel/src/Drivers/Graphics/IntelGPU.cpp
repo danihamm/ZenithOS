@@ -109,7 +109,7 @@ namespace Drivers::Graphics::IntelGPU {
         } else {
             // Unknown device ID - accept generically but warn
             g_gpuInfo.gen  = 7; // Assume gen 7 as a safe default
-            g_gpuInfo.name = "Unknown Intel GPU";
+            g_gpuInfo.name = "Intel GPU";
 
             KernelLogStream(WARNING, "IntelGPU") << "Unknown Intel display controller "
                 << "(device " << base::hex << (uint64_t)found->DeviceId << ")"
