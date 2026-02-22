@@ -8,7 +8,9 @@
 
 namespace kcp {
     void Spinlock::Acquire() {
-        while (atomic_flag.test_and_set(std::memory_order_acquire));
+        while (atomic_flag.test_and_set(std::memory_order_acquire)) {
+            asm volatile("pause");
+        }
     }
 
     void Spinlock::Release() {

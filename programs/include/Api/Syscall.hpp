@@ -83,6 +83,9 @@ namespace Zenith {
     static constexpr uint64_t SYS_KILL        = 62;
     static constexpr uint64_t SYS_DEVLIST     = 63;
 
+    // Kernel introspection syscalls
+    static constexpr uint64_t SYS_MEMSTATS    = 67;
+
     static constexpr int SOCK_TCP = 1;
     static constexpr int SOCK_UDP = 2;
 
@@ -176,6 +179,13 @@ namespace Zenith {
         uint8_t  _pad[3];
         char     name[64];
         uint64_t heapUsed;     // heapNext - UserHeapBase (bytes)
+    };
+
+    struct MemStats {
+        uint64_t totalBytes;
+        uint64_t freeBytes;
+        uint64_t usedBytes;
+        uint64_t pageSize;
     };
 
 }

@@ -83,6 +83,9 @@ namespace Zenith {
     static constexpr uint64_t SYS_KILL        = 62;
     static constexpr uint64_t SYS_DEVLIST     = 63;
 
+    // Kernel introspection syscalls
+    static constexpr uint64_t SYS_MEMSTATS    = 67;
+
     static constexpr int SOCK_TCP = 1;
     static constexpr int SOCK_UDP = 2;
 
@@ -160,6 +163,13 @@ namespace Zenith {
         int32_t  id;       // -1 on failure
         uint32_t _pad;
         uint64_t pixelVa;  // VA of pixel buffer in caller's address space
+    };
+
+    struct MemStats {
+        uint64_t totalBytes;
+        uint64_t freeBytes;
+        uint64_t usedBytes;
+        uint64_t pageSize;
     };
 
     struct DevInfo {

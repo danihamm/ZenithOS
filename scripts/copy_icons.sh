@@ -81,6 +81,8 @@ ICONS=(
     "panel/weather-windy.svg"
     "panel/weather-severe-alert.svg"
     "panel/weather-none-available.svg"
+    "apps/symbolic/utilities-system-monitor-symbolic.svg" # system monitor
+    "apps/scalable/utilities-system-monitor.svg" # system monitor
 )
 
 copied=0

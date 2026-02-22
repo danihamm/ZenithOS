@@ -105,4 +105,21 @@ namespace Memory {
             Free((void*)(uint64_t)ptr + (0x1000 * n));
         }
     }
+
+    void PageFrameAllocator::GetStats(Zenith::MemStats* out) {
+        if (!out) return;
+        Lock.Acquire();
+        uint64_t freeBytes = 0;
+        Page* current = head.next;
+        while (current != nullptr) {
+            freeBytes += current->size;
+            current = current->next;
+        }
+        Lock.Release();
+
+        out->totalBytes = g_section.size;
+        out->freeBytes = freeBytes;
+        out->usedBytes = g_section.size > freeBytes ? g_section.size - freeBytes : 0;
+        out->pageSize = 0x1000;
+    }
 };

@@ -72,7 +72,7 @@ namespace Hal {
             InterruptSourceOverride Overrides[MaxOverrides];
             int OverrideCount;
 
-            static constexpr int MaxLocalApics = 16;
+            static constexpr int MaxLocalApics = 64;
             LocalApicEntry LocalApics[MaxLocalApics];
             int LocalApicCount;
         };

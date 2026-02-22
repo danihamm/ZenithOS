@@ -6,6 +6,7 @@
 
 #pragma once
 #include "Memmap.hpp"
+#include <Api/Syscall.hpp>
 
 #include <CppLib/Spinlock.hpp>
 
@@ -27,6 +28,8 @@ public:
         void* ReallocConsecutive(void* ptr, int n);
         void Free(void* ptr);
         void Free(void* ptr, int n);
+
+        void GetStats(Zenith::MemStats* out);
     };
 
     extern PageFrameAllocator* g_pfa;

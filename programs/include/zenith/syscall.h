@@ -295,6 +295,9 @@ namespace zenith {
         return (int)syscall2(Zenith::SYS_DEVLIST, (uint64_t)buf, (uint64_t)max);
     }
 
+    // Kernel introspection
+    inline void memstats(Zenith::MemStats* out) { syscall1(Zenith::SYS_MEMSTATS, (uint64_t)out); }
+
     // Window server
     inline int win_create(const char* title, int w, int h, Zenith::WinCreateResult* result) {
         return (int)syscall4(Zenith::SYS_WINCREATE, (uint64_t)title, (uint64_t)w, (uint64_t)h, (uint64_t)result);
@@ -302,8 +305,8 @@ namespace zenith {
     inline int win_destroy(int id) {
         return (int)syscall1(Zenith::SYS_WINDESTROY, (uint64_t)id);
     }
-    inline int win_present(int id) {
-        return (int)syscall1(Zenith::SYS_WINPRESENT, (uint64_t)id);
+    inline uint64_t win_present(int id) {
+        return (uint64_t)syscall1(Zenith::SYS_WINPRESENT, (uint64_t)id);
     }
     inline int win_poll(int id, Zenith::WinEvent* event) {
         return (int)syscall2(Zenith::SYS_WINPOLL, (uint64_t)id, (uint64_t)event);

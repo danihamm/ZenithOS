@@ -333,11 +333,11 @@ namespace Zenith {
         int childPid = Sched::Spawn(path, args);
         if (childPid < 0) return childPid;
 
-        // Inherit I/O redirection: if the parent is redirected, the child
-        // is marked redirected too. It stores a parentPid pointing to the
-        // process that owns the actual ring buffers (the one spawned via
-        // spawn_redir). The child does NOT get its own buffers — Sys_Print
-        // et al. look up the buffer owner at write time.
+            // Inherit I/O redirection: if the parent is redirected, the child
+            // is marked redirected too. It stores a parentPid pointing to the
+            // process that owns the actual ring buffers (the one spawned via
+            // spawn_redir). The child does NOT get its own buffers — Sys_Print
+            // et al. look up the buffer owner at write time.
         if (parent && parent->redirected) {
             auto* child = Sched::GetProcessByPid(childPid);
             if (child) {
@@ -789,6 +789,13 @@ namespace Zenith {
         return count;
     }
 
+    // ---- Kernel introspection syscalls ----
+
+    static void Sys_MemStats(MemStats* out) {
+        if (out == nullptr) return;
+        Memory::g_pfa->GetStats(out);
+    }
+
     // ---- Window scale syscalls ----
 
     static int Sys_WinSetScale(int scale) {
@@ -818,7 +825,7 @@ namespace Zenith {
         return WinServer::Destroy(windowId, Sched::GetCurrentPid());
     }
 
-    static int Sys_WinPresent(int windowId) {
+    static uint64_t Sys_WinPresent(int windowId) {
         return WinServer::Present(windowId, Sched::GetCurrentPid());
     }
 
@@ -1017,6 +1024,9 @@ namespace Zenith {
                 return (int64_t)Sys_WinSetScale((int)frame->arg1);
             case SYS_WINGETSCALE:
                 return (int64_t)Sys_WinGetScale();
+            case SYS_MEMSTATS:
+                Sys_MemStats((MemStats*)frame->arg1);
+                return 0;
             default:
                 return -1;
         }
