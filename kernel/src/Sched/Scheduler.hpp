@@ -10,7 +10,7 @@
 
 namespace Sched {
 
-    static constexpr int MaxProcesses = 16;
+    static constexpr int MaxProcesses = 256;
     static constexpr uint64_t StackPages = 4;  // 16 KiB kernel stack per process
     static constexpr uint64_t StackSize = StackPages * 0x1000;
     static constexpr uint64_t UserStackPages = 4;  // 16 KiB user stack

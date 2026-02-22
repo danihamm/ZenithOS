@@ -11,35 +11,69 @@
 namespace Zenith {
 
     // Syscall numbers
+    
+    /* Process.hpp */
     static constexpr uint64_t SYS_EXIT            = 0;
     static constexpr uint64_t SYS_YIELD           = 1;
     static constexpr uint64_t SYS_SLEEP_MS        = 2;
     static constexpr uint64_t SYS_GETPID          = 3;
+
+    /* Terminal.hpp */
     static constexpr uint64_t SYS_PRINT           = 4;
-    static constexpr uint64_t SYS_PUTCHAR          = 5;
+    static constexpr uint64_t SYS_PUTCHAR         = 5;
+
+    /* Filesystem.hpp */
     static constexpr uint64_t SYS_OPEN            = 6;
     static constexpr uint64_t SYS_READ            = 7;
     static constexpr uint64_t SYS_GETSIZE         = 8;
     static constexpr uint64_t SYS_CLOSE           = 9;
     static constexpr uint64_t SYS_READDIR         = 10;
+
+    /* Heap.hpp */
     static constexpr uint64_t SYS_ALLOC           = 11;
     static constexpr uint64_t SYS_FREE            = 12;
+
+    /* Time.hpp */
     static constexpr uint64_t SYS_GETTICKS        = 13;
     static constexpr uint64_t SYS_GETMILLISECONDS = 14;
+
+    /* Info.hpp */
     static constexpr uint64_t SYS_GETINFO         = 15;
+
+    /* Keyboard.hpp */
     static constexpr uint64_t SYS_ISKEYAVAILABLE  = 16;
     static constexpr uint64_t SYS_GETKEY          = 17;
     static constexpr uint64_t SYS_GETCHAR         = 18;
+
+
+    /* Net.hpp */
     static constexpr uint64_t SYS_PING            = 19;
+
+
+    /* Process.hpp */
     static constexpr uint64_t SYS_SPAWN           = 20;
+
+    /* Graphics.hpp */
     static constexpr uint64_t SYS_FBINFO          = 21;
     static constexpr uint64_t SYS_FBMAP           = 22;
+
+    /* Process.hpp */
     static constexpr uint64_t SYS_WAITPID         = 23;
+
+    /* Graphics.hpp */
     static constexpr uint64_t SYS_TERMSIZE        = 24;
+
+    /* Process.hpp */
     static constexpr uint64_t SYS_GETARGS         = 25;
+
+    /* Power.hpp */
     static constexpr uint64_t SYS_RESET           = 26;
     static constexpr uint64_t SYS_SHUTDOWN        = 27;
+
+    /* Time.hpp */
     static constexpr uint64_t SYS_GETTIME         = 28;
+
+    /* Net.hpp */
     static constexpr uint64_t SYS_SOCKET          = 29;
     static constexpr uint64_t SYS_CONNECT         = 30;
     static constexpr uint64_t SYS_BIND            = 31;
@@ -48,25 +82,38 @@ namespace Zenith {
     static constexpr uint64_t SYS_SEND            = 34;
     static constexpr uint64_t SYS_RECV            = 35;
     static constexpr uint64_t SYS_CLOSESOCK       = 36;
-    static constexpr uint64_t SYS_GETNETCFG      = 37;
-    static constexpr uint64_t SYS_SETNETCFG      = 38;
-    static constexpr uint64_t SYS_SENDTO         = 39;
-    static constexpr uint64_t SYS_RECVFROM       = 40;
-    static constexpr uint64_t SYS_FWRITE         = 41;
-    static constexpr uint64_t SYS_FCREATE        = 42;
-    static constexpr uint64_t SYS_TERMSCALE     = 43;
-    static constexpr uint64_t SYS_RESOLVE        = 44;
-    static constexpr uint64_t SYS_GETRANDOM     = 45;
+    static constexpr uint64_t SYS_GETNETCFG       = 37;
+    static constexpr uint64_t SYS_SETNETCFG       = 38;
+    static constexpr uint64_t SYS_SENDTO          = 39;
+    static constexpr uint64_t SYS_RECVFROM        = 40;
+
+    /* Filesystem.hpp */
+    static constexpr uint64_t SYS_FWRITE          = 41;
+    static constexpr uint64_t SYS_FCREATE         = 42;
+
+    /* Graphics.hpp */
+    static constexpr uint64_t SYS_TERMSCALE       = 43;
+
+    /* Net.hpp */
+    static constexpr uint64_t SYS_RESOLVE         = 44;
+
+    /* Random.hpp */
+    static constexpr uint64_t SYS_GETRANDOM       = 45;
+
     static constexpr uint64_t SYS_KLOG            = 46;
-    static constexpr uint64_t SYS_MOUSESTATE     = 47;
-    static constexpr uint64_t SYS_SETMOUSEBOUNDS = 48;
-    static constexpr uint64_t SYS_SPAWN_REDIR    = 49;
-    static constexpr uint64_t SYS_CHILDIO_READ   = 50;
-    static constexpr uint64_t SYS_CHILDIO_WRITE  = 51;
-    static constexpr uint64_t SYS_CHILDIO_WRITEKEY = 52;
+
+    /* Mouse.hpp */
+    static constexpr uint64_t SYS_MOUSESTATE      = 47;
+    static constexpr uint64_t SYS_SETMOUSEBOUNDS  = 48;
+
+    /* IoRedir.hpp */
+    static constexpr uint64_t SYS_SPAWN_REDIR     = 49;
+    static constexpr uint64_t SYS_CHILDIO_READ    = 50;
+    static constexpr uint64_t SYS_CHILDIO_WRITE   = 51;
+    static constexpr uint64_t SYS_CHILDIO_WRITEKEY  = 52;
     static constexpr uint64_t SYS_CHILDIO_SETTERMSZ = 53;
 
-    // Window server syscalls
+    /* Window.hpp */
     static constexpr uint64_t SYS_WINCREATE    = 54;
     static constexpr uint64_t SYS_WINDESTROY   = 55;
     static constexpr uint64_t SYS_WINPRESENT   = 56;
@@ -74,16 +121,18 @@ namespace Zenith {
     static constexpr uint64_t SYS_WINENUM      = 58;
     static constexpr uint64_t SYS_WINMAP       = 59;
     static constexpr uint64_t SYS_WINSENDEVENT = 60;
-    static constexpr uint64_t SYS_WINRESIZE   = 64;
-    static constexpr uint64_t SYS_WINSETSCALE = 65;
-    static constexpr uint64_t SYS_WINGETSCALE = 66;
+    static constexpr uint64_t SYS_WINRESIZE    = 64;
+    static constexpr uint64_t SYS_WINSETSCALE  = 65;
+    static constexpr uint64_t SYS_WINGETSCALE  = 66;
 
-    // Process management syscalls
+    /* Process.hpp */
     static constexpr uint64_t SYS_PROCLIST    = 61;
     static constexpr uint64_t SYS_KILL        = 62;
+
+    /* Device.hpp */
     static constexpr uint64_t SYS_DEVLIST     = 63;
 
-    // Kernel introspection syscalls
+    /* MemInfo.hpp */
     static constexpr uint64_t SYS_MEMSTATS    = 67;
 
     static constexpr int SOCK_TCP = 1;
