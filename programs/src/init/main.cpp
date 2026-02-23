@@ -148,7 +148,7 @@ static bool run_service(const char* path, const char* name) {
 
 extern "C" void _start() {
 
-    log_info("Init system starting (PID 0)");
+    log_info("The ZenithOS Operating System");
 
     // ---- Stage 1: Network configuration ----
     run_service("0:/os/dhcp.elf", "dhcp");

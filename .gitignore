@@ -12,3 +12,4 @@ programs/obj/
 programs/src/*/obj/
 programs/lib/libc/liblibc.a
 programs/gui/icons/
+CLAUDE.md
