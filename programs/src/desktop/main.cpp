@@ -60,6 +60,7 @@ void gui::desktop_init(DesktopState* ds) {
 
     ds->icon_settings = svg_load("0:/icons/help-about.svg",     20, 20, defColor);
     ds->icon_reboot   = svg_load("0:/icons/system-reboot.svg", 20, 20, defColor);
+    ds->icon_shutdown = svg_load("0:/icons/system-shutdown.svg", 20, 20, defColor);
 
     ds->icon_weather = svg_load("0:/icons/weather-widget.svg", 20, 20, defColor);
 
@@ -424,7 +425,7 @@ struct MenuRow {
     int app_id;           // -1 for category headers / dividers
 };
 
-static constexpr int MENU_ROW_COUNT = 19;
+static constexpr int MENU_ROW_COUNT = 20;
 static const MenuRow menu_rows[MENU_ROW_COUNT] = {
     { true,  "Applications", -1 },
     { false, "Terminal",      0 },
@@ -445,6 +446,7 @@ static const MenuRow menu_rows[MENU_ROW_COUNT] = {
     { true,  "",             -1 },  // divider
     { false, "Settings",     11 },
     { false, "Reboot",       12 },
+    { false, "Shutdown",     14 },
 };
 
 static int menu_row_height(const MenuRow& row) {
@@ -474,7 +476,7 @@ static void desktop_draw_app_menu(DesktopState* ds) {
     draw_rect(fb, menu_x, menu_y, MENU_W, menu_h, colors::BORDER);
 
     // Icon lookup by app_id
-    SvgIcon* icons[14] = {
+    SvgIcon* icons[15] = {
         &ds->icon_terminal,     // 0
         &ds->icon_filemanager,  // 1
         &ds->icon_sysinfo,      // 2
@@ -489,6 +491,7 @@ static void desktop_draw_app_menu(DesktopState* ds) {
         &ds->icon_settings,     // 11
         &ds->icon_reboot,       // 12
         &ds->icon_weather,      // 13
+        &ds->icon_shutdown,     // 14
     };
 
     int mx = ds->mouse.x;
@@ -524,7 +527,7 @@ static void desktop_draw_app_menu(DesktopState* ds) {
             // Icon
             int icon_x = item_rect.x + 8;
             int icon_y = item_rect.y + (row_h - 20) / 2;
-            if (row.app_id >= 0 && row.app_id < 14) {
+            if (row.app_id >= 0 && row.app_id < 15) {
                 SvgIcon* icon = icons[row.app_id];
                 if (icon && icon->pixels) {
                     fb.blit_alpha(icon_x, icon_y, icon->width, icon->height, icon->pixels);
@@ -709,6 +712,118 @@ void open_reboot_dialog(DesktopState* ds) {
     win->on_close = reboot_dialog_on_close;
 }
 
+// ============================================================================
+// Shutdown Dialog
+// ============================================================================
+
+struct ShutdownDialogState {
+    DesktopState* ds;
+    int btn_w, btn_h, btn_y, shutdown_x, cancel_x;
+    bool hover_shutdown, hover_cancel;
+};
+
+static void shutdown_dialog_on_draw(Window* win, Framebuffer& fb) {
+    ShutdownDialogState* ss = (ShutdownDialogState*)win->app_data;
+    if (!ss) return;
+
+    Canvas c(win);
+    c.fill(colors::WINDOW_BG);
+
+    const char* msg = "Shut down the system?";
+    int tw = text_width(msg);
+    c.text((c.w - tw) / 2, 30, msg, colors::TEXT_COLOR);
+
+    int btn_w = 100;
+    int btn_h = 32;
+    int btn_y = c.h - btn_h - 20;
+    int gap = 20;
+    int total_w = btn_w * 2 + gap;
+    int bx = (c.w - total_w) / 2;
+    ss->btn_w = btn_w;
+    ss->btn_h = btn_h;
+    ss->btn_y = btn_y;
+    ss->shutdown_x = bx;
+    ss->cancel_x = bx + btn_w + gap;
+
+    Color shutdown_bg = ss->hover_shutdown
+        ? Color::from_rgb(0xDD, 0x44, 0x44)
+        : Color::from_rgb(0xCC, 0x33, 0x33);
+    c.button(ss->shutdown_x, btn_y, btn_w, btn_h, "Shut Down", shutdown_bg, colors::WHITE, 4);
+
+    Color cancel_bg = ss->hover_cancel
+        ? Color::from_rgb(0x99, 0x99, 0x99)
+        : Color::from_rgb(0x88, 0x88, 0x88);
+    c.button(ss->cancel_x, btn_y, btn_w, btn_h, "Cancel", cancel_bg, colors::WHITE, 4);
+}
+
+static void shutdown_dialog_on_mouse(Window* win, MouseEvent& ev) {
+    ShutdownDialogState* ss = (ShutdownDialogState*)win->app_data;
+    if (!ss) return;
+
+    Rect cr = win->content_rect();
+    int lx = ev.x - cr.x;
+    int ly = ev.y - cr.y;
+
+    Rect sb = {ss->shutdown_x, ss->btn_y, ss->btn_w, ss->btn_h};
+    Rect cb = {ss->cancel_x, ss->btn_y, ss->btn_w, ss->btn_h};
+    ss->hover_shutdown = sb.contains(lx, ly);
+    ss->hover_cancel = cb.contains(lx, ly);
+
+    if (ev.left_pressed()) {
+        if (ss->hover_shutdown) zenith::shutdown();
+        if (ss->hover_cancel) {
+            for (int i = 0; i < ss->ds->window_count; i++) {
+                if (ss->ds->windows[i].app_data == ss) {
+                    desktop_close_window(ss->ds, i);
+                    return;
+                }
+            }
+        }
+    }
+}
+
+static void shutdown_dialog_on_key(Window* win, const Zenith::KeyEvent& key) {
+    ShutdownDialogState* ss = (ShutdownDialogState*)win->app_data;
+    if (!ss || !key.pressed) return;
+
+    if (key.ascii == '\n' || key.ascii == '\r') {
+        zenith::shutdown();
+    }
+    if (key.scancode == 0x01) { // Escape
+        for (int i = 0; i < ss->ds->window_count; i++) {
+            if (ss->ds->windows[i].app_data == ss) {
+                desktop_close_window(ss->ds, i);
+                return;
+            }
+        }
+    }
+}
+
+static void shutdown_dialog_on_close(Window* win) {
+    if (win->app_data) {
+        zenith::mfree(win->app_data);
+        win->app_data = nullptr;
+    }
+}
+
+void open_shutdown_dialog(DesktopState* ds) {
+    int wx = (ds->screen_w - 300) / 2;
+    int wy = (ds->screen_h - 150) / 2;
+    int idx = desktop_create_window(ds, "Shut Down", wx, wy, 300, 150);
+    if (idx < 0) return;
+
+    Window* win = &ds->windows[idx];
+    ShutdownDialogState* ss = (ShutdownDialogState*)zenith::malloc(sizeof(ShutdownDialogState));
+    zenith::memset(ss, 0, sizeof(ShutdownDialogState));
+    ss->ds = ds;
+
+    win->app_data = ss;
+    win->on_draw = shutdown_dialog_on_draw;
+    win->on_mouse = shutdown_dialog_on_mouse;
+    win->on_key = shutdown_dialog_on_key;
+    win->on_close = shutdown_dialog_on_close;
+}
+
 static gui::ResizeEdge hit_test_resize_edge(const gui::Rect& f, int mx, int my) {
     using namespace gui;
     int G = RESIZE_GRAB;
@@ -808,7 +923,7 @@ void gui::desktop_compose(DesktopState* ds) {
     if (ds->ctx_menu_open) {
         static constexpr int CTX_MENU_W = 180;
         static constexpr int CTX_ITEM_H = 36;
-        static constexpr int CTX_ITEM_COUNT = 4;
+        static constexpr int CTX_ITEM_COUNT = 5;
         int cmx = ds->ctx_menu_x;
         int cmy = ds->ctx_menu_y;
         int cmh = CTX_ITEM_H * CTX_ITEM_COUNT + 8;
@@ -827,6 +942,7 @@ void gui::desktop_compose(DesktopState* ds) {
             { "Files",    &ds->icon_filemanager },
             { "About",    &ds->icon_settings },
             { "Reboot",   &ds->icon_reboot },
+            { "Shutdown", &ds->icon_shutdown },
         };
 
         int mmx = ds->mouse.x;
@@ -913,7 +1029,7 @@ void gui::desktop_handle_mouse(DesktopState* ds) {
         if (left_pressed) {
             static constexpr int CTX_MENU_W = 180;
             static constexpr int CTX_ITEM_H = 36;
-            static constexpr int CTX_ITEM_COUNT = 4;
+            static constexpr int CTX_ITEM_COUNT = 5;
             int cmx = ds->ctx_menu_x;
             int cmy = ds->ctx_menu_y;
             int cmh = CTX_ITEM_H * CTX_ITEM_COUNT + 8;
@@ -931,6 +1047,7 @@ void gui::desktop_handle_mouse(DesktopState* ds) {
                     case 1: open_filemanager(ds); break;
                     case 2: open_settings(ds); break;
                     case 3: open_reboot_dialog(ds); break;
+                    case 4: open_shutdown_dialog(ds); break;
                     }
                     return;
                 }
@@ -1105,6 +1222,7 @@ void gui::desktop_handle_mouse(DesktopState* ds) {
                         case 11: open_settings(ds); break;
                         case 12: open_reboot_dialog(ds); break;
                         case 13: open_weather(ds); break;
+                        case 14: open_shutdown_dialog(ds); break;
                         }
                         ds->app_menu_open = false;
                     }

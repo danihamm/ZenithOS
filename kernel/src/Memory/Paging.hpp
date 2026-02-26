@@ -108,10 +108,18 @@ public:
 
         // Map a page into an arbitrary PML4 with User + Write-Combining attributes.
         static void MapUserInWC(std::uint64_t pml4Phys, std::uint64_t physicalAddress, std::uint64_t virtualAddress);
+
+        // Identity-map EFI runtime service regions so firmware code can
+        // reference its own data at physical addresses.
+        void MapEfiRuntime(limine_efi_memmap_response* efiMemmap);
     };
 
     extern Paging* g_paging;
 
     extern "C" uint64_t GetCR3();
     extern "C" void LoadCR3(PageTable* PML4);
+
+    inline void FlushTLB() {
+        asm volatile("mov %%cr3, %%rax; mov %%rax, %%cr3" ::: "rax", "memory");
+    }
 };

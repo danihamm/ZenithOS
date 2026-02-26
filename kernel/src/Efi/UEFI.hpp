@@ -5,7 +5,9 @@
 
 #pragma once
 #include <cstdint>
+#include <limine.h>
 #include <Memory/HHDM.hpp>
+#include <Memory/Paging.hpp>
 #include <Timekeeping/Time.hpp>
 
 namespace Efi {
@@ -269,7 +271,9 @@ namespace Efi {
         void *ConfigurationTable;
     };
     
-    inline void Init(SystemTable* ST) {
+    inline EFI_RESET_SYSTEM g_ResetSystem = nullptr;
+
+    inline void Init(SystemTable* ST, limine_efi_memmap_response* efiMemmap) {
         Kt::KernelLogStream(Kt::OK, "UEFI") << "ST Minor Revision: " << ST->Header.Revision.MinorRevision;
         Kt::KernelLogStream(Kt::OK, "UEFI") << "ST Major Revision: " << ST->Header.Revision.MajorRevision;
 
@@ -278,6 +282,12 @@ namespace Efi {
         if (ST->RuntimeServices != nullptr) {
             Kt::KernelLogStream(Kt::OK, "UEFI") << "EFI Runtime Service API is available.";
 
+            /* Identity-map EFI runtime service regions so firmware code
+               can reference its own data at physical addresses */
+            if (Memory::VMM::g_paging) {
+                Memory::VMM::g_paging->MapEfiRuntime(efiMemmap);
+            }
+
             EFI_TIME Time;
             EFI_TIME_CAPABILITIES TimeCapabilities;
 
@@ -285,6 +295,8 @@ namespace Efi {
             _GetTime(&Time, &TimeCapabilities);
 
             Timekeeping::Init(Time.Year, Time.Month, Time.Day, Time.Hour, Time.Minute, Time.Second);
+
+            g_ResetSystem = (EFI_RESET_SYSTEM)Memory::HHDM((void*)RT->ResetSystem);
         }
     }
 };

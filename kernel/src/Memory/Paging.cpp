@@ -267,4 +267,34 @@ namespace Memory::VMM {
     std::uint64_t Paging::GetPhysAddr(std::uint64_t virtualAddress) {
         return GetPhysAddr((std::uint64_t)PML4, virtualAddress, false);
     }
+
+    void Paging::MapEfiRuntime(limine_efi_memmap_response* efiMemmap) {
+        if (!efiMemmap) return;
+
+        auto* base = (uint8_t*)efiMemmap->memmap;
+        uint64_t descSize = efiMemmap->desc_size;
+        uint64_t count = efiMemmap->memmap_size / descSize;
+
+        struct EfiMemDesc {
+            uint32_t Type;
+            uint64_t PhysicalStart;
+            uint64_t VirtualStart;
+            uint64_t NumberOfPages;
+            uint64_t Attribute;
+        };
+
+        static constexpr uint64_t EFI_MEMORY_RUNTIME = 0x8000000000000000ULL;
+
+        for (uint64_t i = 0; i < count; i++) {
+            auto* desc = (EfiMemDesc*)(base + i * descSize);
+            if (desc->Attribute & EFI_MEMORY_RUNTIME) {
+                for (uint64_t p = 0; p < desc->NumberOfPages; p++) {
+                    uint64_t addr = desc->PhysicalStart + p * 0x1000;
+                    Map(addr, addr);
+                }
+            }
+        }
+
+        FlushTLB();
+    }
 };

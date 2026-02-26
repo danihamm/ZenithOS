@@ -109,8 +109,8 @@ namespace Zenith {
                 Sys_Reset();
                 return 0;
             case SYS_SHUTDOWN:
-                /* Unimplemented */
-                return -1;
+                Sys_Shutdown();
+                return 0;
             case SYS_GETTIME:
                 Sys_GetTime((DateTime*)frame->arg1);
                 return 0;

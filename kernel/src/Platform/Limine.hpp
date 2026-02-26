@@ -53,6 +53,13 @@ namespace {
     };
 
     __attribute__((used, section(".limine_requests")))
+    volatile limine_efi_memmap_request efi_memmap_request = {
+        .id = LIMINE_EFI_MEMMAP_REQUEST,
+        .revision = 0,
+        .response = nullptr
+    };
+
+    __attribute__((used, section(".limine_requests")))
     volatile limine_rsdp_request rsdp_request = {
         .id = LIMINE_RSDP_REQUEST,
         .revision = 0,

@@ -166,7 +166,7 @@ extern "C" void kmain() {
             g_paging.MapWC(phys, Memory::HHDM(phys));
         }
 
-        asm volatile("mov %%cr3, %%rax; mov %%rax, %%cr3" ::: "rax", "memory");
+        Memory::VMM::FlushTLB();
 
         Kt::KernelLogStream(OK, "Graphics") << "Framebuffer mapped as Write-Combining ("
             << kcp::dec << numPages << " pages)";
@@ -211,7 +211,7 @@ extern "C" void kmain() {
 #endif
 
     Efi::SystemTable* ST = (Efi::SystemTable*)Memory::HHDM(system_table_request.response->address);
-    Efi::Init(ST);
+    Efi::Init(ST, efi_memmap_request.response);
 
     // Initialize ramdisk from Limine modules
     if (module_request.response != nullptr && module_request.response->module_count > 0) {

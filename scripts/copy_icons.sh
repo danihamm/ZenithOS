@@ -52,6 +52,7 @@ ICONS=(
     "mimetypes/scalable/application-x-executable.svg"
     "categories/scalable/help-about.svg"
     "categories/scalable/system-reboot.svg"
+    "categories/scalable/system-shutdown.svg"
     "apps/scalable/doom.svg"
     "apps/scalable/system-monitor.svg"
     "apps/scalable/applications-science.svg"
