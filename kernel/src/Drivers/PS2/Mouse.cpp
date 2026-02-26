@@ -203,7 +203,7 @@ namespace Drivers::PS2::Mouse {
         g_State.X += (int32_t)deltaX;
         g_State.Y += (int32_t)deltaY;
         g_State.Buttons = buttons;
-        g_State.ScrollDelta += (int32_t)scroll;
+        g_State.ScrollDelta += -(int32_t)scroll;
 
         // Clamp to screen bounds
         if (g_State.X < 0) g_State.X = 0;
