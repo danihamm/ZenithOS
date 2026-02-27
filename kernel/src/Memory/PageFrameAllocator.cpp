@@ -69,25 +69,43 @@ namespace Memory {
     }
 
     void* PageFrameAllocator::ReallocConsecutive(void* ptr, int n) {
-        auto first = Allocate();
+        Lock.Acquire();
 
-        for (int i = 0; i < n - 1; i++) {
-            if (Allocate() == nullptr) {
-                Panic("PageFrameAllocator Reallocation failed", nullptr);
-            };
+        // Search the free list for a single contiguous region >= n pages.
+        // The old implementation assumed N consecutive Allocate() calls gave
+        // adjacent pages, which breaks when individual pages are freed back.
+        size_t needed = (size_t)n * 0x1000;
+        Page* current = head.next;
+        Page* prev = &head;
+
+        while (current != nullptr) {
+            if (current->size >= needed) {
+                // Carve from the top of this contiguous region
+                current->size -= needed;
+                void* base;
+                if (current->size == 0) {
+                    base = (void*)current;
+                    prev->next = current->next;
+                } else {
+                    base = (void*)((uint64_t)current + current->size);
+                }
+
+                Lock.Release();
+
+                if (ptr != nullptr) {
+                    memcpy(base, ptr, 0x1000);  // copy one page (ptr is always a single page)
+                    Free(ptr);
+                }
+
+                return base;
+            }
+            prev = current;
+            current = current->next;
         }
 
-        // Allocate() returns pages from the top of a free region in descending
-        // order, so 'first' is the highest address.  The contiguous block
-        // actually starts (n-1) pages below 'first'.
-        void* base = (void*)((uint64_t)first - (uint64_t)(n - 1) * 0x1000);
-
-        if (ptr != nullptr) {
-            memcpy(base, ptr, (uint64_t)n * 0x1000);
-            Free(ptr);
-        }
-
-        return base;
+        Lock.Release();
+        Panic("PageFrameAllocator: no contiguous region available", nullptr);
+        return nullptr;
     }
 
     void PageFrameAllocator::Free(void* ptr) {
@@ -102,7 +120,7 @@ namespace Memory {
 
     void PageFrameAllocator::Free(void* ptr, int n) {
         for (int i = 0; i < n; i++) {
-            Free((void*)(uint64_t)ptr + (0x1000 * n));
+            Free((void*)((uint64_t)ptr + 0x1000 * i));
         }
     }
 

@@ -61,22 +61,10 @@ namespace Zenith {
         return userVa;
     }
 
-    // Free all heap allocations for a process slot (called on process exit)
-    static void CleanupHeapForSlot(int slot, uint64_t pml4Phys) {
+    // Reset heap allocation tracking for a process slot.
+    // The actual physical pages are freed by Paging::FreeUserHalf() during process cleanup.
+    static void CleanupHeapForSlot(int slot, uint64_t /*pml4Phys*/) {
         if (slot < 0 || slot >= Sched::MaxProcesses) return;
-
-        for (int i = 0; i < g_heapAllocCount[slot]; i++) {
-            uint64_t va = g_heapAllocs[slot][i].va;
-            uint64_t numPages = g_heapAllocs[slot][i].numPages;
-            for (uint64_t p = 0; p < numPages; p++) {
-                uint64_t pageVa = va + p * 0x1000;
-                uint64_t physAddr = Memory::VMM::Paging::GetPhysAddr(pml4Phys, pageVa);
-                if (physAddr != 0) {
-                    Memory::g_pfa->Free((void*)Memory::HHDM(physAddr));
-                }
-                Memory::VMM::Paging::UnmapUserIn(pml4Phys, pageVa);
-            }
-        }
         g_heapAllocCount[slot] = 0;
     }
 

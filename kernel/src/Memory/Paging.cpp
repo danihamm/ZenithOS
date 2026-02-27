@@ -268,6 +268,60 @@ namespace Memory::VMM {
         asm volatile("invlpg (%0)" :: "r"(virtualAddress) : "memory");
     }
 
+    void Paging::FreeUserHalf(std::uint64_t pml4Phys) {
+        // PageTable* pointers store PHYSICAL addresses (same convention as MapUserIn/UnmapUserIn).
+        // Each individual entry access goes through HHDM() to get a valid virtual pointer.
+        PageTable* pml4 = (PageTable*)pml4Phys;
+
+        // Walk user-half entries (0-255); kernel-half (256-511) is shared and must not be touched.
+        for (int i4 = 0; i4 < 256; i4++) {
+            PageTableEntry* pml4e = (PageTableEntry*)Memory::HHDM(&pml4->entries[i4]);
+            if (!pml4e->Present) continue;
+
+            uint64_t pdptPhys = (uint64_t)pml4e->Address << 12;
+            PageTable* pdpt = (PageTable*)pdptPhys;
+
+            for (int i3 = 0; i3 < 512; i3++) {
+                PageTableEntry* pdpte = (PageTableEntry*)Memory::HHDM(&pdpt->entries[i3]);
+                if (!pdpte->Present) continue;
+
+                uint64_t pdPhys = (uint64_t)pdpte->Address << 12;
+                PageTable* pd = (PageTable*)pdPhys;
+
+                for (int i2 = 0; i2 < 512; i2++) {
+                    PageTableEntry* pde = (PageTableEntry*)Memory::HHDM(&pd->entries[i2]);
+                    if (!pde->Present) continue;
+
+                    uint64_t ptPhys = (uint64_t)pde->Address << 12;
+                    PageTable* pt = (PageTable*)ptPhys;
+
+                    // Free all leaf physical pages
+                    for (int i1 = 0; i1 < 512; i1++) {
+                        PageTableEntry* pte = (PageTableEntry*)Memory::HHDM(&pt->entries[i1]);
+                        if (!pte->Present) continue;
+
+                        // Skip MMIO/WC pages (not PFA-managed)
+                        if (pte->WriteThrough || pte->CacheDisabled) continue;
+
+                        uint64_t pagePhys = (uint64_t)pte->Address << 12;
+                        if (pagePhys != 0) {
+                            Memory::g_pfa->Free((void*)Memory::HHDM(pagePhys));
+                        }
+                    }
+
+                    // Free the PT page itself
+                    Memory::g_pfa->Free((void*)Memory::HHDM(ptPhys));
+                }
+
+                // Free the PD page
+                Memory::g_pfa->Free((void*)Memory::HHDM(pdPhys));
+            }
+
+            // Free the PDPT page
+            Memory::g_pfa->Free((void*)Memory::HHDM(pdptPhys));
+        }
+    }
+
     std::uint64_t Paging::GetPhysAddr(std::uint64_t pml4, std::uint64_t virtualAddress, bool use40BitL1) {
         VirtualAddress virtualAddressObj(virtualAddress);
 

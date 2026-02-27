@@ -1,6 +1,6 @@
 /*
  * main.cpp
- * ZenithOS Font Preview - standalone Window Server process
+ * ZenithOS Font Preview app
  * Displays TTF font samples at multiple sizes with vertical scrolling
  * Copyright (c) 2026 Daniel Hammer
  */
@@ -14,7 +14,7 @@
 using namespace gui;
 
 // ============================================================================
-// Constants — light theme matching ZenithOS desktop conventions
+// Constants
 // ============================================================================
 
 static constexpr int INIT_W      = 800;
@@ -40,7 +40,7 @@ static const char* UPPER     = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 static const char* LOWER_NUM = "abcdefghijklmnopqrstuvwxyz 0123456789";
 
 // ============================================================================
-// Pre-rendered glyph cache — rasterised once at startup for all 7 sizes
+// Pre-rendered glyph cache
 // ============================================================================
 
 struct PreviewGlyph {

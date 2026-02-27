@@ -112,6 +112,11 @@ public:
         // Unmap a single page from an arbitrary PML4 (clears PTE + invalidates TLB).
         static void UnmapUserIn(std::uint64_t pml4Phys, std::uint64_t virtualAddress);
 
+        // Free all user-half page table structures and physical pages (PML4 entries 0-255).
+        // Does NOT free the PML4 page itself (caller handles that).
+        // Skips MMIO/WC pages (WriteThrough or CacheDisabled set in PTE).
+        static void FreeUserHalf(std::uint64_t pml4Phys);
+
         // Identity-map EFI runtime service regions so firmware code can
         // reference its own data at physical addresses.
         void MapEfiRuntime(limine_efi_memmap_response* efiMemmap);

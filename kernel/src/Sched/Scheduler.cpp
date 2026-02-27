@@ -239,9 +239,19 @@ namespace Sched {
     }
 
     void Schedule() {
-        // Reclaim terminated process slots so they can be reused
+        // Reclaim terminated process slots — free deferred resources first
         for (int i = 0; i < MaxProcesses; i++) {
             if (processTable[i].state == ProcessState::Terminated) {
+                // Free kernel stack (deferred from ExitProcess — can't free while running on it)
+                if (processTable[i].stackBase != 0) {
+                    Memory::g_pfa->Free((void*)processTable[i].stackBase, StackPages);
+                    processTable[i].stackBase = 0;
+                }
+                // Free the PML4 page (deferred from ExitProcess — can't free while it's CR3)
+                if (processTable[i].pml4Phys != 0) {
+                    Memory::g_pfa->Free((void*)Memory::HHDM(processTable[i].pml4Phys));
+                    processTable[i].pml4Phys = 0;
+                }
                 processTable[i].state = ProcessState::Free;
             }
         }
@@ -322,10 +332,27 @@ namespace Sched {
             return;
         }
 
-        // Clean up any windows owned by this process
-        WinServer::CleanupProcess(processTable[currentPid].pid);
+        Process& proc = processTable[currentPid];
 
-        processTable[currentPid].state = ProcessState::Terminated;
+        // Clean up any windows owned by this process (unmaps pixel pages from desktop)
+        WinServer::CleanupProcess(proc.pid);
+
+        // Free I/O redirect buffers (kernel-allocated pages)
+        if (proc.outBuf) {
+            Memory::g_pfa->Free(proc.outBuf);
+            proc.outBuf = nullptr;
+        }
+        if (proc.inBuf) {
+            Memory::g_pfa->Free(proc.inBuf);
+            proc.inBuf = nullptr;
+        }
+
+        // Free all user-space physical pages and page table structures (entries 0-255).
+        // This covers ELF code/data, user stack, exit stub, heap, and window pixel buffers.
+        // The PML4 page itself is freed later in Schedule() (can't free while it's CR3).
+        Memory::VMM::Paging::FreeUserHalf(proc.pml4Phys);
+
+        proc.state = ProcessState::Terminated;
 
         int next = -1;
         for (int i = 0; i < MaxProcesses; i++) {

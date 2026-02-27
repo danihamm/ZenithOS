@@ -10,6 +10,7 @@
 #include <Memory/HHDM.hpp>
 #include <Libraries/Memory.hpp>
 #include <Terminal/Terminal.hpp>
+#include <Sched/Scheduler.hpp>
 
 namespace WinServer {
 
@@ -229,6 +230,19 @@ namespace WinServer {
             if (g_slots[i].used && g_slots[i].ownerPid == pid) {
                 Kt::KernelLogStream(Kt::INFO, "WinServer") << "Cleaning up window "
                     << i << " for exited PID " << pid;
+
+                // Unmap pixel pages from desktop's address space to prevent stale access
+                if (g_slots[i].desktopVa != 0 && g_slots[i].desktopPid != 0) {
+                    auto* desktopProc = Sched::GetProcessByPid(g_slots[i].desktopPid);
+                    if (desktopProc) {
+                        for (int p = 0; p < g_slots[i].pixelNumPages; p++) {
+                            Memory::VMM::Paging::UnmapUserIn(
+                                desktopProc->pml4Phys,
+                                g_slots[i].desktopVa + (uint64_t)p * 0x1000);
+                        }
+                    }
+                }
+
                 g_slots[i].used = false;
             }
         }
