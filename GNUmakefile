@@ -33,6 +33,7 @@ run-hdd: run-hdd-$(ARCH)
 run-x86_64: $(IMAGE_NAME).iso
 	sudo ./scripts/net-setup.sh
 	qemu-system-$(ARCH) \
+		-enable-kvm \
 		-M q35 \
 		-bios /usr/share/ovmf/OVMF.fd \
 		-cdrom $(IMAGE_NAME).iso \

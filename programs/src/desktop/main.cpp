@@ -5,6 +5,7 @@
 */
 
 #include "apps_common.hpp"
+#include "wallpaper.hpp"
 
 // ============================================================================
 // Desktop Implementation
@@ -71,14 +72,23 @@ void gui::desktop_init(DesktopState* ds) {
 
     // Settings defaults
     ds->settings.bg_gradient = true;
+    ds->settings.bg_image = false;
     ds->settings.bg_grad_top = Color::from_rgb(0xD0, 0xD8, 0xE8);
     ds->settings.bg_grad_bottom = Color::from_rgb(0xA0, 0xA8, 0xB8);
     ds->settings.bg_solid = Color::from_rgb(0xD0, 0xD8, 0xE8);
-    ds->settings.panel_color = colors::PANEL_BG;
+    ds->settings.bg_image_path[0] = '\0';
+    ds->settings.bg_wallpaper = nullptr;
+    ds->settings.bg_wallpaper_w = 0;
+    ds->settings.bg_wallpaper_h = 0;
+    ds->settings.panel_color = Color::from_rgb(0x10, 0x10, 0x10);
     ds->settings.accent_color = colors::ACCENT;
     ds->settings.show_shadows = true;
     ds->settings.clock_24h = true;
     ds->settings.ui_scale = 1;
+
+    // Try to load default wallpaper
+    wallpaper_load(&ds->settings, "0:/home/troy-olson-MhYIwOiyZpM-unsplash.jpg",
+                   ds->screen_w, ds->screen_h);
     zenith::win_setscale(1);
 
     ds->ctx_menu_open = false;
@@ -299,8 +309,10 @@ void gui::desktop_draw_panel(DesktopState* ds) {
         fb.fill_rect(0, y, sw, 1, Color::from_rgb(r, g, b));
     }
 
-    // Bottom highlight line
-    fb.fill_rect(0, PANEL_HEIGHT - 1, sw, 1, Color::from_rgba(0xFF, 0xFF, 0xFF, 0x10));
+    // Bottom highlight line (skip when wallpaper is set — the white bleeds through)
+    if (!ds->settings.bg_image) {
+        fb.fill_rect(0, PANEL_HEIGHT - 1, sw, 1, Color::from_rgba(0xFF, 0xFF, 0xFF, 0x10));
+    }
 
     // App menu button (left side)
     int btn_x = 4;
@@ -880,7 +892,12 @@ void gui::desktop_compose(DesktopState* ds) {
 
     for (int y = 0; y < sh; y++) {
         uint32_t* row = (uint32_t*)((uint8_t*)buf + y * pitch);
-        if (y < grad_start) {
+        if (ds->settings.bg_image && ds->settings.bg_wallpaper) {
+            // Wallpaper covers the entire screen; panel draws on top
+            uint32_t* wp = ds->settings.bg_wallpaper + y * ds->settings.bg_wallpaper_w;
+            int cw = sw < ds->settings.bg_wallpaper_w ? sw : ds->settings.bg_wallpaper_w;
+            for (int x = 0; x < cw; x++) row[x] = wp[x];
+        } else if (y < grad_start) {
             // Panel area - will be overwritten by panel drawing
             uint32_t px = ds->settings.panel_color.to_pixel();
             for (int x = 0; x < sw; x++) row[x] = px;

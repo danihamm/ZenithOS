@@ -5,6 +5,7 @@
 */
 
 #include "apps_common.hpp"
+#include "wallpaper.hpp"
 
 // ============================================================================
 // Settings state
@@ -15,6 +16,8 @@ struct SettingsState {
     int active_tab;        // 0=Appearance, 1=Display, 2=About
     Zenith::SysInfo sys_info;
     uint64_t uptime_ms;
+    WallpaperFileList wp_files;
+    bool wp_scanned;
 };
 
 // ============================================================================
@@ -130,9 +133,12 @@ static void draw_toggle_btn(Canvas& c, int x, int y, int bw, int bh,
     c.text(x + (bw - tw) / 2, y + (bh - fh) / 2, label, fg);
 }
 
+static constexpr int WP_ITEM_H = 24;
+
 static void settings_draw_appearance(Canvas& c, SettingsState* st) {
     DesktopSettings& s = st->desktop->settings;
     Color accent = s.accent_color;
+    Color dim = Color::from_rgb(0x88, 0x88, 0x88);
     int x = 16;
     int y = 12;
     int sfh = system_font_height();
@@ -142,27 +148,80 @@ static void settings_draw_appearance(Canvas& c, SettingsState* st) {
     c.text(x, y, "Background", colors::TEXT_COLOR);
     y += line_h;
 
-    // Radio buttons: Gradient / Solid
-    draw_radio(c, x, y, s.bg_gradient, accent);
+    // Radio buttons: Gradient / Solid Color / Image
+    bool mode_grad  = s.bg_gradient && !s.bg_image;
+    bool mode_solid = !s.bg_gradient && !s.bg_image;
+    bool mode_image = s.bg_image;
+
+    draw_radio(c, x, y, mode_grad, accent);
     c.text(x + 20, y + 2, "Gradient", colors::TEXT_COLOR);
 
-    draw_radio(c, x + 120, y, !s.bg_gradient, accent);
-    c.text(x + 140, y + 2, "Solid Color", colors::TEXT_COLOR);
+    draw_radio(c, x + 120, y, mode_solid, accent);
+    c.text(x + 140, y + 2, "Solid", colors::TEXT_COLOR);
+
+    draw_radio(c, x + 220, y, mode_image, accent);
+    c.text(x + 240, y + 2, "Image", colors::TEXT_COLOR);
     y += line_h + 4;
 
-    if (s.bg_gradient) {
+    if (mode_image) {
+        // Scan for images lazily
+        if (!st->wp_scanned) {
+            wallpaper_scan_dir("0:/home", &st->wp_files);
+            st->wp_scanned = true;
+        }
+
+        c.text(x, y, "Images in 0:/home/", dim);
+        y += sfh + 6;
+
+        if (st->wp_files.count == 0) {
+            c.text(x + 8, y, "No .jpg files found", dim);
+            y += WP_ITEM_H;
+        } else {
+            for (int i = 0; i < st->wp_files.count && i < 8; i++) {
+                // Build full path for comparison
+                char fullpath[256];
+                zenith::strcpy(fullpath, "0:/home/");
+                str_append(fullpath, st->wp_files.names[i], 256);
+
+                bool selected = s.bg_image &&
+                    zenith::streq(s.bg_image_path, fullpath);
+
+                if (selected) {
+                    c.fill_rounded_rect(x, y, c.w - 2 * x, WP_ITEM_H, 3, accent);
+                }
+
+                // Truncate long filenames
+                char label[40];
+                int nlen = zenith::slen(st->wp_files.names[i]);
+                if (nlen > 35) {
+                    zenith::strncpy(label, st->wp_files.names[i], 32);
+                    label[32] = '.';
+                    label[33] = '.';
+                    label[34] = '.';
+                    label[35] = '\0';
+                } else {
+                    zenith::strncpy(label, st->wp_files.names[i], 39);
+                }
+
+                Color tc = selected ? colors::WHITE : colors::TEXT_COLOR;
+                c.text(x + 8, y + (WP_ITEM_H - sfh) / 2, label, tc);
+                y += WP_ITEM_H;
+            }
+        }
+        y += 6;
+    } else if (mode_grad) {
         // Top color swatches
-        c.text(x, y + 4, "Top", Color::from_rgb(0x88, 0x88, 0x88));
+        c.text(x, y + 4, "Top", dim);
         draw_swatch_row(c, x + 70, y, bg_palette, s.bg_grad_top, accent);
         y += SWATCH_SIZE + 14;
 
         // Bottom color swatches
-        c.text(x, y + 4, "Bottom", Color::from_rgb(0x88, 0x88, 0x88));
+        c.text(x, y + 4, "Bottom", dim);
         draw_swatch_row(c, x + 70, y, bg_palette, s.bg_grad_bottom, accent);
         y += SWATCH_SIZE + 14;
     } else {
         // Solid color swatches
-        c.text(x, y + 4, "Color", Color::from_rgb(0x88, 0x88, 0x88));
+        c.text(x, y + 4, "Color", dim);
         draw_swatch_row(c, x + 70, y, bg_palette, s.bg_solid, accent);
         y += SWATCH_SIZE + 14;
     }
@@ -363,23 +422,58 @@ static void settings_on_mouse(Window* win, MouseEvent& ev) {
         int line_h = sfh + 10;
         int y = 12;
 
+        bool mode_grad  = s.bg_gradient && !s.bg_image;
+        bool mode_image = s.bg_image;
+
         // "Background" label
         y += line_h;
 
         // Radio: Gradient
         if (mx >= x && mx < x + 100 && cy >= y && cy < y + 16) {
             s.bg_gradient = true;
+            s.bg_image = false;
             return;
         }
         // Radio: Solid
-        if (mx >= x + 120 && mx < x + 260 && cy >= y && cy < y + 16) {
+        if (mx >= x + 120 && mx < x + 210 && cy >= y && cy < y + 16) {
             s.bg_gradient = false;
+            s.bg_image = false;
+            return;
+        }
+        // Radio: Image
+        if (mx >= x + 220 && mx < x + 320 && cy >= y && cy < y + 16) {
+            s.bg_image = true;
+            s.bg_gradient = false;
+            if (!st->wp_scanned) {
+                wallpaper_scan_dir("0:/home", &st->wp_files);
+                st->wp_scanned = true;
+            }
             return;
         }
         y += line_h + 4;
 
         int idx;
-        if (s.bg_gradient) {
+        if (mode_image) {
+            // "Images in 0:/home/" label
+            y += sfh + 6;
+
+            // File list clicks
+            for (int i = 0; i < st->wp_files.count && i < 8; i++) {
+                if (cy >= y && cy < y + WP_ITEM_H &&
+                    mx >= x && mx < win->content_w - x) {
+                    // Build full path and load wallpaper
+                    char fullpath[256];
+                    zenith::strcpy(fullpath, "0:/home/");
+                    str_append(fullpath, st->wp_files.names[i], 256);
+                    wallpaper_load(&s, fullpath,
+                                   st->desktop->screen_w, st->desktop->screen_h);
+                    return;
+                }
+                y += WP_ITEM_H;
+            }
+            if (st->wp_files.count == 0) y += WP_ITEM_H;
+            y += 6;
+        } else if (mode_grad) {
             // Top swatches
             if (swatch_hit(mx, cy, x + 70, y, &idx)) {
                 s.bg_grad_top = bg_palette[idx];
@@ -504,6 +598,8 @@ void open_settings(DesktopState* ds) {
     st->active_tab = 0;
     zenith::get_info(&st->sys_info);
     st->uptime_ms = zenith::get_milliseconds();
+    st->wp_scanned = false;
+    st->wp_files.count = 0;
 
     win->app_data = st;
     win->on_draw = settings_on_draw;

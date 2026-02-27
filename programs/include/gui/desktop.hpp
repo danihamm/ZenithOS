@@ -21,9 +21,16 @@ static constexpr int PANEL_HEIGHT = 32;
 struct DesktopSettings {
     // Background
     bool bg_gradient;       // true = gradient, false = solid
+    bool bg_image;          // true = JPEG wallpaper
     Color bg_solid;         // solid background color
     Color bg_grad_top;      // gradient top color
     Color bg_grad_bottom;   // gradient bottom color
+
+    // Wallpaper (valid when bg_image == true)
+    char bg_image_path[128];   // VFS path to current wallpaper
+    uint32_t* bg_wallpaper;    // scaled ARGB pixel buffer (screen-sized)
+    int bg_wallpaper_w;        // scaled width
+    int bg_wallpaper_h;        // scaled height
 
     // Panel
     Color panel_color;      // panel background color

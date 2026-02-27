@@ -10,7 +10,7 @@
 
 namespace Fs::Ramdisk {
 
-    static constexpr int MaxFiles = 128;
+    static constexpr int MaxFiles = 256;
     static constexpr int MaxNameLen = 100;
 
     struct FileEntry {

@@ -57,6 +57,10 @@ static bool str_ends_with(const char* s, const char* suffix) {
     return true;
 }
 
+static bool is_image_file(const char* name) {
+    return str_ends_with(name, ".jpg") || str_ends_with(name, ".jpeg");
+}
+
 static int detect_file_type(const char* name, bool is_dir) {
     if (is_dir) return 1;
     if (str_ends_with(name, ".elf")) return 2;
@@ -545,7 +549,9 @@ static void filemanager_on_mouse(Window* win, MouseEvent& ev) {
                                 str_append(fullpath, "/", 512);
                             }
                             str_append(fullpath, fm->entry_names[clicked_idx], 512);
-                            if (fm->desktop) {
+                            if (is_image_file(fm->entry_names[clicked_idx])) {
+                                zenith::spawn("0:/os/imageviewer.elf", fullpath);
+                            } else if (fm->desktop) {
                                 open_texteditor_with_file(fm->desktop, fullpath);
                             }
                         }
@@ -574,7 +580,7 @@ static void filemanager_on_mouse(Window* win, MouseEvent& ev) {
                         if (fm->is_dir[clicked_idx]) {
                             filemanager_navigate(fm, fm->entry_names[clicked_idx]);
                         } else {
-                            // Open file in text editor
+                            // Open file in appropriate viewer
                             char fullpath[512];
                             zenith::strcpy(fullpath, fm->current_path);
                             int plen = zenith::slen(fullpath);
@@ -582,7 +588,9 @@ static void filemanager_on_mouse(Window* win, MouseEvent& ev) {
                                 str_append(fullpath, "/", 512);
                             }
                             str_append(fullpath, fm->entry_names[clicked_idx], 512);
-                            if (fm->desktop) {
+                            if (is_image_file(fm->entry_names[clicked_idx])) {
+                                zenith::spawn("0:/os/imageviewer.elf", fullpath);
+                            } else if (fm->desktop) {
                                 open_texteditor_with_file(fm->desktop, fullpath);
                             }
                         }

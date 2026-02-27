@@ -39,13 +39,14 @@ namespace heap_detail {
         g_head.next = node;
     }
 
-    static inline void grow(uint64_t bytes) {
+    static inline bool grow(uint64_t bytes) {
         uint64_t pages = (bytes + 0xFFF) / 0x1000;
         if (pages < 4) pages = 4;          // grow at least 16 KiB at a time
 
         void* mem = zenith::alloc(pages * 0x1000);
-        if (mem != nullptr)
-            insert_free(mem, pages * 0x1000);
+        if (mem == nullptr) return false;
+        insert_free(mem, pages * 0x1000);
+        return true;
     }
 
 } // namespace heap_detail
@@ -93,7 +94,8 @@ namespace heap_detail {
         }
 
         // No fit — grow and retry
-        grow(needed);
+        if (!grow(needed))
+            return nullptr;
         return malloc(size);
     }
 

@@ -57,7 +57,7 @@ BINDIR := bin
 PROGRAMS := $(notdir $(wildcard src/*))
 
 # Programs with custom Makefiles (built separately).
-CUSTOM_BUILDS := doom fetch wiki wikipedia weather desktop
+CUSTOM_BUILDS := doom fetch wiki wikipedia weather imageviewer desktop
 SYSTEM_PROGRAMS := $(filter-out $(CUSTOM_BUILDS),$(PROGRAMS))
 
 # Build targets: system programs go to bin/os/, games are handled separately.
@@ -82,9 +82,9 @@ CA_CERTS := $(BINDIR)/etc/ca-certificates.crt
 # Home directory placeholder.
 HOMEKEEP := $(BINDIR)/home/.keep
 
-.PHONY: all clean doom fetch wiki wikipedia weather desktop icons fonts bearssl libc tls
+.PHONY: all clean doom fetch wiki wikipedia weather imageviewer desktop icons fonts bearssl libc tls libjpeg
 
-all: bearssl libc tls $(TARGETS) fetch wiki wikipedia weather doom desktop icons fonts $(GAME_DATA) $(MANDST) $(WWWDST) $(CA_CERTS) $(HOMEKEEP)
+all: bearssl libc libjpeg tls $(TARGETS) fetch wiki wikipedia weather imageviewer doom desktop icons fonts $(GAME_DATA) $(MANDST) $(WWWDST) $(CA_CERTS) $(HOMEKEEP)
 
 # Build BearSSL static library.
 bearssl:
@@ -114,8 +114,16 @@ wikipedia: bearssl libc tls
 weather: bearssl libc tls
 	$(MAKE) -C src/weather
 
-# Build desktop via its own Makefile.
-desktop:
+# Build libjpeg static library (JPEG decoding via stb_image).
+libjpeg: libc
+	$(MAKE) -C lib/libjpeg
+
+# Build imageviewer standalone GUI client (depends on libc and libjpeg).
+imageviewer: libc libjpeg
+	$(MAKE) -C src/imageviewer
+
+# Build desktop via its own Makefile (depends on libc and libjpeg for wallpaper).
+desktop: libc libjpeg
 	$(MAKE) -C src/desktop
 
 # Copy SVG icons for the desktop into bin/icons/.
@@ -165,9 +173,11 @@ clean:
 	rm -rf $(BINDIR) obj
 	$(MAKE) -C lib/bearssl clean
 	$(MAKE) -C lib/libc clean
+	$(MAKE) -C lib/libjpeg clean
 	$(MAKE) -C lib/tls clean
 	$(MAKE) -C src/fetch clean
 	$(MAKE) -C src/doom clean
 	$(MAKE) -C src/desktop clean
 	$(MAKE) -C src/wikipedia clean
 	$(MAKE) -C src/weather clean
+	$(MAKE) -C src/imageviewer clean
