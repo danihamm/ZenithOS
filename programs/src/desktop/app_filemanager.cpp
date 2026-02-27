@@ -61,6 +61,10 @@ static bool is_image_file(const char* name) {
     return str_ends_with(name, ".jpg") || str_ends_with(name, ".jpeg");
 }
 
+static bool is_font_file(const char* name) {
+    return str_ends_with(name, ".ttf");
+}
+
 static int detect_file_type(const char* name, bool is_dir) {
     if (is_dir) return 1;
     if (str_ends_with(name, ".elf")) return 2;
@@ -551,6 +555,8 @@ static void filemanager_on_mouse(Window* win, MouseEvent& ev) {
                             str_append(fullpath, fm->entry_names[clicked_idx], 512);
                             if (is_image_file(fm->entry_names[clicked_idx])) {
                                 zenith::spawn("0:/os/imageviewer.elf", fullpath);
+                            } else if (is_font_file(fm->entry_names[clicked_idx])) {
+                                zenith::spawn("0:/os/fontpreview.elf", fullpath);
                             } else if (fm->desktop) {
                                 open_texteditor_with_file(fm->desktop, fullpath);
                             }
@@ -590,6 +596,8 @@ static void filemanager_on_mouse(Window* win, MouseEvent& ev) {
                             str_append(fullpath, fm->entry_names[clicked_idx], 512);
                             if (is_image_file(fm->entry_names[clicked_idx])) {
                                 zenith::spawn("0:/os/imageviewer.elf", fullpath);
+                            } else if (is_font_file(fm->entry_names[clicked_idx])) {
+                                zenith::spawn("0:/os/fontpreview.elf", fullpath);
                             } else if (fm->desktop) {
                                 open_texteditor_with_file(fm->desktop, fullpath);
                             }
