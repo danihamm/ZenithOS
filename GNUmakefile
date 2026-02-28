@@ -227,6 +227,59 @@ ifeq ($(ARCH),loongarch64)
 endif
 	rm -rf iso_root
 
+.PHONY: release
+release: limine/limine kernel ramdisk
+	rm -rf iso_root .release-tmp
+	mkdir -p iso_root/boot
+	cp kernel/bin-$(ARCH)/kernel iso_root/boot/
+	strip iso_root/boot/kernel
+	cp -r programs/bin .release-tmp
+	find .release-tmp -name '*.elf' -exec strip {} +
+	./scripts/mkramdisk.sh .release-tmp iso_root/boot/ramdisk.tar
+	rm -rf .release-tmp
+	mkdir -p iso_root/boot/limine
+	cp limine.conf iso_root/boot/limine/
+	mkdir -p iso_root/EFI/BOOT
+ifeq ($(ARCH),x86_64)
+	cp limine/limine-bios.sys limine/limine-bios-cd.bin limine/limine-uefi-cd.bin iso_root/boot/limine/
+	cp limine/BOOTX64.EFI iso_root/EFI/BOOT/
+	cp limine/BOOTIA32.EFI iso_root/EFI/BOOT/
+	xorriso -as mkisofs -R -r -J -b boot/limine/limine-bios-cd.bin \
+		-no-emul-boot -boot-load-size 4 -boot-info-table -hfsplus \
+		-apm-block-size 2048 --efi-boot boot/limine/limine-uefi-cd.bin \
+		-efi-boot-part --efi-boot-image --protective-msdos-label \
+		iso_root -o $(IMAGE_NAME).iso
+	./limine/limine bios-install $(IMAGE_NAME).iso
+endif
+ifeq ($(ARCH),aarch64)
+	cp limine/limine-uefi-cd.bin iso_root/boot/limine/
+	cp limine/BOOTAA64.EFI iso_root/EFI/BOOT/
+	xorriso -as mkisofs -R -r -J \
+		-hfsplus -apm-block-size 2048 \
+		--efi-boot boot/limine/limine-uefi-cd.bin \
+		-efi-boot-part --efi-boot-image --protective-msdos-label \
+		iso_root -o $(IMAGE_NAME).iso
+endif
+ifeq ($(ARCH),riscv64)
+	cp limine/limine-uefi-cd.bin iso_root/boot/limine/
+	cp limine/BOOTRISCV64.EFI iso_root/EFI/BOOT/
+	xorriso -as mkisofs -R -r -J \
+		-hfsplus -apm-block-size 2048 \
+		--efi-boot boot/limine/limine-uefi-cd.bin \
+		-efi-boot-part --efi-boot-image --protective-msdos-label \
+		iso_root -o $(IMAGE_NAME).iso
+endif
+ifeq ($(ARCH),loongarch64)
+	cp limine/limine-uefi-cd.bin iso_root/boot/limine/
+	cp limine/BOOTLOONGARCH64.EFI iso_root/EFI/BOOT/
+	xorriso -as mkisofs -R -r -J \
+		-hfsplus -apm-block-size 2048 \
+		--efi-boot boot/limine/limine-uefi-cd.bin \
+		-efi-boot-part --efi-boot-image --protective-msdos-label \
+		iso_root -o $(IMAGE_NAME).iso
+endif
+	rm -rf iso_root
+
 $(IMAGE_NAME).hdd: limine/limine kernel ramdisk
 	rm -f $(IMAGE_NAME).hdd
 	dd if=/dev/zero bs=1M count=0 seek=64 of=$(IMAGE_NAME).hdd
@@ -258,7 +311,7 @@ endif
 clean:
 	$(MAKE) -C kernel clean
 # 	$(MAKE) -C programs clean
-	rm -rf iso_root $(IMAGE_NAME).iso $(IMAGE_NAME).hdd ramdisk.tar
+	rm -rf iso_root .release-tmp $(IMAGE_NAME).iso $(IMAGE_NAME).hdd ramdisk.tar
 
 .PHONY: distclean
 distclean:
