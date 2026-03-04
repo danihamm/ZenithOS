@@ -16,7 +16,7 @@ namespace Montauk {
 
         // Copy strings into fixed-size arrays (user-accessible)
         const char* name = "MontaukOS";
-        const char* ver = "0.1.0";
+        const char* ver = "0.1.1";
         for (int i = 0; name[i]; i++) outInfo->osName[i] = name[i];
         outInfo->osName[9] = '\0';
         for (int i = 0; ver[i]; i++) outInfo->osVersion[i] = ver[i];
