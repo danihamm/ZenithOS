@@ -27,14 +27,17 @@ struct TerminalState {
     int cols, rows;
     int cursor_x, cursor_y;
     int saved_cursor_x, saved_cursor_y;  // saved cursor for alternate screen
-    int scroll_top;
-    int total_rows;
+    int scrollback_lines;        // lines of history above visible screen (0..max_scrollback)
+    int max_scrollback;          // 0 for viewers (klog), TERM_MAX_SCROLLBACK for terminal
+    int view_offset;             // how many rows scrolled back (0 = live view)
     int child_pid;
+    void* desktop;               // DesktopState* for closing window on child exit
     Color current_fg;
     Color current_bg;
     bool cursor_visible;
     bool alt_screen_active;
     bool reverse_video;
+    bool dirty;                  // true when content changed since last render
 
     enum { STATE_NORMAL, STATE_ESC, STATE_CSI } parse_state;
     bool csi_private;            // true if '?' was seen after CSI
@@ -66,52 +69,77 @@ static inline Color term_ansi_color(int idx) {
     }
 }
 
+// Helper: pointer to start of screen-relative row r in the cells buffer
+static inline TermCell* term_screen_row(TerminalState* t, int r) {
+    return &t->cells[(t->scrollback_lines + r) * t->cols];
+}
+
 static inline void terminal_scroll_up(TerminalState* t) {
-    // Move all rows up by one
-    for (int r = 0; r < t->rows - 1; r++) {
-        for (int c = 0; c < t->cols; c++) {
-            t->cells[r * t->cols + c] = t->cells[(r + 1) * t->cols + c];
-        }
+    if (!t->alt_screen_active && t->scrollback_lines < t->max_scrollback) {
+        // Room for scrollback: top visible row becomes scrollback, no data movement
+        t->scrollback_lines++;
+    } else if (!t->alt_screen_active && t->max_scrollback > 0) {
+        // Scrollback full: discard oldest line, shift entire buffer up by one row
+        int total = (t->max_scrollback + t->rows - 1) * t->cols * sizeof(TermCell);
+        montauk::memmove(t->cells, t->cells + t->cols, total);
+    } else {
+        // Alt screen or no scrollback (klog): shift visible area up
+        TermCell* screen = term_screen_row(t, 0);
+        montauk::memmove(screen, screen + t->cols, (t->rows - 1) * t->cols * sizeof(TermCell));
     }
-    // Clear last row
-    int last = t->rows - 1;
+
+    // Clear the new bottom visible row
+    TermCell* bottom = term_screen_row(t, t->rows - 1);
     for (int c = 0; c < t->cols; c++) {
-        t->cells[last * t->cols + c] = {' ', t->current_fg, colors::TERM_BG};
+        bottom[c] = {' ', t->current_fg, colors::TERM_BG};
+    }
+
+    // Keep user's scrolled-back viewport stable
+    if (t->view_offset > 0) {
+        t->view_offset++;
+        if (t->view_offset > t->scrollback_lines)
+            t->view_offset = t->scrollback_lines;
     }
 }
 
 // Initialize only the cell grid (no child process). Used by viewers like klog.
-static inline void terminal_init_cells(TerminalState* t, int cols, int rows) {
+// max_sb = 0 for viewers, TERM_MAX_SCROLLBACK for the real terminal.
+static inline void terminal_init_cells(TerminalState* t, int cols, int rows, int max_sb = 0) {
     t->cols = cols;
     t->rows = rows;
     t->cursor_x = 0;
     t->cursor_y = 0;
     t->saved_cursor_x = 0;
     t->saved_cursor_y = 0;
-    t->scroll_top = 0;
-    t->total_rows = rows;
+    t->scrollback_lines = 0;
+    t->max_scrollback = max_sb;
+    t->view_offset = 0;
     t->current_fg = colors::TERM_FG;
     t->current_bg = colors::TERM_BG;
     t->cursor_visible = false;
     t->alt_screen_active = false;
     t->reverse_video = false;
+    t->dirty = true;
     t->parse_state = TerminalState::STATE_NORMAL;
     t->csi_private = false;
     t->csi_param_count = 0;
     t->csi_current_param = 0;
     t->child_pid = 0;
 
-    int total_cells = cols * rows;
+    int total_cells = (rows + max_sb) * cols;
+    int screen_cells = rows * cols;
     t->cells = (TermCell*)montauk::alloc(total_cells * sizeof(TermCell));
-    t->alt_cells = (TermCell*)montauk::alloc(total_cells * sizeof(TermCell));
+    t->alt_cells = (TermCell*)montauk::alloc(screen_cells * sizeof(TermCell));
     for (int i = 0; i < total_cells; i++) {
         t->cells[i] = {' ', colors::TERM_FG, colors::TERM_BG};
+    }
+    for (int i = 0; i < screen_cells; i++) {
         t->alt_cells[i] = {' ', colors::TERM_FG, colors::TERM_BG};
     }
 }
 
 static inline void terminal_init(TerminalState* t, int cols, int rows) {
-    terminal_init_cells(t, cols, rows);
+    terminal_init_cells(t, cols, rows, TERM_MAX_SCROLLBACK);
     t->cursor_visible = true;
 
     t->child_pid = montauk::spawn_redir("0:/os/shell.elf");
@@ -127,25 +155,28 @@ static inline void terminal_put_char(TerminalState* t, char ch) {
         terminal_scroll_up(t);
         t->cursor_y = t->rows - 1;
     }
-    int idx = t->cursor_y * t->cols + t->cursor_x;
-    t->cells[idx].ch = ch;
-    t->cells[idx].fg = t->current_fg;
-    t->cells[idx].bg = t->current_bg;
+    TermCell* row = term_screen_row(t, t->cursor_y);
+    row[t->cursor_x].ch = ch;
+    row[t->cursor_x].fg = t->current_fg;
+    row[t->cursor_x].bg = t->current_bg;
     t->cursor_x++;
 }
 
 static inline void terminal_enter_alt_screen(TerminalState* t) {
     if (t->alt_screen_active) return;
     t->alt_screen_active = true;
+    t->dirty = true;
     // Save cursor
     t->saved_cursor_x = t->cursor_x;
     t->saved_cursor_y = t->cursor_y;
-    // Swap buffers: save main screen to alt_cells, clear main
+    // Save visible screen to alt_cells, clear visible screen
     int total = t->cols * t->rows;
+    TermCell* screen = term_screen_row(t, 0);
     for (int i = 0; i < total; i++) {
-        t->alt_cells[i] = t->cells[i];
-        t->cells[i] = {' ', colors::TERM_FG, colors::TERM_BG};
+        t->alt_cells[i] = screen[i];
+        screen[i] = {' ', colors::TERM_FG, colors::TERM_BG};
     }
+    t->view_offset = 0;
     t->cursor_x = 0;
     t->cursor_y = 0;
 }
@@ -153,10 +184,12 @@ static inline void terminal_enter_alt_screen(TerminalState* t) {
 static inline void terminal_exit_alt_screen(TerminalState* t) {
     if (!t->alt_screen_active) return;
     t->alt_screen_active = false;
-    // Restore main screen from alt_cells
+    t->dirty = true;
+    // Restore visible screen from alt_cells
     int total = t->cols * t->rows;
+    TermCell* screen = term_screen_row(t, 0);
     for (int i = 0; i < total; i++) {
-        t->cells[i] = t->alt_cells[i];
+        screen[i] = t->alt_cells[i];
     }
     // Restore cursor
     t->cursor_x = t->saved_cursor_x;
@@ -244,22 +277,31 @@ static inline void terminal_process_csi(TerminalState* t, char cmd) {
         // Erase in display
         if (p0 == 0) {
             // Clear from cursor to end
+            TermCell* row = term_screen_row(t, t->cursor_y);
             for (int x = t->cursor_x; x < t->cols; x++)
-                t->cells[t->cursor_y * t->cols + x] = {' ', t->current_fg, colors::TERM_BG};
-            for (int r = t->cursor_y + 1; r < t->rows; r++)
+                row[x] = {' ', t->current_fg, colors::TERM_BG};
+            for (int r = t->cursor_y + 1; r < t->rows; r++) {
+                TermCell* rp = term_screen_row(t, r);
                 for (int c = 0; c < t->cols; c++)
-                    t->cells[r * t->cols + c] = {' ', t->current_fg, colors::TERM_BG};
+                    rp[c] = {' ', t->current_fg, colors::TERM_BG};
+            }
         } else if (p0 == 1) {
             // Clear from start to cursor
-            for (int r = 0; r < t->cursor_y; r++)
+            for (int r = 0; r < t->cursor_y; r++) {
+                TermCell* rp = term_screen_row(t, r);
                 for (int c = 0; c < t->cols; c++)
-                    t->cells[r * t->cols + c] = {' ', t->current_fg, colors::TERM_BG};
+                    rp[c] = {' ', t->current_fg, colors::TERM_BG};
+            }
+            TermCell* row = term_screen_row(t, t->cursor_y);
             for (int x = 0; x <= t->cursor_x; x++)
-                t->cells[t->cursor_y * t->cols + x] = {' ', t->current_fg, colors::TERM_BG};
+                row[x] = {' ', t->current_fg, colors::TERM_BG};
         } else if (p0 == 2) {
             // Clear entire screen
-            for (int i = 0; i < t->rows * t->cols; i++)
-                t->cells[i] = {' ', t->current_fg, colors::TERM_BG};
+            for (int r = 0; r < t->rows; r++) {
+                TermCell* rp = term_screen_row(t, r);
+                for (int c = 0; c < t->cols; c++)
+                    rp[c] = {' ', t->current_fg, colors::TERM_BG};
+            }
             t->cursor_x = 0;
             t->cursor_y = 0;
         }
@@ -271,8 +313,9 @@ static inline void terminal_process_csi(TerminalState* t, char cmd) {
         if (p0 == 0) { start = t->cursor_x; end = t->cols; }
         else if (p0 == 1) { start = 0; end = t->cursor_x + 1; }
         else if (p0 == 2) { start = 0; end = t->cols; }
+        TermCell* row = term_screen_row(t, t->cursor_y);
         for (int x = start; x < end; x++)
-            t->cells[t->cursor_y * t->cols + x] = {' ', t->current_fg, colors::TERM_BG};
+            row[x] = {' ', t->current_fg, colors::TERM_BG};
         break;
     }
     case 'm': {
@@ -348,6 +391,7 @@ static inline void terminal_process_csi(TerminalState* t, char cmd) {
 }
 
 static inline void terminal_feed(TerminalState* t, const char* data, int len) {
+    if (len > 0) t->dirty = true;
     for (int i = 0; i < len; i++) {
         char ch = data[i];
 
@@ -423,17 +467,25 @@ static inline void terminal_feed(TerminalState* t, const char* data, int len) {
 }
 
 static inline void terminal_render(TerminalState* t, uint32_t* pixels, int pw, int ph) {
+    if (!t->dirty) return;
+    t->dirty = false;
+
     int cell_w = mono_cell_width();
     int cell_h = mono_cell_height();
     bool use_ttf = fonts::mono && fonts::mono->valid;
     GlyphCache* gc = use_ttf ? fonts::mono->get_cache(fonts::TERM_SIZE) : nullptr;
 
-    // Fill background
+    // Fill background using row-copy: fill first row, then memcpy to the rest
     uint32_t bg_px = colors::TERM_BG.to_pixel();
-    int total = pw * ph;
-    for (int i = 0; i < total; i++) {
-        pixels[i] = bg_px;
+    int row_bytes = pw * sizeof(uint32_t);
+    for (int i = 0; i < pw; i++) pixels[i] = bg_px;
+    for (int r = 1; r < ph; r++) {
+        montauk::memcpy(&pixels[r * pw], pixels, row_bytes);
     }
+
+    // Determine which rows of the buffer to display
+    int base_row = t->scrollback_lines - t->view_offset;
+    if (base_row < 0) base_row = 0;
 
     // Render each visible cell
     int visible_rows = ph / cell_h;
@@ -442,23 +494,22 @@ static inline void terminal_render(TerminalState* t, uint32_t* pixels, int pw, i
     if (visible_cols > t->cols) visible_cols = t->cols;
 
     for (int r = 0; r < visible_rows; r++) {
+        int py = r * cell_h;
+        int src_row = base_row + r;
         for (int c = 0; c < visible_cols; c++) {
-            int idx = r * t->cols + c;
+            int idx = src_row * t->cols + c;
             TermCell& cell = t->cells[idx];
 
             int px = c * cell_w;
-            int py = r * cell_h;
 
+            // Only draw cell background if it differs from terminal bg
             uint32_t cell_bg = cell.bg.to_pixel();
-
-            // Draw cell background
-            for (int fy = 0; fy < cell_h; fy++) {
-                int dy = py + fy;
-                if (dy >= ph) break;
-                for (int fx = 0; fx < cell_w; fx++) {
-                    int dx = px + fx;
-                    if (dx >= pw) break;
-                    pixels[dy * pw + dx] = cell_bg;
+            if (cell_bg != bg_px) {
+                for (int fy = 0; fy < cell_h && py + fy < ph; fy++) {
+                    uint32_t* row = &pixels[(py + fy) * pw + px];
+                    for (int fx = 0; fx < cell_w && px + fx < pw; fx++) {
+                        row[fx] = cell_bg;
+                    }
                 }
             }
 
@@ -488,8 +539,9 @@ static inline void terminal_render(TerminalState* t, uint32_t* pixels, int pw, i
         }
     }
 
-    // Draw cursor
-    if (t->cursor_visible && t->cursor_x < visible_cols && t->cursor_y < visible_rows) {
+    // Draw cursor (only when viewing live position)
+    if (t->view_offset == 0 && t->cursor_visible &&
+        t->cursor_x < visible_cols && t->cursor_y < visible_rows) {
         int cx = t->cursor_x * cell_w;
         int cy = t->cursor_y * cell_h;
         uint32_t cursor_px = colors::WHITE.to_pixel();
@@ -504,8 +556,8 @@ static inline void terminal_render(TerminalState* t, uint32_t* pixels, int pw, i
         }
         // Draw character on top of cursor in black
         if (t->cursor_y < t->rows && t->cursor_x < t->cols) {
-            int idx = t->cursor_y * t->cols + t->cursor_x;
-            char ch = t->cells[idx].ch;
+            TermCell* row = term_screen_row(t, t->cursor_y);
+            char ch = row[t->cursor_x].ch;
             if (ch > 32 || ch < 0) {
                 if (use_ttf) {
                     int baseline = cy + gc->ascent;
@@ -535,48 +587,55 @@ static inline void terminal_render(TerminalState* t, uint32_t* pixels, int pw, i
 static inline void terminal_resize(TerminalState* t, int new_cols, int new_rows) {
     if (new_cols == t->cols && new_rows == t->rows) return;
     if (new_cols < 1 || new_rows < 1) return;
+    t->dirty = true;
 
-    int new_total = new_cols * new_rows;
+    int new_capacity = new_rows + t->max_scrollback;
+    int new_total = new_capacity * new_cols;
     TermCell* new_cells = (TermCell*)montauk::alloc(new_total * sizeof(TermCell));
-    TermCell* new_alt = (TermCell*)montauk::alloc(new_total * sizeof(TermCell));
+    TermCell* new_alt = (TermCell*)montauk::alloc(new_rows * new_cols * sizeof(TermCell));
 
     // Clear new buffers
-    for (int i = 0; i < new_total; i++) {
+    for (int i = 0; i < new_total; i++)
         new_cells[i] = {' ', colors::TERM_FG, colors::TERM_BG};
+    for (int i = 0; i < new_rows * new_cols; i++)
         new_alt[i] = {' ', colors::TERM_FG, colors::TERM_BG};
-    }
 
-    // Copy existing content (as much as fits)
-    int copy_rows = t->rows < new_rows ? t->rows : new_rows;
+    // Copy content: scrollback + visible screen
+    int old_content = t->scrollback_lines + t->rows;
+    int keep = old_content < new_capacity ? old_content : new_capacity;
+    int discard = old_content - keep;
     int copy_cols = t->cols < new_cols ? t->cols : new_cols;
 
-    // If cursor is beyond the new grid, scroll content up to keep cursor visible
-    int row_offset = 0;
-    if (t->cursor_y >= new_rows) {
-        row_offset = t->cursor_y - new_rows + 1;
-    }
-
-    for (int r = 0; r < copy_rows && (r + row_offset) < t->rows; r++) {
+    for (int r = 0; r < keep; r++) {
         for (int c = 0; c < copy_cols; c++) {
-            new_cells[r * new_cols + c] = t->cells[(r + row_offset) * t->cols + c];
+            new_cells[r * new_cols + c] = t->cells[(discard + r) * t->cols + c];
         }
     }
+
+    int new_scrollback = keep - new_rows;
+    if (new_scrollback < 0) new_scrollback = 0;
+
+    // Adjust cursor
+    int abs_cursor_y = t->scrollback_lines + t->cursor_y - discard;
+    int new_cursor_y = abs_cursor_y - new_scrollback;
+    if (new_cursor_y < 0) new_cursor_y = 0;
+    if (new_cursor_y >= new_rows) new_cursor_y = new_rows - 1;
+    int new_cursor_x = t->cursor_x < new_cols ? t->cursor_x : new_cols - 1;
 
     if (t->cells) montauk::free(t->cells);
     if (t->alt_cells) montauk::free(t->alt_cells);
 
     t->cells = new_cells;
     t->alt_cells = new_alt;
-
-    int old_cols = t->cols;
     t->cols = new_cols;
     t->rows = new_rows;
+    t->scrollback_lines = new_scrollback;
+    t->cursor_x = new_cursor_x;
+    t->cursor_y = new_cursor_y;
 
-    // Adjust cursor position
-    t->cursor_y -= row_offset;
-    if (t->cursor_x >= new_cols) t->cursor_x = new_cols - 1;
-    if (t->cursor_y >= new_rows) t->cursor_y = new_rows - 1;
-    if (t->cursor_y < 0) t->cursor_y = 0;
+    // Clamp view offset
+    if (t->view_offset > t->scrollback_lines)
+        t->view_offset = t->scrollback_lines;
 
     // Notify child process of new terminal size
     if (t->child_pid > 0) {
@@ -585,18 +644,32 @@ static inline void terminal_resize(TerminalState* t, int new_cols, int new_rows)
 }
 
 static inline void terminal_handle_key(TerminalState* t, const Montauk::KeyEvent& key) {
+    // Snap to live on any keyboard input
+    if (t->view_offset > 0) {
+        t->view_offset = 0;
+        t->dirty = true;
+    }
     if (t->child_pid > 0) {
         montauk::childio_writekey(t->child_pid, &key);
     }
 }
 
-static inline void terminal_poll(TerminalState* t) {
-    if (t->child_pid <= 0) return;
-    char buf[512];
-    int n = montauk::childio_read(t->child_pid, buf, sizeof(buf));
-    if (n > 0) {
-        terminal_feed(t, buf, n);
+// Returns false if the child process has exited
+static inline bool terminal_poll(TerminalState* t) {
+    if (t->child_pid <= 0) return false;
+    char buf[4096];
+    // Drain all available data so large output renders in one frame
+    for (;;) {
+        int n = montauk::childio_read(t->child_pid, buf, sizeof(buf));
+        if (n > 0) {
+            terminal_feed(t, buf, n);
+        } else {
+            // n == -1 means child process is gone; n == 0 means no data yet
+            if (n < 0) { t->child_pid = 0; return false; }
+            break;
+        }
     }
+    return true;
 }
 
 } // namespace gui

@@ -22,28 +22,34 @@ struct KlogState {
 };
 
 // ============================================================================
-// Re-feed the last screenful of log into the terminal
+// Re-feed log into the terminal (fills scrollback + visible screen)
 // ============================================================================
 
 static void klog_refeed(KlogState* klog, int n) {
-    // Find start of last `rows` lines from the end of the buffer
-    int lines_needed = klog->term.rows;
+    // Find enough lines to fill scrollback + visible screen
+    int lines_needed = klog->term.rows + klog->term.max_scrollback;
     int start = 0;
-    for (int i = n - 1; i >= 0 && lines_needed > 0; i--) {
+    int line_count = 0;
+    for (int i = n - 1; i >= 0; i--) {
         if (klog->klog_buf[i] == '\n') {
-            lines_needed--;
-            if (lines_needed == 0) { start = i + 1; break; }
+            line_count++;
+            if (line_count >= lines_needed) { start = i + 1; break; }
         }
     }
 
-    // Clear terminal
-    int total = klog->term.cols * klog->term.rows;
-    for (int i = 0; i < total; i++)
-        klog->term.cells[i] = {' ', colors::TERM_FG, colors::TERM_BG};
+    // Reset terminal state
+    klog->term.scrollback_lines = 0;
+    klog->term.view_offset = 0;
     klog->term.cursor_x = 0;
     klog->term.cursor_y = 0;
     klog->term.current_fg = colors::TERM_FG;
     klog->term.current_bg = colors::TERM_BG;
+
+    // Clear visible screen
+    TermCell* screen = term_screen_row(&klog->term, 0);
+    int total = klog->term.cols * klog->term.rows;
+    for (int i = 0; i < total; i++)
+        screen[i] = {' ', colors::TERM_FG, colors::TERM_BG};
 
     terminal_feed(&klog->term, klog->klog_buf + start, n - start);
 }
@@ -57,11 +63,54 @@ static void klog_on_draw(Window* win, Framebuffer& fb) {
     if (!klog) return;
 
     Rect cr = win->content_rect();
+
+    // Handle resize
+    int new_cols = cr.w / mono_cell_width();
+    int new_rows = cr.h / mono_cell_height();
+    if (new_cols != klog->term.cols || new_rows != klog->term.rows) {
+        terminal_resize(&klog->term, new_cols, new_rows);
+        // Refeed to fill the new grid with log content
+        if (klog->last_len > 0) {
+            klog_refeed(klog, klog->last_len);
+        }
+    }
+
+    bool was_dirty = klog->term.dirty;
     terminal_render(&klog->term, win->content, cr.w, cr.h);
+
+    // Draw scrollbar overlay when scrollback exists
+    if (was_dirty && klog->term.scrollback_lines > 0) {
+        int cell_h = mono_cell_height();
+        int total_rows = klog->term.scrollback_lines + klog->term.rows;
+        int total_h = total_rows * cell_h;
+        int view_h = cr.h;
+        if (total_h > view_h) {
+            Canvas c(win->content, cr.w, cr.h);
+            int sb_w = 4;
+            int sb_x = cr.w - sb_w - 2;
+            int thumb_h = (view_h * view_h) / total_h;
+            if (thumb_h < 20) thumb_h = 20;
+            int scroll_from_top = klog->term.scrollback_lines - klog->term.view_offset;
+            int max_scroll = klog->term.scrollback_lines;
+            int thumb_y = (max_scroll > 0)
+                ? (scroll_from_top * (view_h - thumb_h)) / max_scroll : 0;
+            c.fill_rect(sb_x, 0, sb_w, view_h, Color::from_rgb(0x33, 0x33, 0x33));
+            c.fill_rect(sb_x, thumb_y, sb_w, thumb_h, Color::from_rgb(0x88, 0x88, 0x88));
+        }
+    }
 }
 
 static void klog_on_mouse(Window* win, MouseEvent& ev) {
-    // Read-only viewer — no mouse interaction needed
+    KlogState* klog = (KlogState*)win->app_data;
+    if (!klog) return;
+
+    if (ev.scroll != 0) {
+        klog->term.view_offset += (ev.scroll < 0) ? 3 : -3;
+        if (klog->term.view_offset < 0) klog->term.view_offset = 0;
+        if (klog->term.view_offset > klog->term.scrollback_lines)
+            klog->term.view_offset = klog->term.scrollback_lines;
+        klog->term.dirty = true;
+    }
 }
 
 static void klog_on_key(Window* win, const Montauk::KeyEvent& key) {
@@ -125,8 +174,8 @@ void open_klog(DesktopState* ds) {
     KlogState* klog = (KlogState*)montauk::malloc(sizeof(KlogState));
     montauk::memset(klog, 0, sizeof(KlogState));
 
-    // Initialize the terminal cell grid (reuse terminal infrastructure)
-    terminal_init_cells(&klog->term, cols, rows);
+    // Initialize with scrollback enabled
+    terminal_init_cells(&klog->term, cols, rows, TERM_MAX_SCROLLBACK);
 
     // Allocate klog read buffer
     klog->klog_buf = (char*)montauk::malloc(KLOG_READ_SIZE);
