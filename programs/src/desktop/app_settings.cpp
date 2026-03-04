@@ -325,7 +325,7 @@ static void settings_draw_about(Canvas& c, SettingsState* st) {
 
     // snprintf(line, sizeof(line), "Build: %s %s", __DATE__, __TIME__);
     // c.text(x, y, line, colors::TEXT_COLOR);
-    // y += line_h + 16;
+    y += 8;
 
     c.hline(x, y, c.w - 2 * x, colors::BORDER);
     y += 12;
