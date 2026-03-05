@@ -69,6 +69,7 @@ void gui::desktop_init(DesktopState* ds) {
     ds->icon_procmgr  = svg_load("0:/icons/system-monitor.svg", 20, 20, defColor);
     ds->icon_mandelbrot = svg_load("0:/icons/applications-science.svg", 20, 20, defColor);
     ds->icon_devexplorer = svg_load("0:/icons/hardware.svg", 20, 20, defColor);
+    ds->icon_spreadsheet = svg_load("0:/icons/spreadsheet.svg", 20, 20, defColor);
 
     // Settings defaults
     ds->settings.bg_gradient = true;
@@ -428,7 +429,7 @@ void gui::desktop_draw_panel(DesktopState* ds) {
 
 static constexpr int MENU_W = 220;
 static constexpr int MENU_ITEM_H = 36;
-static constexpr int MENU_CAT_H = 28;
+static constexpr int MENU_CAT_H = 32;
 static constexpr int MENU_DIV_H = 10;
 
 struct MenuRow {
@@ -437,29 +438,52 @@ struct MenuRow {
     int app_id;           // -1 for category headers / dividers
 };
 
-static constexpr int MENU_ROW_COUNT = 20;
+static constexpr int MENU_ROW_COUNT = 22;
 static const MenuRow menu_rows[MENU_ROW_COUNT] = {
-    { true,  "Applications", -1 },
+    { true,  "Applications", -1 },   // cat 0
     { false, "Terminal",      0 },
     { false, "Files",         1 },
     { false, "Text Editor",   4 },
+    { false, "Word Processor", 15 },
+    { false, "Spreadsheet",  16 },
     { false, "Calculator",    3 },
-    { true,  "Internet",     -1 },
+    { true,  "Internet",     -1 },    // cat 1
     { false, "Wikipedia",     9 },
     { false, "Weather",      13 },
-    { true,  "System",       -1 },
+    { true,  "System",       -1 },    // cat 2
     { false, "System Info",   2 },
     { false, "Kernel Log",    5 },
     { false, "Processes",     6 },
     { false, "Devices",       8 },
-    { true,  "Games",        -1 },
+    { true,  "Games",        -1 },    // cat 3
     { false, "Mandelbrot",    7 },
     { false, "DOOM",         10 },
-    { true,  "",             -1 },  // divider
+    { true,  "",             -1 },    // divider (always visible)
     { false, "Settings",     11 },
     { false, "Reboot",       12 },
     { false, "Shutdown",     14 },
 };
+
+// Collapsible category state (categories 0-3 are toggleable; divider category always expanded)
+static constexpr int MENU_NUM_CATS = 5;
+static bool menu_cat_expanded[MENU_NUM_CATS] = { false, false, false, false, true };
+
+// Map a menu_rows index to its category index (0-4), or -1 for items before any category
+static int menu_get_cat(int row_idx) {
+    int cat = -1;
+    for (int i = 0; i <= row_idx; i++)
+        if (menu_rows[i].is_category) cat++;
+    return cat;
+}
+
+// Check if a row should be visible given current expand/collapse state
+static bool menu_row_visible(int row_idx) {
+    const MenuRow& row = menu_rows[row_idx];
+    if (row.is_category) return true;  // category headers always visible
+    int cat = menu_get_cat(row_idx);
+    if (cat < 0 || cat >= MENU_NUM_CATS) return true;
+    return menu_cat_expanded[cat];
+}
 
 static int menu_row_height(const MenuRow& row) {
     if (!row.is_category) return MENU_ITEM_H;
@@ -469,7 +493,8 @@ static int menu_row_height(const MenuRow& row) {
 static int menu_total_height() {
     int h = 10; // top + bottom padding
     for (int i = 0; i < MENU_ROW_COUNT; i++)
-        h += menu_row_height(menu_rows[i]);
+        if (menu_row_visible(i))
+            h += menu_row_height(menu_rows[i]);
     return h;
 }
 
@@ -488,7 +513,7 @@ static void desktop_draw_app_menu(DesktopState* ds) {
     draw_rect(fb, menu_x, menu_y, MENU_W, menu_h, colors::BORDER);
 
     // Icon lookup by app_id
-    SvgIcon* icons[15] = {
+    SvgIcon* icons[17] = {
         &ds->icon_terminal,     // 0
         &ds->icon_filemanager,  // 1
         &ds->icon_sysinfo,      // 2
@@ -504,29 +529,64 @@ static void desktop_draw_app_menu(DesktopState* ds) {
         &ds->icon_reboot,       // 12
         &ds->icon_weather,      // 13
         &ds->icon_shutdown,     // 14
+        &ds->icon_texteditor,   // 15
+        &ds->icon_spreadsheet,  // 16
     };
 
     int mx = ds->mouse.x;
     int my = ds->mouse.y;
     int iy = menu_y + 5;
+    int cur_cat = -1;
 
     for (int i = 0; i < MENU_ROW_COUNT; i++) {
         const MenuRow& row = menu_rows[i];
+
+        if (row.is_category) cur_cat++;
+        if (!menu_row_visible(i)) continue;
+
         int row_h = menu_row_height(row);
 
         if (row.is_category) {
             // Separator line above (except first category)
             if (i > 0) {
                 for (int sx = menu_x + 8; sx < menu_x + MENU_W - 8; sx++)
-                    fb.put_pixel(sx, iy + row_h / 2, colors::BORDER);
+                    fb.put_pixel(sx, iy + 1, colors::BORDER);
             }
 
-            // Category label (dimmed), skip for divider-only rows
+            // Category header with hover + expand/collapse indicator
             if (row.label[0]) {
-                int tx = menu_x + 12;
+                Rect cat_rect = {menu_x + 4, iy, MENU_W - 8, row_h};
+                bool hovered = cat_rect.contains(mx, my);
+                if (hovered)
+                    fill_rounded_rect(fb, cat_rect.x, cat_rect.y, cat_rect.w, cat_rect.h, 4,
+                                      Color::from_rgb(0xE8, 0xE8, 0xE8));
+
+                // Arrow indicator: > for collapsed, v for expanded
+                bool expanded = (cur_cat >= 0 && cur_cat < MENU_NUM_CATS) && menu_cat_expanded[cur_cat];
+                int ax = menu_x + 10;
+                int ay = iy + row_h / 2;
+                Color arrow_color = Color::from_rgb(0x88, 0x88, 0x88);
+                if (expanded) {
+                    // Down arrow (v shape)
+                    for (int d = 0; d < 4; d++) {
+                        fb.put_pixel(ax + d, ay - 2 + d, arrow_color);
+                        fb.put_pixel(ax + d + 1, ay - 2 + d, arrow_color);
+                        fb.put_pixel(ax + 7 - d, ay - 2 + d, arrow_color);
+                        fb.put_pixel(ax + 6 - d, ay - 2 + d, arrow_color);
+                    }
+                } else {
+                    // Right arrow (> shape)
+                    for (int d = 0; d < 4; d++) {
+                        fb.put_pixel(ax + d, ay - 3 + d, arrow_color);
+                        fb.put_pixel(ax + d, ay - 3 + d + 1, arrow_color);
+                        fb.put_pixel(ax + d, ay + 3 - d, arrow_color);
+                        fb.put_pixel(ax + d, ay + 3 - d - 1, arrow_color);
+                    }
+                }
+
+                int tx = menu_x + 24;
                 int ty = iy + (row_h - system_font_height()) / 2;
-                if (i > 0) ty += 2;
-                draw_text(fb, tx, ty, row.label, Color::from_rgb(0x88, 0x88, 0x88));
+                draw_text(fb, tx, ty, row.label, Color::from_rgb(0x66, 0x66, 0x66));
             }
         } else {
             Rect item_rect = {menu_x + 4, iy, MENU_W - 8, row_h};
@@ -539,7 +599,7 @@ static void desktop_draw_app_menu(DesktopState* ds) {
             // Icon
             int icon_x = item_rect.x + 8;
             int icon_y = item_rect.y + (row_h - 20) / 2;
-            if (row.app_id >= 0 && row.app_id < 15) {
+            if (row.app_id >= 0 && row.app_id < 17) {
                 SvgIcon* icon = icons[row.app_id];
                 if (icon && icon->pixels) {
                     fb.blit_alpha(icon_x, icon_y, icon->width, icon->height, icon->pixels);
@@ -1217,13 +1277,19 @@ void gui::desktop_handle_mouse(DesktopState* ds) {
         Rect menu_rect = {menu_x, menu_y, MENU_W, menu_h};
 
         if (menu_rect.contains(mx, my)) {
-            // Walk rows to find which one was clicked
+            // Walk visible rows to find which one was clicked
             int iy = menu_y + 5;
+            int cur_cat = -1;
             for (int i = 0; i < MENU_ROW_COUNT; i++) {
                 const MenuRow& row = menu_rows[i];
+                if (row.is_category) cur_cat++;
+                if (!menu_row_visible(i)) continue;
                 int row_h = menu_row_height(row);
                 if (my >= iy && my < iy + row_h) {
-                    if (!row.is_category) {
+                    if (row.is_category && row.label[0] && cur_cat >= 0 && cur_cat < MENU_NUM_CATS - 1) {
+                        // Toggle category expand/collapse
+                        menu_cat_expanded[cur_cat] = !menu_cat_expanded[cur_cat];
+                    } else if (!row.is_category) {
                         switch (row.app_id) {
                         case 0: open_terminal(ds); break;
                         case 1: open_filemanager(ds); break;
@@ -1240,6 +1306,8 @@ void gui::desktop_handle_mouse(DesktopState* ds) {
                         case 12: open_reboot_dialog(ds); break;
                         case 13: open_weather(ds); break;
                         case 14: open_shutdown_dialog(ds); break;
+                        case 15: open_wordprocessor(ds); break;
+                        case 16: open_spreadsheet(ds); break;
                         }
                         ds->app_menu_open = false;
                     }
@@ -1507,6 +1575,10 @@ void gui::desktop_handle_keyboard(DesktopState* ds, const Montauk::KeyEvent& key
         }
         if (key.ascii == 'e' || key.ascii == 'E') {
             open_texteditor(ds);
+            return;
+        }
+        if (key.ascii == 'w' || key.ascii == 'W') {
+            open_wordprocessor(ds);
             return;
         }
         if (key.ascii == 'k' || key.ascii == 'K') {

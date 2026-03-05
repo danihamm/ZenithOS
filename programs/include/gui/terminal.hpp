@@ -130,6 +130,13 @@ static inline void terminal_init_cells(TerminalState* t, int cols, int rows, int
     int screen_cells = rows * cols;
     t->cells = (TermCell*)montauk::alloc(total_cells * sizeof(TermCell));
     t->alt_cells = (TermCell*)montauk::alloc(screen_cells * sizeof(TermCell));
+    if (!t->cells || !t->alt_cells) {
+        // Allocation failed — leave terminal in a safe but unusable state
+        if (t->cells) { montauk::free(t->cells); t->cells = nullptr; }
+        if (t->alt_cells) { montauk::free(t->alt_cells); t->alt_cells = nullptr; }
+        t->cols = 0; t->rows = 0;
+        return;
+    }
     for (int i = 0; i < total_cells; i++) {
         t->cells[i] = {' ', colors::TERM_FG, colors::TERM_BG};
     }
@@ -143,7 +150,8 @@ static inline void terminal_init(TerminalState* t, int cols, int rows) {
     t->cursor_visible = true;
 
     t->child_pid = montauk::spawn_redir("0:/os/shell.elf");
-    montauk::childio_settermsz(t->child_pid, cols, rows);
+    if (t->child_pid > 0)
+        montauk::childio_settermsz(t->child_pid, cols, rows);
 }
 
 static inline void terminal_put_char(TerminalState* t, char ch) {
@@ -467,7 +475,7 @@ static inline void terminal_feed(TerminalState* t, const char* data, int len) {
 }
 
 static inline void terminal_render(TerminalState* t, uint32_t* pixels, int pw, int ph) {
-    if (!t->dirty) return;
+    if (!t->dirty || !t->cells) return;
     t->dirty = false;
 
     int cell_w = mono_cell_width();
@@ -593,6 +601,11 @@ static inline void terminal_resize(TerminalState* t, int new_cols, int new_rows)
     int new_total = new_capacity * new_cols;
     TermCell* new_cells = (TermCell*)montauk::alloc(new_total * sizeof(TermCell));
     TermCell* new_alt = (TermCell*)montauk::alloc(new_rows * new_cols * sizeof(TermCell));
+    if (!new_cells || !new_alt) {
+        if (new_cells) montauk::free(new_cells);
+        if (new_alt) montauk::free(new_alt);
+        return;  // keep existing buffers
+    }
 
     // Clear new buffers
     for (int i = 0; i < new_total; i++)

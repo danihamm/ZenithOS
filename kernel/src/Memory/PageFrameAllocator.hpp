@@ -20,6 +20,8 @@ namespace Memory {
         Page head{};
         kcp::Spinlock Lock{};
         LargestSection g_section;
+
+        void FreeRange(void* ptr, std::size_t size);
 public:
         PageFrameAllocator(LargestSection section);
 

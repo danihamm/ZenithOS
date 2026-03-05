@@ -24,9 +24,10 @@ namespace heap_detail {
         FreeNode* next;
     };
 
-    // Per-process heap state (single TU per program, so static is fine)
-    static FreeNode  g_head{0, nullptr};
-    static bool      g_initialized = false;
+    // Per-process heap state — must be `inline` (not `static`) so that all
+    // translation units in a multi-TU program share a single heap.
+    inline FreeNode  g_head{0, nullptr};
+    inline bool      g_initialized = false;
 
     static inline Header* get_header(void* block) {
         return (Header*)((uint8_t*)block - sizeof(Header));

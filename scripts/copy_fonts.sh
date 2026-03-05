@@ -16,10 +16,17 @@ FONTS=(
     "programs/gui/fonts/Roboto/static/Roboto-Regular.ttf"
     "programs/gui/fonts/Roboto/static/Roboto-Bold.ttf"
     "programs/gui/fonts/Roboto/static/Roboto-Medium.ttf"
+    "programs/gui/fonts/Roboto/static/Roboto-Italic.ttf"
+    "programs/gui/fonts/Roboto/static/Roboto-BoldItalic.ttf"
     "programs/gui/fonts/JetBrains_Mono/static/JetBrainsMono-Regular.ttf"
     "programs/gui/fonts/JetBrains_Mono/static/JetBrainsMono-Bold.ttf"
     "programs/gui/fonts/Noto_Serif/static/NotoSerif-Regular.ttf"
     "programs/gui/fonts/Noto_Serif/static/NotoSerif-SemiBold.ttf"
+    "programs/gui/fonts/Noto_Serif/static/NotoSerif-Italic.ttf"
+    "programs/gui/fonts/Noto_Serif/static/NotoSerif-BoldItalic.ttf"
+    "programs/gui/fonts/C059/C059-Roman.ttf"
+    "programs/gui/fonts/C059/C059-Bold.ttf"
+    "programs/gui/fonts/C059/C059-Italic.ttf"
 )
 
 copied=0

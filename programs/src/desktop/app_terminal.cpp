@@ -110,6 +110,8 @@ static void term_add_tab(TermTabState* tts, int cols, int rows) {
 static void terminal_on_draw(Window* win, Framebuffer& fb) {
     TermTabState* tts = (TermTabState*)win->app_data;
     if (!tts || tts->tab_count == 0) return;
+    if (tts->active_tab < 0 || tts->active_tab >= tts->tab_count)
+        tts->active_tab = 0;
 
     Rect cr = win->content_rect();
     int term_h = cr.h - TERM_TAB_BAR_H;

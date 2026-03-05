@@ -87,6 +87,7 @@ struct DesktopState {
     SvgIcon icon_procmgr;
     SvgIcon icon_mandelbrot;
     SvgIcon icon_devexplorer;
+    SvgIcon icon_spreadsheet;
 
     bool ctx_menu_open;
     int ctx_menu_x, ctx_menu_y;

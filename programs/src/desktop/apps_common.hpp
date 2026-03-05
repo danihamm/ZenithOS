@@ -174,5 +174,7 @@ void open_devexplorer(DesktopState* ds);
 void open_settings(DesktopState* ds);
 void open_doom(DesktopState* ds);
 void open_reboot_dialog(DesktopState* ds);
+void open_wordprocessor(DesktopState* ds);
+void open_spreadsheet(DesktopState* ds);
 void open_shutdown_dialog(DesktopState* ds);
 void desktop_poll_external_windows(DesktopState* ds);

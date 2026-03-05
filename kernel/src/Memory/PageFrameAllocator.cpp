@@ -108,20 +108,84 @@ namespace Memory {
         return nullptr;
     }
 
-    void PageFrameAllocator::Free(void* ptr) {
-        Lock.Acquire();
-        auto prev_next = head.next;
-        head.next = (Page*)ptr;
+    // Core free implementation: sorted-insert with coalescing.
+    // The free list is kept sorted by address so adjacent blocks can be merged,
+    // preventing fragmentation from accumulating over time.
+    void PageFrameAllocator::FreeRange(void* ptr, size_t size) {
+        if (ptr == nullptr || size == 0) return;
 
-        head.next->next = prev_next;
-        head.next->size = 0x1000;
+        Lock.Acquire();
+
+        uint64_t addr = (uint64_t)ptr;
+
+        // Walk to find the sorted insertion point: prev < addr < current
+        Page* prev = &head;
+        Page* current = head.next;
+
+        while (current != nullptr && (uint64_t)current < addr) {
+            // Double-free check: addr falls within an existing free block
+            if (addr < (uint64_t)current + current->size) {
+                Kt::KernelLogStream(Kt::WARNING, "PFA")
+                    << "Double-free detected at " << addr << ", ignoring";
+                Lock.Release();
+                return;
+            }
+            prev = current;
+            current = current->next;
+        }
+
+        // Double-free check: exact match with next block
+        if (current != nullptr && (uint64_t)current == addr) {
+            Kt::KernelLogStream(Kt::WARNING, "PFA")
+                << "Double-free detected at " << addr << ", ignoring";
+            Lock.Release();
+            return;
+        }
+
+        // Try to coalesce with previous block (if prev ends where new block starts)
+        bool merged_prev = false;
+        if (prev != &head) {
+            uint64_t prev_end = (uint64_t)prev + prev->size;
+            if (prev_end == addr) {
+                prev->size += size;
+                merged_prev = true;
+            }
+        }
+
+        // Try to coalesce with next block (if new block ends where next starts)
+        if (current != nullptr && addr + size == (uint64_t)current) {
+            if (merged_prev) {
+                // Three-way merge: prev absorbs new block and current
+                prev->size += current->size;
+                prev->next = current->next;
+            } else {
+                // Forward merge: new block absorbs current
+                Page* new_page = (Page*)addr;
+                new_page->size = size + current->size;
+                new_page->next = current->next;
+                prev->next = new_page;
+            }
+        } else if (!merged_prev) {
+            // No merging possible: insert new block between prev and current
+            Page* new_page = (Page*)addr;
+            new_page->size = size;
+            new_page->next = current;
+            prev->next = new_page;
+        }
+
         Lock.Release();
     }
 
+    void PageFrameAllocator::Free(void* ptr) {
+        FreeRange(ptr, 0x1000);
+    }
+
     void PageFrameAllocator::Free(void* ptr, int n) {
-        for (int i = 0; i < n; i++) {
-            Free((void*)((uint64_t)ptr + 0x1000 * i));
-        }
+        if (ptr == nullptr || n <= 0) return;
+        // Free the entire contiguous range as a single block.
+        // This is more efficient than freeing one page at a time and
+        // guarantees the range stays coalesced.
+        FreeRange(ptr, (size_t)n * 0x1000);
     }
 
     void PageFrameAllocator::GetStats(Montauk::MemStats* out) {

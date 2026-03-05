@@ -84,6 +84,7 @@ ICONS=(
     "panel/weather-none-available.svg"
     "apps/symbolic/utilities-system-monitor-symbolic.svg" # system monitor
     "apps/scalable/utilities-system-monitor.svg" # system monitor
+    "mimetypes/scalable/spreadsheet.svg"
 )
 
 copied=0

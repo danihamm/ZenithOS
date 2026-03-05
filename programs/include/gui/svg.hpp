@@ -321,7 +321,7 @@ struct SvgEdgeList {
     int capacity;
 
     void init(int cap) {
-        edges = (SvgEdge*)montauk::alloc(cap * sizeof(SvgEdge));
+        edges = (SvgEdge*)montauk::malloc(cap * sizeof(SvgEdge));
         count = 0;
         capacity = cap;
     }
@@ -800,7 +800,7 @@ inline void svg_rasterize(const SvgEdgeList& el, uint32_t* pixels, int w, int h,
     // Temporary array for x-intersections on each scanline
     // Allocate enough for all edges (each edge can intersect at most once per scanline)
     int maxIsect = el.count + 16;
-    fixed_t* isect = (fixed_t*)montauk::alloc(maxIsect * sizeof(fixed_t));
+    fixed_t* isect = (fixed_t*)montauk::malloc(maxIsect * sizeof(fixed_t));
 
     for (int y = 0; y < h; ++y) {
         // Scanline center in fixed-point
@@ -858,7 +858,7 @@ inline void svg_rasterize(const SvgEdgeList& el, uint32_t* pixels, int w, int h,
         }
     }
 
-    montauk::free(isect);
+    montauk::mfree(isect);
 }
 
 // ---------------------------------------------------------------------------
@@ -1018,7 +1018,7 @@ inline void svg_rasterize_blend(const SvgEdgeList& el, uint32_t* pixels, int w, 
     if (el.count == 0) return;
 
     int maxIsect = el.count + 16;
-    fixed_t* isect = (fixed_t*)montauk::alloc(maxIsect * sizeof(fixed_t));
+    fixed_t* isect = (fixed_t*)montauk::malloc(maxIsect * sizeof(fixed_t));
 
     uint32_t fr = (fill >> 16) & 0xFF;
     uint32_t fg = (fill >> 8) & 0xFF;
@@ -1081,7 +1081,7 @@ inline void svg_rasterize_blend(const SvgEdgeList& el, uint32_t* pixels, int w, 
         }
     }
 
-    montauk::free(isect);
+    montauk::mfree(isect);
 }
 
 // ---------------------------------------------------------------------------
@@ -1091,7 +1091,7 @@ inline SvgIcon svg_render(const char* svg_data, int svg_len, int target_w, int t
     SvgIcon icon;
     icon.width = target_w;
     icon.height = target_h;
-    icon.pixels = (uint32_t*)montauk::alloc(target_w * target_h * sizeof(uint32_t));
+    icon.pixels = (uint32_t*)montauk::malloc(target_w * target_h * sizeof(uint32_t));
     // Clear to transparent
     svg_memset(icon.pixels, 0, target_w * target_h * sizeof(uint32_t));
 
@@ -1204,6 +1204,9 @@ inline SvgIcon svg_render(const char* svg_data, int svg_len, int target_w, int t
     SvgEdgeList el;
     el.init(SVG_MAX_EDGES);
 
+    // Heap-allocated path data buffer (avoids 8 KiB on the stack)
+    char* d_buf = (char*)montauk::malloc(SVG_MAX_PATH_LEN);
+
     // Scan for <path, <circle, <rect elements — rasterize each individually
     // Skip elements inside <defs> blocks (they define reusable items, not rendered directly)
     const char* p = svg_data;
@@ -1249,7 +1252,6 @@ inline SvgIcon svg_render(const char* svg_data, int svg_len, int target_w, int t
             int alpha = svg_get_element_opacity(elem_start, elem_len);
 
             // Extract and rasterize path
-            char d_buf[SVG_MAX_PATH_LEN];
             int d_len = svg_get_attr(elem_start, elem_len, " d", d_buf, SVG_MAX_PATH_LEN);
             if (d_len > 0) {
                 el.clear();
@@ -1359,7 +1361,8 @@ inline SvgIcon svg_render(const char* svg_data, int svg_len, int target_w, int t
         ++p;
     }
 
-    montauk::free(el.edges);
+    montauk::mfree(d_buf);
+    montauk::mfree(el.edges);
     return icon;
 }
 
@@ -1378,7 +1381,7 @@ inline SvgIcon svg_load(const char* vfs_path, int target_w, int target_h, Color 
         return {nullptr, 0, 0};
     }
 
-    char* buf = (char*)montauk::alloc(size + 1);
+    char* buf = (char*)montauk::malloc(size + 1);
     montauk::read(fd, (uint8_t*)buf, 0, size);
     montauk::close(fd);
     buf[size] = '\0';
@@ -1389,12 +1392,12 @@ inline SvgIcon svg_load(const char* vfs_path, int target_w, int target_h, Color 
     int hi_h = target_h * SS;
 
     SvgIcon hi = svg_render(buf, (int)size, hi_w, hi_h, fill_color);
-    montauk::free(buf);
+    montauk::mfree(buf);
 
     if (!hi.pixels) return {nullptr, 0, 0};
 
     // Allocate final icon at target resolution
-    uint32_t* out = (uint32_t*)montauk::alloc(target_w * target_h * 4);
+    uint32_t* out = (uint32_t*)montauk::malloc(target_w * target_h * 4);
     for (int i = 0; i < target_w * target_h; i++) out[i] = 0;
 
     // Downsample: average each SSxSS block using premultiplied alpha
@@ -1432,7 +1435,7 @@ inline SvgIcon svg_load(const char* vfs_path, int target_w, int target_h, Color 
         }
     }
 
-    montauk::free(hi.pixels);
+    montauk::mfree(hi.pixels);
     return {out, target_w, target_h};
 }
 
@@ -1440,7 +1443,7 @@ inline SvgIcon svg_load(const char* vfs_path, int target_w, int target_h, Color 
 // Free icon pixel data
 // ---------------------------------------------------------------------------
 inline void svg_free(SvgIcon& icon) {
-    if (icon.pixels) montauk::free(icon.pixels);
+    if (icon.pixels) montauk::mfree(icon.pixels);
     icon.pixels = nullptr;
     icon.width = 0;
     icon.height = 0;

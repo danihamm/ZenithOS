@@ -1,5 +1,5 @@
-# Makefile for desktop (GUI desktop environment) on MontaukOS
-# Copyright (c) 2025 Daniel Hammer
+# Makefile for spreadsheet (standalone Window Server app) on MontaukOS
+# Copyright (c) 2026 Daniel Hammer
 
 MAKEFLAGS += -rR
 .SUFFIXES:
@@ -16,13 +16,12 @@ endif
 # ---- Paths ----
 
 PROG_INC := ../../include
-JPEG_LIB := ../../lib/libjpeg
-LIBC_LIB := ../../lib/libc
 LINK_LD  := ../../link.ld
 BINDIR   := ../../bin
 OBJDIR   := obj
+LIBDIR   := ../../lib
 
-# ---- C++ compiler flags ----
+# ---- Compiler flags ----
 
 CXXFLAGS := \
     -std=gnu++20 \
@@ -47,6 +46,7 @@ CXXFLAGS := \
     -mno-red-zone \
     -mcmodel=small \
     -I $(PROG_INC) \
+    -isystem $(PROG_INC)/libc \
     -isystem ../../../kernel/freestnd-c-hdrs/x86_64/include \
     -isystem ../../../kernel/freestnd-cxx-hdrs/x86_64/include
 
@@ -61,28 +61,23 @@ LDFLAGS := \
     -z max-page-size=0x1000 \
     -T $(LINK_LD)
 
-# ---- C++ source files ----
+# ---- Source files ----
 
-SRCS := main.cpp font_data.cpp stb_truetype_impl.cpp app_terminal.cpp app_filemanager.cpp app_sysinfo.cpp app_calculator.cpp app_texteditor.cpp app_wordprocessor.cpp app_spreadsheet.cpp app_klog.cpp app_wiki.cpp app_weather.cpp app_procmgr.cpp app_mandelbrot.cpp app_devexplorer.cpp app_settings.cpp app_doom.cpp
+SRCS := main.cpp helpers.cpp formula.cpp fileio.cpp edit.cpp render.cpp stb_truetype_impl.cpp
 OBJS := $(addprefix $(OBJDIR)/,$(SRCS:.cpp=.o))
 
 # ---- Target ----
 
-TARGET := $(BINDIR)/os/desktop.elf
+TARGET := $(BINDIR)/os/spreadsheet.elf
 
 .PHONY: all clean
 
 all: $(TARGET)
 
-# ---- Libraries ----
-
-LIBS := $(JPEG_LIB)/libjpeg.a $(LIBC_LIB)/liblibc.a
-
-$(TARGET): $(OBJS) $(LIBS) $(LINK_LD) Makefile
+$(TARGET): $(OBJS) $(LINK_LD) Makefile
 	mkdir -p $(BINDIR)/os
-	$(CXX) $(CXXFLAGS) $(LDFLAGS) $(OBJS) $(LIBS) -o $@
+	$(CXX) $(CXXFLAGS) $(LDFLAGS) $(OBJS) $(LIBDIR)/libc/liblibc.a -o $@
 
-# C++ sources
 $(OBJDIR)/%.o: %.cpp Makefile
 	mkdir -p $(OBJDIR)
 	$(CXX) $(CXXFLAGS) -c $< -o $@

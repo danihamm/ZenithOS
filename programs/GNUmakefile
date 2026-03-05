@@ -59,7 +59,7 @@ BINDIR := bin
 PROGRAMS := $(notdir $(wildcard src/*))
 
 # Programs with custom Makefiles (built separately).
-CUSTOM_BUILDS := doom fetch wiki wikipedia weather imageviewer fontpreview desktop
+CUSTOM_BUILDS := doom fetch wiki wikipedia weather imageviewer fontpreview spreadsheet desktop
 SYSTEM_PROGRAMS := $(filter-out $(CUSTOM_BUILDS),$(PROGRAMS))
 
 # Build targets: system programs go to bin/os/, games are handled separately.
@@ -84,9 +84,9 @@ CA_CERTS := $(BINDIR)/etc/ca-certificates.crt
 # Home directory placeholder.
 HOMEKEEP := $(BINDIR)/home/.keep
 
-.PHONY: all clean doom fetch wiki wikipedia weather imageviewer fontpreview desktop icons fonts bearssl libc tls libjpeg
+.PHONY: all clean doom fetch wiki wikipedia weather imageviewer fontpreview spreadsheet desktop icons fonts bearssl libc tls libjpeg
 
-all: bearssl libc libjpeg tls $(TARGETS) fetch wiki wikipedia weather imageviewer fontpreview doom desktop icons fonts $(GAME_DATA) $(MANDST) $(WWWDST) $(CA_CERTS) $(HOMEKEEP)
+all: bearssl libc libjpeg tls $(TARGETS) fetch wiki wikipedia weather imageviewer fontpreview spreadsheet doom desktop icons fonts $(GAME_DATA) $(MANDST) $(WWWDST) $(CA_CERTS) $(HOMEKEEP)
 
 # Build BearSSL static library (cross-compiled for freestanding x86_64).
 BEARSSL_INCLUDES := -isystem $(shell cd .. && pwd)/kernel/freestnd-c-hdrs/x86_64/include -isystem $(abspath include/libc)
@@ -134,6 +134,10 @@ imageviewer: libc libjpeg
 # Build fontpreview standalone GUI client (no library deps).
 fontpreview:
 	$(MAKE) -C src/fontpreview
+
+# Build spreadsheet standalone GUI client (depends on libc).
+spreadsheet: libc
+	$(MAKE) -C src/spreadsheet
 
 # Build desktop via its own Makefile (depends on libc and libjpeg for wallpaper).
 desktop: libc libjpeg
@@ -195,3 +199,4 @@ clean:
 	$(MAKE) -C src/weather clean
 	$(MAKE) -C src/imageviewer clean
 	$(MAKE) -C src/fontpreview clean
+	$(MAKE) -C src/spreadsheet clean

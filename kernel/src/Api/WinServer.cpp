@@ -97,6 +97,19 @@ namespace WinServer {
             }
         }
 
+        // Unmap pixel pages from the owner's address space so that
+        // FreeUserHalf() won't double-free them when the process exits.
+        {
+            auto* ownerProc = Sched::GetProcessByPid(slot.ownerPid);
+            if (ownerProc) {
+                for (int p = 0; p < slot.pixelNumPages; p++) {
+                    Memory::VMM::Paging::UnmapUserIn(
+                        ownerProc->pml4Phys,
+                        slot.ownerVa + (uint64_t)p * 0x1000);
+                }
+            }
+        }
+
         // Free physical pixel pages
         for (int i = 0; i < slot.pixelNumPages; i++) {
             if (slot.pixelPhysPages[i] != 0) {
@@ -198,9 +211,11 @@ namespace WinServer {
         int numPages = (int)((bufSize + 0xFFF) / 0x1000);
         if (numPages > MaxPixelPages) return -1;
 
-        // Free old pixel pages before allocating new ones
+        // Unmap old pixel pages from owner's address space, then free them
         int oldNumPages = slot.pixelNumPages;
         for (int i = 0; i < oldNumPages; i++) {
+            Memory::VMM::Paging::UnmapUserIn(
+                ownerPml4, slot.ownerVa + (uint64_t)i * 0x1000);
             if (slot.pixelPhysPages[i] != 0) {
                 Memory::g_pfa->Free((void*)Memory::HHDM(slot.pixelPhysPages[i]));
                 slot.pixelPhysPages[i] = 0;
@@ -271,12 +286,10 @@ namespace WinServer {
                     }
                 }
 
-                // Free physical pixel pages
-                for (int p = 0; p < g_slots[i].pixelNumPages; p++) {
-                    if (g_slots[i].pixelPhysPages[p] != 0) {
-                        Memory::g_pfa->Free((void*)Memory::HHDM(g_slots[i].pixelPhysPages[p]));
-                    }
-                }
+                // Do NOT free physical pixel pages here — they are still mapped
+                // in the owner's page tables and FreeUserHalf() (called right
+                // after CleanupProcess) will free them.  Freeing here would
+                // cause a double-free, creating a cycle in the PFA free list.
 
                 g_slots[i].used = false;
             }
