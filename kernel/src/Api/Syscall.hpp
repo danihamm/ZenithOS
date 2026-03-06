@@ -132,6 +132,7 @@ namespace Montauk {
 
     /* Device.hpp */
     static constexpr uint64_t SYS_DEVLIST     = 63;
+    static constexpr uint64_t SYS_DISKINFO    = 69;
 
     /* MemInfo.hpp */
     static constexpr uint64_t SYS_MEMSTATS    = 67;
@@ -224,10 +225,33 @@ namespace Montauk {
     };
 
     struct DevInfo {
-        uint8_t  category;     // 0=CPU, 1=Interrupt, 2=Timer, 3=Input, 4=USB, 5=Network, 6=Display, 7=PCI
+        uint8_t  category;     // 0=CPU, 1=Interrupt, 2=Timer, 3=Input, 4=USB, 5=Network, 6=Display, 7=Storage, 8=PCI
         uint8_t  _pad[3];
         char     name[48];
         char     detail[48];
+    };
+
+    struct DiskInfo {
+        uint8_t  port;              // AHCI port index
+        uint8_t  type;              // 0=none, 1=SATA, 2=SATAPI
+        uint8_t  sataGen;           // SATA gen (1/2/3)
+        uint8_t  _pad0;
+        uint64_t sectorCount;       // Total user-addressable sectors
+        uint16_t sectorSizeLog;     // Logical sector size (bytes)
+        uint16_t sectorSizePhys;    // Physical sector size (bytes)
+        uint16_t rpm;               // 0=unknown, 1=SSD, else RPM
+        uint16_t ncqDepth;          // 0 if no NCQ
+        uint8_t  supportsLba48;
+        uint8_t  supportsNcq;
+        uint8_t  supportsTrim;
+        uint8_t  supportsSmart;
+        uint8_t  supportsWriteCache;
+        uint8_t  supportsReadAhead;
+        uint8_t  _pad1[2];
+        char     model[41];
+        char     serial[21];
+        char     firmware[9];
+        char     _pad2[1];
     };
 
     struct ProcInfo {

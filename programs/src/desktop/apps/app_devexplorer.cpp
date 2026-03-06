@@ -1,6 +1,6 @@
 /*
     * app_devexplorer.cpp
-    * MontaukOS Desktop - Device Explorer (lists hardware detected by the kernel)
+    * MontaukOS Desktop - Device Explorer
     * Copyright (c) 2026 Daniel Hammer
 */
 
@@ -26,9 +26,10 @@ static const char* category_names[] = {
     "USB",          // 4
     "Network",      // 5
     "Display",      // 6
-    "PCI",          // 7
+    "Storage",      // 7
+    "PCI",          // 8
 };
-static constexpr int NUM_CATEGORIES = 8;
+static constexpr int NUM_CATEGORIES = 9;
 
 static Color category_colors[] = {
     Color::from_rgb(0x33, 0x66, 0xCC),  // CPU - blue
@@ -38,6 +39,7 @@ static Color category_colors[] = {
     Color::from_rgb(0x00, 0x88, 0x88),  // USB - teal
     Color::from_rgb(0xCC, 0x55, 0x22),  // Network - orange
     Color::from_rgb(0x44, 0x66, 0xCC),  // Display - indigo
+    Color::from_rgb(0x99, 0x55, 0x00),  // Storage - brown
     Color::from_rgb(0x66, 0x66, 0x66),  // PCI - gray
 };
 
@@ -49,6 +51,10 @@ struct DevExplorerState {
     int selected_row;               // index into visible display rows (-1 = none)
     int scroll_y;                   // scroll offset in display rows
     uint64_t last_poll_ms;
+
+    // Double-click tracking
+    int last_click_row;
+    uint64_t last_click_ms;
 };
 
 // ============================================================================
@@ -305,6 +311,313 @@ static void devexplorer_on_draw(Window* win, Framebuffer& fb) {
     }
 }
 
+// ============================================================================
+// Disk Detail Window
+// ============================================================================
+
+static constexpr int DD_TAB_BAR_H  = 32;
+static constexpr int DD_TAB_COUNT  = 2;
+static const char* dd_tab_labels[DD_TAB_COUNT] = { "General", "Features" };
+
+struct DiskDetailState {
+    DesktopState* desktop;
+    Montauk::DiskInfo info;
+    int active_tab;
+};
+
+// Helper: format uint64 to string (snprintf %d can't handle 64-bit)
+static void fmt_u64(char* buf, int bufsize, uint64_t v) {
+    if (v == 0) { buf[0] = '0'; buf[1] = '\0'; return; }
+    char tmp[24]; int i = 0;
+    while (v > 0) { tmp[i++] = '0' + (int)(v % 10); v /= 10; }
+    int j = 0;
+    while (i > 0 && j < bufsize - 1) buf[j++] = tmp[--i];
+    buf[j] = '\0';
+}
+
+// Draw a two-column table row
+static void dd_table_row(Canvas& c, int x, int y, int col1_w, int row_h,
+                          const char* key, const char* value, Color key_col, Color val_col) {
+    int fh = system_font_height();
+    int ty = y + (row_h - fh) / 2;
+    c.text(x + 8, ty, key, key_col);
+    c.text(x + col1_w + 8, ty, value, val_col);
+}
+
+// Draw a feature row with colored status indicator
+static void dd_feature_row(Canvas& c, int x, int y, int w, int row_h,
+                            const char* label, bool supported, const char* extra) {
+    int fh = system_font_height();
+    int ty = y + (row_h - fh) / 2;
+
+    // Status dot
+    int dot_y = y + (row_h - 8) / 2;
+    Color dot_col = supported ? Color::from_rgb(0x22, 0x88, 0x22)
+                              : Color::from_rgb(0xBB, 0xBB, 0xBB);
+    c.fill_rounded_rect(x + 10, dot_y, 8, 8, 4, dot_col);
+
+    // Label
+    Color text_col = supported ? colors::TEXT_COLOR : Color::from_rgb(0xAA, 0xAA, 0xAA);
+    c.text(x + 26, ty, label, text_col);
+
+    // Extra info on right
+    if (extra && extra[0]) {
+        int ew = text_width(extra);
+        c.text(x + w - ew - 12, ty, extra, Color::from_rgb(0x66, 0x66, 0x66));
+    }
+}
+
+static void diskdetail_draw_general(Canvas& c, DiskDetailState* dd) {
+    char line[128];
+    int fh = system_font_height();
+    int x = 0;
+    int y = 12;
+    int w = c.w;
+    int col1_w = 110;
+    int row_h = fh + 8;
+    Color key_col = Color::from_rgb(0x66, 0x66, 0x66);
+    Color val_col = colors::TEXT_COLOR;
+    Color hdr_col = colors::ACCENT;
+    Color border = Color::from_rgb(0xE0, 0xE0, 0xE0);
+
+    // --- Identification section ---
+    c.text(x + 8, y, "Identification", hdr_col);
+    y += fh + 8;
+    c.hline(x + 8, y, w - 16, border);
+    y += 1;
+
+    // Table rows with alternating backgrounds
+    auto row_bg = [&](int ry) {
+        static int rowIdx = 0;
+        if (rowIdx++ % 2 == 0)
+            c.fill_rect(x + 8, ry, w - 16, row_h, Color::from_rgb(0xF7, 0xF7, 0xF7));
+    };
+
+    int rowIdx = 0;
+    auto table_row = [&](const char* key, const char* val) {
+        if (rowIdx++ % 2 == 0)
+            c.fill_rect(x + 8, y, w - 16, row_h, Color::from_rgb(0xF7, 0xF7, 0xF7));
+        dd_table_row(c, x, y, col1_w, row_h, key, val, key_col, val_col);
+        y += row_h;
+    };
+
+    table_row("Model", dd->info.model);
+    table_row("Serial", dd->info.serial);
+    table_row("Firmware", dd->info.firmware);
+
+    const char* typeStr = "Unknown";
+    if (dd->info.type == 1) typeStr = "SATA";
+    else if (dd->info.type == 2) typeStr = "SATAPI";
+    table_row("Type", typeStr);
+
+    snprintf(line, sizeof(line), "%d", (int)dd->info.port);
+    table_row("AHCI Port", line);
+
+    c.hline(x + 8, y, w - 16, border);
+    y += 12;
+
+    // --- Capacity section ---
+    c.text(x + 8, y, "Capacity", hdr_col);
+    y += fh + 8;
+    c.hline(x + 8, y, w - 16, border);
+    y += 1;
+
+    rowIdx = 0;
+    uint64_t totalBytes = dd->info.sectorCount * (uint64_t)dd->info.sectorSizeLog;
+    uint64_t totalMB = totalBytes / (1024 * 1024);
+    uint64_t totalGB = totalMB / 1024;
+    if (totalGB > 0) {
+        int fracGB = (int)((totalMB % 1024) * 10 / 1024);
+        snprintf(line, sizeof(line), "%d.%d GiB", (int)totalGB, fracGB);
+    } else {
+        snprintf(line, sizeof(line), "%d MiB", (int)totalMB);
+    }
+    table_row("Size", line);
+
+    char secbuf[24];
+    fmt_u64(secbuf, sizeof(secbuf), dd->info.sectorCount);
+    table_row("Sectors", secbuf);
+
+    snprintf(line, sizeof(line), "%d bytes", (int)dd->info.sectorSizeLog);
+    table_row("Logical", line);
+
+    snprintf(line, sizeof(line), "%d bytes", (int)dd->info.sectorSizePhys);
+    table_row("Physical", line);
+
+    c.hline(x + 8, y, w - 16, border);
+    y += 12;
+
+    // --- Interface section ---
+    c.text(x + 8, y, "Interface", hdr_col);
+    y += fh + 8;
+    c.hline(x + 8, y, w - 16, border);
+    y += 1;
+
+    rowIdx = 0;
+    const char* sataSpeed = "Unknown";
+    if (dd->info.sataGen == 1) sataSpeed = "SATA I (1.5 Gb/s)";
+    else if (dd->info.sataGen == 2) sataSpeed = "SATA II (3.0 Gb/s)";
+    else if (dd->info.sataGen == 3) sataSpeed = "SATA III (6.0 Gb/s)";
+    table_row("Link Speed", sataSpeed);
+
+    if (dd->info.rpm == 0)
+        table_row("Media", "Not reported");
+    else if (dd->info.rpm == 1)
+        table_row("Media", "Solid State (SSD)");
+    else {
+        snprintf(line, sizeof(line), "%d RPM", (int)dd->info.rpm);
+        table_row("Media", line);
+    }
+
+    c.hline(x + 8, y, w - 16, border);
+}
+
+static void diskdetail_draw_features(Canvas& c, DiskDetailState* dd) {
+    char line[64];
+    int fh = system_font_height();
+    int x = 0;
+    int y = 12;
+    int w = c.w;
+    int row_h = fh + 10;
+    Color hdr_col = colors::ACCENT;
+    Color border = Color::from_rgb(0xE0, 0xE0, 0xE0);
+
+    c.text(x + 8, y, "Supported Features", hdr_col);
+    y += fh + 8;
+    c.hline(x + 8, y, w - 16, border);
+    y += 4;
+
+    dd_feature_row(c, x, y, w, row_h, "48-bit LBA", dd->info.supportsLba48, nullptr);
+    y += row_h;
+
+    if (dd->info.supportsNcq) {
+        snprintf(line, sizeof(line), "Depth: %d", (int)dd->info.ncqDepth);
+        dd_feature_row(c, x, y, w, row_h, "Native Command Queuing (NCQ)", true, line);
+    } else {
+        dd_feature_row(c, x, y, w, row_h, "Native Command Queuing (NCQ)", false, nullptr);
+    }
+    y += row_h;
+
+    dd_feature_row(c, x, y, w, row_h, "TRIM (Data Set Management)", dd->info.supportsTrim, nullptr);
+    y += row_h;
+
+    dd_feature_row(c, x, y, w, row_h, "S.M.A.R.T.", dd->info.supportsSmart, nullptr);
+    y += row_h;
+
+    dd_feature_row(c, x, y, w, row_h, "Write Cache", dd->info.supportsWriteCache, nullptr);
+    y += row_h;
+
+    dd_feature_row(c, x, y, w, row_h, "Read Look-Ahead", dd->info.supportsReadAhead, nullptr);
+    y += row_h;
+
+    y += 4;
+    c.hline(x + 8, y, w - 16, border);
+    y += 12;
+
+    // Legend
+    Color legend_col = Color::from_rgb(0x88, 0x88, 0x88);
+    int ly = y + (fh - 8) / 2;
+    c.fill_rounded_rect(x + 10, ly, 8, 8, 4, Color::from_rgb(0x22, 0x88, 0x22));
+    c.text(x + 26, y, "Supported", legend_col);
+
+    c.fill_rounded_rect(x + 120, ly, 8, 8, 4, Color::from_rgb(0xBB, 0xBB, 0xBB));
+    c.text(x + 136, y, "Not supported", legend_col);
+}
+
+static void diskdetail_on_draw(Window* win, Framebuffer& fb) {
+    DiskDetailState* dd = (DiskDetailState*)win->app_data;
+    if (!dd) return;
+
+    Canvas c(win);
+    c.fill(colors::WINDOW_BG);
+
+    int sfh = system_font_height();
+    Color accent = colors::ACCENT;
+
+    // --- Tab bar ---
+    c.fill_rect(0, 0, c.w, DD_TAB_BAR_H, Color::from_rgb(0xF5, 0xF5, 0xF5));
+    c.hline(0, DD_TAB_BAR_H - 1, c.w, colors::BORDER);
+
+    int tab_w = c.w / DD_TAB_COUNT;
+    for (int i = 0; i < DD_TAB_COUNT; i++) {
+        int tx = i * tab_w;
+        bool active = (i == dd->active_tab);
+
+        if (active) {
+            c.fill_rect(tx, 0, tab_w, DD_TAB_BAR_H, colors::WINDOW_BG);
+            c.fill_rect(tx + 4, DD_TAB_BAR_H - 3, tab_w - 8, 3, accent);
+        }
+
+        int tw = text_width(dd_tab_labels[i]);
+        Color tc = active ? accent : Color::from_rgb(0x66, 0x66, 0x66);
+        c.text(tx + (tab_w - tw) / 2, (DD_TAB_BAR_H - sfh) / 2, dd_tab_labels[i], tc);
+    }
+
+    // --- Tab content ---
+    Canvas content(win->content + DD_TAB_BAR_H * win->content_w,
+                   win->content_w, win->content_h - DD_TAB_BAR_H);
+
+    switch (dd->active_tab) {
+    case 0: diskdetail_draw_general(content, dd); break;
+    case 1: diskdetail_draw_features(content, dd); break;
+    }
+}
+
+static void diskdetail_on_mouse(Window* win, MouseEvent& ev) {
+    DiskDetailState* dd = (DiskDetailState*)win->app_data;
+    if (!dd || !ev.left_pressed()) return;
+
+    Rect cr = win->content_rect();
+    int mx = ev.x - cr.x;
+    int my = ev.y - cr.y;
+
+    // Tab bar click
+    if (my >= 0 && my < DD_TAB_BAR_H) {
+        int tab_w = win->content_w / DD_TAB_COUNT;
+        int tab = mx / tab_w;
+        if (tab >= 0 && tab < DD_TAB_COUNT) {
+            dd->active_tab = tab;
+        }
+    }
+}
+
+static void diskdetail_on_close(Window* win) {
+    if (win->app_data) {
+        montauk::mfree(win->app_data);
+        win->app_data = nullptr;
+    }
+}
+
+static void open_disk_detail(DesktopState* ds, int port, const char* model) {
+    char title[64];
+    int i = 0;
+    const char* prefix = "Disk: ";
+    while (prefix[i]) { title[i] = prefix[i]; i++; }
+    int j = 0;
+    while (model[j] && i < 62) { title[i++] = model[j++]; }
+    title[i] = '\0';
+
+    int idx = desktop_create_window(ds, title, 180, 90, 440, 420);
+    if (idx < 0) return;
+
+    Window* win = &ds->windows[idx];
+    DiskDetailState* dd = (DiskDetailState*)montauk::malloc(sizeof(DiskDetailState));
+    montauk::memset(dd, 0, sizeof(DiskDetailState));
+
+    dd->desktop = ds;
+    dd->active_tab = 0;
+    montauk::diskinfo(&dd->info, port);
+
+    win->app_data = dd;
+    win->on_draw = diskdetail_on_draw;
+    win->on_mouse = diskdetail_on_mouse;
+    win->on_close = diskdetail_on_close;
+}
+
+// ============================================================================
+// Callbacks
+// ============================================================================
+
 static void devexplorer_on_mouse(Window* win, MouseEvent& ev) {
     DevExplorerState* de = (DevExplorerState*)win->app_data;
     if (!de) return;
@@ -340,6 +653,7 @@ static void devexplorer_on_mouse(Window* win, MouseEvent& ev) {
             int row_count = build_display_rows(de, rows);
 
             // Walk rows from scroll offset, accumulating y
+            uint64_t now = montauk::get_milliseconds();
             int cur_y = list_y;
             for (int i = de->scroll_y; i < row_count; i++) {
                 int row_h = (rows[i].type == ROW_CATEGORY) ? DE_CAT_H : DE_ITEM_H;
@@ -350,8 +664,23 @@ static void devexplorer_on_mouse(Window* win, MouseEvent& ev) {
                         int cat = rows[i].category;
                         de->collapsed[cat] = !de->collapsed[cat];
                         de->selected_row = -1;
+                        de->last_click_row = -1;
                     } else {
-                        de->selected_row = i;
+                        // Check for double-click on storage device
+                        int di = rows[i].dev_index;
+                        bool is_double = (de->last_click_row == i)
+                                      && (now - de->last_click_ms < 400);
+
+                        if (is_double && de->devs[di].category == 7) {
+                            // Storage device — open detail window
+                            int port = (int)de->devs[di]._pad[0];
+                            open_disk_detail(de->desktop, port, de->devs[di].name);
+                            de->last_click_row = -1;
+                        } else {
+                            de->selected_row = i;
+                            de->last_click_row = i;
+                            de->last_click_ms = now;
+                        }
                     }
                     return;
                 }
@@ -360,6 +689,7 @@ static void devexplorer_on_mouse(Window* win, MouseEvent& ev) {
             }
             // Clicked below all rows
             de->selected_row = -1;
+            de->last_click_row = -1;
         }
     }
 }
@@ -458,6 +788,8 @@ void open_devexplorer(DesktopState* ds) {
     de->selected_row = -1;
     de->scroll_y = 0;
     de->last_poll_ms = 0;
+    de->last_click_row = -1;
+    de->last_click_ms = 0;
 
     // All categories start expanded
     for (int i = 0; i < NUM_CATEGORIES; i++)

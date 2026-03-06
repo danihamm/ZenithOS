@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <Efi/UEFI.hpp>
 #include <Memory/Paging.hpp>
+#include <ACPI/AcpiShutdown.hpp>
 
 namespace Montauk {
 
@@ -25,13 +26,18 @@ namespace Montauk {
     }
 
     static void Sys_Shutdown() {
+        /* Primary: ACPI S5 shutdown via PM1 control registers */
+        if (Hal::AcpiShutdown::IsAvailable()) {
+            Hal::AcpiShutdown::Shutdown();
+        }
+
+        /* Fallback: EFI ResetSystem */
         if (Efi::g_ResetSystem) {
-            /* Switch to kernel PML4 which has identity-mapped UEFI runtime regions */
             Memory::VMM::LoadCR3(Memory::VMM::g_paging->PML4);
             Efi::g_ResetSystem(Efi::EfiResetShutdown, 0, 0, nullptr);
         }
 
-        /* No fallback for shutdown; halt the CPU */
+        /* Last resort: halt the CPU */
         asm volatile("cli; hlt");
         __builtin_unreachable();
     }

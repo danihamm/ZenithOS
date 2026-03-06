@@ -12,6 +12,7 @@
 #include <Drivers/Net/E1000.hpp>
 #include <Drivers/Net/E1000E.hpp>
 #include <Drivers/Graphics/IntelGPU.hpp>
+#include <Drivers/Storage/Ahci.hpp>
 #include <Pci/Pci.hpp>
 
 #include "Syscall.hpp"
@@ -128,7 +129,30 @@ namespace Montauk {
             }
         }
 
-        // PCI devices (category 7)
+        // Storage (category 7)
+        if (Drivers::Storage::Ahci::IsInitialized()) {
+            for (int port = 0; port < 32 && count < maxCount; port++) {
+                auto* info = Drivers::Storage::Ahci::GetPortInfo(port);
+                if (!info) continue;
+                uint64_t sectors = info->SectorCount;
+                uint64_t sizeMB = (sectors * 512) / (1024 * 1024);
+                uint64_t sizeGB = sizeMB / 1024;
+                char detail[48];
+                int p = 0;
+                if (sizeGB > 0) {
+                    p = dl_append_dec(detail, p, (int)sizeGB, 48);
+                    p = dl_append(detail, p, " GiB, SATA port ", 48);
+                } else {
+                    p = dl_append_dec(detail, p, (int)sizeMB, 48);
+                    p = dl_append(detail, p, " MiB, SATA port ", 48);
+                }
+                p = dl_append_dec(detail, p, port, 48);
+                add(7, info->Model, detail);
+                buf[count - 1]._pad[0] = (uint8_t)port; // stash port index
+            }
+        }
+
+        // PCI devices (category 8)
         auto& pciDevs = Pci::GetDevices();
         for (int i = 0; i < (int)pciDevs.size() && count < maxCount; i++) {
             auto& d = pciDevs[i];
@@ -144,9 +168,37 @@ namespace Montauk {
             p = dl_append_hex(detail, p, d.VendorId, 4, 48);
             p = dl_append(detail, p, ":", 48);
             p = dl_append_hex(detail, p, d.DeviceId, 4, 48);
-            add(7, className, detail);
+            add(8, className, detail);
         }
 
         return count;
+    }
+
+    static int Sys_DiskInfo(DiskInfo* buf, int port) {
+        if (buf == nullptr) return -1;
+        if (!Drivers::Storage::Ahci::IsInitialized()) return -1;
+
+        auto* info = Drivers::Storage::Ahci::GetPortInfo(port);
+        if (!info) return -1;
+
+        buf->port = info->PortIndex;
+        buf->type = (uint8_t)info->Type;
+        buf->sataGen = (uint8_t)info->SataGen;
+        buf->sectorCount = info->SectorCount;
+        buf->sectorSizeLog = info->SectorSizeLog;
+        buf->sectorSizePhys = info->SectorSizePhys;
+        buf->rpm = info->Rpm;
+        buf->ncqDepth = info->NcqDepth;
+        buf->supportsLba48 = info->SupportsLba48 ? 1 : 0;
+        buf->supportsNcq = info->SupportsNcq ? 1 : 0;
+        buf->supportsTrim = info->SupportsTrim ? 1 : 0;
+        buf->supportsSmart = info->SupportsSmart ? 1 : 0;
+        buf->supportsWriteCache = info->SupportsWriteCache ? 1 : 0;
+        buf->supportsReadAhead = info->SupportsReadAhead ? 1 : 0;
+        dl_strcpy(buf->model, info->Model, 41);
+        dl_strcpy(buf->serial, info->Serial, 21);
+        dl_strcpy(buf->firmware, info->Firmware, 9);
+
+        return 0;
     }
 };

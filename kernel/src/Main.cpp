@@ -20,6 +20,7 @@
 #include <Memory/PageFrameAllocator.hpp>
 #include <Memory/Paging.hpp>
 #include <ACPI/ACPI.hpp>
+#include <ACPI/AcpiShutdown.hpp>
 #include <Hal/Apic/ApicInit.hpp>
 #include <Pci/Pci.hpp>
 #include <Timekeeping/ApicTimer.hpp>
@@ -136,6 +137,8 @@ extern "C" void kmain() {
 
 #if defined (__x86_64__)
     if (g_acpi.GetXSDT() != nullptr) {
+        Hal::AcpiShutdown::Initialize(g_acpi.GetXSDT());
+
         Hal::ApicInitialize(g_acpi.GetXSDT());
 
         Pci::Initialize(g_acpi.GetXSDT());
@@ -151,6 +154,7 @@ extern "C" void kmain() {
 
         Drivers::ProbeNormal();
         Drivers::InitializeNetwork();
+        Drivers::InitializeStorage();
     }
 #endif
 

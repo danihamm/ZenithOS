@@ -294,6 +294,9 @@ namespace montauk {
     inline int devlist(Montauk::DevInfo* buf, int max) {
         return (int)syscall2(Montauk::SYS_DEVLIST, (uint64_t)buf, (uint64_t)max);
     }
+    inline int diskinfo(Montauk::DiskInfo* buf, int port) {
+        return (int)syscall2(Montauk::SYS_DISKINFO, (uint64_t)buf, (uint64_t)port);
+    }
 
     // Kernel introspection
     inline void memstats(Montauk::MemStats* out) { syscall1(Montauk::SYS_MEMSTATS, (uint64_t)out); }

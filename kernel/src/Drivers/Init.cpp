@@ -10,6 +10,7 @@
 #include <Drivers/Net/E1000.hpp>
 #include <Drivers/Net/E1000E.hpp>
 #include <Drivers/USB/Xhci.hpp>
+#include <Drivers/Storage/Ahci.hpp>
 #include <Graphics/Cursor.hpp>
 #include <Net/Net.hpp>
 #include <Terminal/Terminal.hpp>
@@ -57,6 +58,10 @@ namespace Drivers {
 
     static bool ProbeE1000E(const Pci::PciDevice& dev) {
         return Net::E1000E::Probe(dev);
+    }
+
+    static bool ProbeAhci(const Pci::PciDevice& dev) {
+        return Storage::Ahci::Probe(dev);
     }
 
     // -------------------------------------------------------------------------
@@ -108,6 +113,18 @@ namespace Drivers {
             Pci::ProbePhase::Normal,
             ProbeE1000E,
         },
+        // Order 5: AHCI — Normal phase, match class=0x01/0x06/0x01 (SATA AHCI)
+        {
+            "AHCI",
+            0,                              // VendorId (any)
+            0x01,                           // ClassCode (Mass Storage)
+            0x06,                           // SubClass (SATA)
+            0x01,                           // ProgIf (AHCI 1.0)
+            nullptr,
+            0,
+            Pci::ProbePhase::Normal,
+            ProbeAhci,
+        },
     };
 
     static constexpr uint16_t g_driverTableCount = sizeof(g_driverTable) / sizeof(g_driverTable[0]);
@@ -137,6 +154,12 @@ namespace Drivers {
 
     void InitializeNetwork() {
         ::Net::Initialize();
+    }
+
+    void InitializeStorage() {
+        // AHCI driver registered SATA devices during ProbeNormal().
+        // Nothing else to do here for now — the VFS registration
+        // is handled in Main.cpp after this call.
     }
 
 }

@@ -209,6 +209,8 @@ namespace Montauk {
             }
             case SYS_DEVLIST:
                 return (int64_t)Sys_DevList((DevInfo*)frame->arg1, (int)frame->arg2);
+            case SYS_DISKINFO:
+                return (int64_t)Sys_DiskInfo((DiskInfo*)frame->arg1, (int)frame->arg2);
             case SYS_WINSETSCALE:
                 return (int64_t)Sys_WinSetScale((int)frame->arg1);
             case SYS_WINGETSCALE:

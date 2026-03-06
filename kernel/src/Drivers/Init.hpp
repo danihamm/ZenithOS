@@ -14,10 +14,13 @@ namespace Drivers {
     // Post-probe: wire up GPU framebuffer to cursor subsystem.
     void InitializeGraphics();
 
-    // Probe PCI devices for Normal-phase drivers (xHCI, E1000, E1000E).
+    // Probe PCI devices for Normal-phase drivers (xHCI, E1000, E1000E, AHCI).
     void ProbeNormal();
 
     // Post-probe: initialize network stack.
     void InitializeNetwork();
+
+    // Post-probe: register SATA drives with VFS.
+    void InitializeStorage();
 
 }
