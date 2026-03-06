@@ -5,7 +5,7 @@
 */
 
 #include "apps_common.hpp"
-#include "wallpaper.hpp"
+#include "../wallpaper.hpp"
 
 // ============================================================================
 // Settings state

@@ -63,8 +63,10 @@ LDFLAGS := \
 
 # ---- C++ source files ----
 
-SRCS := main.cpp font_data.cpp stb_truetype_impl.cpp app_terminal.cpp app_filemanager.cpp app_sysinfo.cpp app_calculator.cpp app_texteditor.cpp app_wordprocessor.cpp app_spreadsheet.cpp app_klog.cpp app_wiki.cpp app_weather.cpp app_procmgr.cpp app_mandelbrot.cpp app_devexplorer.cpp app_settings.cpp app_doom.cpp
-OBJS := $(addprefix $(OBJDIR)/,$(SRCS:.cpp=.o))
+CORE_SRCS := main.cpp window.cpp panel.cpp compose.cpp input.cpp dialogs.cpp font_data.cpp stb_truetype_impl.cpp
+APP_SRCS  := $(wildcard apps/*.cpp)
+SRCS      := $(CORE_SRCS) $(APP_SRCS)
+OBJS      := $(addprefix $(OBJDIR)/,$(notdir $(SRCS:.cpp=.o)))
 
 # ---- Target ----
 
@@ -82,8 +84,13 @@ $(TARGET): $(OBJS) $(LIBS) $(LINK_LD) Makefile
 	mkdir -p $(BINDIR)/os
 	$(CXX) $(CXXFLAGS) $(LDFLAGS) $(OBJS) $(LIBS) -o $@
 
-# C++ sources
+# Core sources
 $(OBJDIR)/%.o: %.cpp Makefile
+	mkdir -p $(OBJDIR)
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+# App sources
+$(OBJDIR)/%.o: apps/%.cpp Makefile
 	mkdir -p $(OBJDIR)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
