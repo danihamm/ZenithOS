@@ -29,8 +29,18 @@ struct Canvas {
 
     void fill(Color c) {
         uint32_t px = c.to_pixel();
+        uint64_t px2 = ((uint64_t)px << 32) | px;
         int total = w * h;
-        for (int i = 0; i < total; i++) pixels[i] = px;
+        int i = 0;
+        // Align to 8-byte boundary if needed
+        if (total > 0 && ((uint64_t)pixels & 4)) {
+            pixels[0] = px;
+            i = 1;
+        }
+        uint64_t* dst64 = (uint64_t*)(pixels + i);
+        int pairs = (total - i) / 2;
+        for (int p = 0; p < pairs; p++) dst64[p] = px2;
+        if ((total - i) & 1) pixels[total - 1] = px;
     }
 
     void put_pixel(int x, int y, Color c) {
@@ -40,11 +50,25 @@ struct Canvas {
 
     void fill_rect(int x, int y, int rw, int rh, Color c) {
         uint32_t px = c.to_pixel();
+        uint64_t px2 = ((uint64_t)px << 32) | px;
         int x0 = gui_max(x, 0), y0 = gui_max(y, 0);
         int x1 = gui_min(x + rw, w), y1 = gui_min(y + rh, h);
-        for (int dy = y0; dy < y1; dy++)
-            for (int dx = x0; dx < x1; dx++)
-                pixels[dy * w + dx] = px;
+        for (int dy = y0; dy < y1; dy++) {
+            uint32_t* row = pixels + dy * w;
+            int dx = x0;
+            // Align to 8-byte boundary
+            if (dx < x1 && ((uint64_t)(row + dx) & 4)) {
+                row[dx] = px;
+                dx++;
+            }
+            // Bulk 2-pixel writes
+            uint64_t* dst64 = (uint64_t*)(row + dx);
+            int pairs = (x1 - dx) / 2;
+            for (int p = 0; p < pairs; p++) dst64[p] = px2;
+            dx += pairs * 2;
+            // Remainder
+            if (dx < x1) row[dx] = px;
+        }
     }
 
     void fill_rounded_rect(int x, int y, int rw, int rh, int radius, Color c) {
@@ -77,8 +101,18 @@ struct Canvas {
         if (y < 0 || y >= h) return;
         uint32_t px = c.to_pixel();
         int x0 = gui_max(x, 0), x1 = gui_min(x + len, w);
-        for (int dx = x0; dx < x1; dx++)
-            pixels[y * w + dx] = px;
+        uint32_t* row = pixels + y * w;
+        int dx = x0;
+        if (dx < x1 && ((uint64_t)(row + dx) & 4)) {
+            row[dx] = px;
+            dx++;
+        }
+        uint64_t px2 = ((uint64_t)px << 32) | px;
+        uint64_t* dst64 = (uint64_t*)(row + dx);
+        int pairs = (x1 - dx) / 2;
+        for (int p = 0; p < pairs; p++) dst64[p] = px2;
+        dx += pairs * 2;
+        if (dx < x1) row[dx] = px;
     }
 
     void vline(int x, int y, int len, Color c) {

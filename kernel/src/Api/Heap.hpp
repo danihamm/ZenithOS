@@ -18,7 +18,7 @@ namespace Montauk {
         uint64_t numPages;
     };
 
-    static constexpr int MaxHeapAllocs = 128;
+    static constexpr int MaxHeapAllocs = 512;
 
     static HeapAlloc g_heapAllocs[Sched::MaxProcesses][MaxHeapAllocs];
     static int g_heapAllocCount[Sched::MaxProcesses];
@@ -43,6 +43,7 @@ namespace Montauk {
         uint64_t userVa = proc->heapNext;
         uint64_t numPages = size / 0x1000;
 
+        // Allocate physical pages and map them into the process
         for (uint64_t i = 0; i < numPages; i++) {
             void* page = Memory::g_pfa->AllocateZeroed();
             if (page == nullptr) return 0;
@@ -90,7 +91,7 @@ namespace Montauk {
         uint64_t va = g_heapAllocs[slot][idx].va;
         uint64_t numPages = g_heapAllocs[slot][idx].numPages;
 
-        // Free each physical page and unmap the virtual address
+        // Free physical pages in bulk and unmap virtual addresses
         for (uint64_t i = 0; i < numPages; i++) {
             uint64_t pageVa = va + i * 0x1000;
             uint64_t physAddr = Memory::VMM::Paging::GetPhysAddr(proc->pml4Phys, pageVa);
@@ -100,7 +101,7 @@ namespace Montauk {
             Memory::VMM::Paging::UnmapUserIn(proc->pml4Phys, pageVa);
         }
 
-        if (slot >= 0) Sched::g_allocatedPages[slot] -= numPages;
+        Sched::g_allocatedPages[slot] -= numPages;
 
         // Remove tracking entry by swapping with the last element
         g_heapAllocs[slot][idx] = g_heapAllocs[slot][g_heapAllocCount[slot] - 1];

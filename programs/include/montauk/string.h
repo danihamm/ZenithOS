@@ -39,22 +39,58 @@ namespace montauk {
     inline void memcpy(void* dst, const void* src, uint64_t n) {
         auto* d = (uint8_t*)dst;
         auto* s = (const uint8_t*)src;
-        for (uint64_t i = 0; i < n; i++) d[i] = s[i];
+
+        // Byte copy until 8-byte aligned
+        while (n && ((uint64_t)d & 7)) { *d++ = *s++; n--; }
+
+        // Bulk 8-byte copy
+        auto* d8 = (uint64_t*)d;
+        auto* s8 = (const uint64_t*)s;
+        uint64_t words = n / 8;
+        for (uint64_t i = 0; i < words; i++) d8[i] = s8[i];
+
+        // Remainder
+        d = (uint8_t*)(d8 + words);
+        s = (const uint8_t*)(s8 + words);
+        for (uint64_t i = 0; i < (n & 7); i++) d[i] = s[i];
     }
 
     inline void memmove(void* dst, const void* src, uint64_t n) {
         auto* d = (uint8_t*)dst;
         auto* s = (const uint8_t*)src;
-        if (d < s) {
-            for (uint64_t i = 0; i < n; i++) d[i] = s[i];
+        if (d < s || d >= s + n) {
+            memcpy(dst, src, n);
         } else {
-            for (uint64_t i = n; i > 0; i--) d[i-1] = s[i-1];
+            // Backward copy — bulk 8 bytes at a time from end
+            d += n; s += n;
+            while (n && ((uint64_t)d & 7)) { *--d = *--s; n--; }
+            auto* d8 = (uint64_t*)d;
+            auto* s8 = (const uint64_t*)s;
+            uint64_t words = n / 8;
+            for (uint64_t i = 1; i <= words; i++) d8[-i] = s8[-i];
+            d = (uint8_t*)(d8 - words);
+            s = (const uint8_t*)(s8 - words);
+            for (uint64_t i = 1; i <= (n & 7); i++) d[-i] = s[-i];
         }
     }
 
     inline void memset(void* dst, int val, uint64_t n) {
         auto* d = (uint8_t*)dst;
-        for (uint64_t i = 0; i < n; i++) d[i] = (uint8_t)val;
+        uint8_t v = (uint8_t)val;
+
+        // Byte fill until 8-byte aligned
+        while (n && ((uint64_t)d & 7)) { *d++ = v; n--; }
+
+        // Bulk 8-byte fill
+        uint64_t v8 = v;
+        v8 |= v8 << 8;  v8 |= v8 << 16;  v8 |= v8 << 32;
+        auto* d8 = (uint64_t*)d;
+        uint64_t words = n / 8;
+        for (uint64_t i = 0; i < words; i++) d8[i] = v8;
+
+        // Remainder
+        d = (uint8_t*)(d8 + words);
+        for (uint64_t i = 0; i < (n & 7); i++) d[i] = v;
     }
 
     inline void strcpy(char* dst, const char* src) {

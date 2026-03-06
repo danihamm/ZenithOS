@@ -136,11 +136,15 @@ struct TrueTypeFont {
             return gc;
         }
 
-        // Evict oldest cache (slot 0) and shift others down
-        GlyphCache evicted = caches[0];
+        // Evict oldest cache (slot 0) — free its glyph bitmaps
+        for (int g = 0; g < 256; g++) {
+            if (caches[0].glyphs[g].bitmap)
+                montauk::mfree(caches[0].glyphs[g].bitmap);
+        }
+        // Shift remaining caches down
         for (int i = 0; i < 3; i++)
-            caches[i] = caches[i + 1];
-        caches[3] = evicted;
+            montauk::memcpy(&caches[i], &caches[i + 1], sizeof(GlyphCache));
+        montauk::memset(&caches[3], 0, sizeof(GlyphCache));
         init_cache(&caches[3], pixel_size);
         return &caches[3];
     }

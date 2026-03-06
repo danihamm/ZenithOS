@@ -66,27 +66,61 @@ int errno = 0;
 void *memcpy(void *dest, const void *src, size_t n) {
     unsigned char *d = (unsigned char *)dest;
     const unsigned char *s = (const unsigned char *)src;
-    for (size_t i = 0; i < n; i++)
-        d[i] = s[i];
+
+    /* Byte copy until 8-byte aligned */
+    while (n && ((uint64_t)d & 7)) { *d++ = *s++; n--; }
+
+    /* Bulk 8-byte copy */
+    uint64_t *d8 = (uint64_t *)d;
+    const uint64_t *s8 = (const uint64_t *)s;
+    size_t words = n / 8;
+    for (size_t i = 0; i < words; i++) d8[i] = s8[i];
+
+    /* Remainder */
+    d = (unsigned char *)(d8 + words);
+    s = (const unsigned char *)(s8 + words);
+    for (size_t i = 0; i < (n & 7); i++) d[i] = s[i];
+
     return dest;
 }
 
 void *memset(void *s, int c, size_t n) {
     unsigned char *p = (unsigned char *)s;
-    for (size_t i = 0; i < n; i++)
-        p[i] = (unsigned char)c;
+    unsigned char v = (unsigned char)c;
+
+    /* Byte fill until 8-byte aligned */
+    while (n && ((uint64_t)p & 7)) { *p++ = v; n--; }
+
+    /* Bulk 8-byte fill */
+    uint64_t v8 = v;
+    v8 |= v8 << 8;  v8 |= v8 << 16;  v8 |= v8 << 32;
+    uint64_t *p8 = (uint64_t *)p;
+    size_t words = n / 8;
+    for (size_t i = 0; i < words; i++) p8[i] = v8;
+
+    /* Remainder */
+    p = (unsigned char *)(p8 + words);
+    for (size_t i = 0; i < (n & 7); i++) p[i] = v;
+
     return s;
 }
 
 void *memmove(void *dest, const void *src, size_t n) {
     unsigned char *d = (unsigned char *)dest;
     const unsigned char *s = (const unsigned char *)src;
-    if (s < d && d < s + n) {
-        for (size_t i = n; i > 0; i--)
-            d[i - 1] = s[i - 1];
+    if (d < s || d >= s + n) {
+        memcpy(dest, src, n);
     } else {
-        for (size_t i = 0; i < n; i++)
-            d[i] = s[i];
+        /* Backward copy — bulk 8 bytes at a time from end */
+        d += n; s += n;
+        while (n && ((uint64_t)d & 7)) { *--d = *--s; n--; }
+        uint64_t *d8 = (uint64_t *)d;
+        const uint64_t *s8 = (const uint64_t *)s;
+        size_t words = n / 8;
+        for (size_t i = 1; i <= words; i++) d8[-(long)i] = s8[-(long)i];
+        d = (unsigned char *)(d8 - words);
+        s = (const unsigned char *)(s8 - words);
+        for (size_t i = 1; i <= (n & 7); i++) d[-(long)i] = s[-(long)i];
     }
     return dest;
 }
@@ -228,7 +262,8 @@ int tolower(int c)  { return (c >= 'A' && c <= 'Z') ? c + 32 : c; }
    Heap allocator (free-list, backed by SYS_ALLOC)
    ======================================================================== */
 
-#define HEAP_MAGIC 0x5A484541ULL  /* "ZHEA" */
+#define HEAP_MAGIC  0x5A484541ULL  /* "ZHEA" */
+#define FREED_MAGIC 0xDEADFEEEULL
 
 struct HeapHeader {
     uint64_t magic;
@@ -240,14 +275,78 @@ struct FreeNode {
     struct FreeNode *next;
 };
 
-static struct FreeNode g_heapHead = { 0, NULL };
+/* Segregated free lists: power-of-2 size classes for blocks <= 4096 bytes */
+#define NUM_BUCKETS 8
+static const uint64_t BUCKET_SIZES[NUM_BUCKETS] = {
+    32, 64, 128, 256, 512, 1024, 2048, 4096
+};
+
+static struct FreeNode *g_buckets[NUM_BUCKETS] = {};
+static struct FreeNode g_overflow = { 0, NULL };
 static int g_heapInit = 0;
 
-static void heap_insert_free(void *ptr, uint64_t size) {
+static int heap_bucket_index(uint64_t blockSize) {
+    if (blockSize <= 32)   return 0;
+    if (blockSize <= 64)   return 1;
+    if (blockSize <= 128)  return 2;
+    if (blockSize <= 256)  return 3;
+    if (blockSize <= 512)  return 4;
+    if (blockSize <= 1024) return 5;
+    if (blockSize <= 2048) return 6;
+    if (blockSize <= 4096) return 7;
+    return -1;
+}
+
+/* Insert into overflow list (sorted by address, with coalescing) */
+static void heap_insert_overflow(void *ptr, uint64_t size) {
     struct FreeNode *node = (struct FreeNode *)ptr;
     node->size = size;
-    node->next = g_heapHead.next;
-    g_heapHead.next = node;
+
+    struct FreeNode *prev = &g_overflow;
+    struct FreeNode *cur  = g_overflow.next;
+    while (cur != NULL && cur < node) {
+        prev = cur;
+        cur  = cur->next;
+    }
+
+    int merged_prev = 0;
+    if (prev != &g_overflow &&
+        (uint8_t *)prev + prev->size == (uint8_t *)node) {
+        prev->size += size;
+        node = prev;
+        merged_prev = 1;
+    }
+
+    if (cur != NULL &&
+        (uint8_t *)node + node->size == (uint8_t *)cur) {
+        node->size += cur->size;
+        node->next  = cur->next;
+        if (!merged_prev) prev->next = node;
+    } else if (!merged_prev) {
+        node->next = cur;
+        prev->next = node;
+    }
+}
+
+/* Take a block >= needed from overflow. Splits remainder back. */
+static void *heap_take_overflow(uint64_t needed) {
+    struct FreeNode *prev = &g_overflow;
+    struct FreeNode *cur  = g_overflow.next;
+
+    while (cur != NULL) {
+        if (cur->size >= needed) {
+            uint64_t blockSize = cur->size;
+            prev->next = cur->next;
+
+            if (blockSize > needed + sizeof(struct FreeNode) + 16) {
+                heap_insert_overflow((uint8_t *)cur + needed, blockSize - needed);
+            }
+            return (void *)cur;
+        }
+        prev = cur;
+        cur  = cur->next;
+    }
+    return NULL;
 }
 
 static void heap_grow(uint64_t bytes) {
@@ -255,7 +354,29 @@ static void heap_grow(uint64_t bytes) {
     if (pages < 4) pages = 4;
     void *mem = (void *)_zos_syscall1(SYS_ALLOC, (long)(pages * 0x1000));
     if (mem != NULL)
-        heap_insert_free(mem, pages * 0x1000);
+        heap_insert_overflow(mem, pages * 0x1000);
+}
+
+/* Refill a small-block bucket from overflow */
+static int heap_refill_bucket(int idx) {
+    uint64_t bsize = BUCKET_SIZES[idx];
+    uint64_t chunk = (bsize < 4096) ? 4096 : bsize;
+
+    void *block = heap_take_overflow(chunk);
+    if (block == NULL) {
+        heap_grow(chunk);
+        block = heap_take_overflow(chunk);
+        if (block == NULL) return 0;
+    }
+
+    uint64_t count = chunk / bsize;
+    for (uint64_t i = 0; i < count; i++) {
+        struct FreeNode *node = (struct FreeNode *)((uint8_t *)block + i * bsize);
+        node->size = bsize;
+        node->next = g_buckets[idx];
+        g_buckets[idx] = node;
+    }
+    return 1;
 }
 
 void *malloc(size_t size) {
@@ -267,39 +388,60 @@ void *malloc(size_t size) {
     uint64_t needed = size + sizeof(struct HeapHeader);
     needed = (needed + 15) & ~15ULL;
 
-    struct FreeNode *prev = &g_heapHead;
-    struct FreeNode *cur  = g_heapHead.next;
+    int idx = heap_bucket_index(needed);
 
-    while (cur != NULL) {
-        if (cur->size >= needed) {
-            uint64_t blockSize = cur->size;
-            prev->next = cur->next;
+    if (idx >= 0) {
+        /* Small allocation — use segregated bucket (O(1)) */
+        if (g_buckets[idx] == NULL && !heap_refill_bucket(idx))
+            return NULL;
 
-            if (blockSize > needed + sizeof(struct FreeNode) + 16) {
-                void *rest = (void *)((uint8_t *)cur + needed);
-                heap_insert_free(rest, blockSize - needed);
-            }
+        struct FreeNode *node = g_buckets[idx];
+        g_buckets[idx] = node->next;
 
-            struct HeapHeader *hdr = (struct HeapHeader *)cur;
-            hdr->magic = HEAP_MAGIC;
-            hdr->size  = size;
-            return (void *)((uint8_t *)hdr + sizeof(struct HeapHeader));
-        }
-        prev = cur;
-        cur  = cur->next;
+        struct HeapHeader *hdr = (struct HeapHeader *)node;
+        hdr->magic = HEAP_MAGIC;
+        hdr->size  = size;
+        return (void *)((uint8_t *)hdr + sizeof(struct HeapHeader));
     }
 
-    heap_grow(needed);
-    return malloc(size);
+    /* Large allocation — search overflow list */
+    void *block = heap_take_overflow(needed);
+    if (block == NULL) {
+        heap_grow(needed);
+        block = heap_take_overflow(needed);
+        if (block == NULL) return NULL;
+    }
+
+    struct HeapHeader *hdr = (struct HeapHeader *)block;
+    hdr->magic = HEAP_MAGIC;
+    hdr->size  = size;
+    return (void *)((uint8_t *)hdr + sizeof(struct HeapHeader));
 }
 
 void free(void *ptr) {
     if (ptr == NULL) return;
 
     struct HeapHeader *hdr = (struct HeapHeader *)((uint8_t *)ptr - sizeof(struct HeapHeader));
+
+    if (hdr->magic == FREED_MAGIC) return;    /* double-free */
+    if (hdr->magic != HEAP_MAGIC) return;     /* corrupt */
+    hdr->magic = FREED_MAGIC;
+
     uint64_t blockSize = hdr->size + sizeof(struct HeapHeader);
     blockSize = (blockSize + 15) & ~15ULL;
-    heap_insert_free((void *)hdr, blockSize);
+
+    int idx = heap_bucket_index(blockSize);
+
+    if (idx >= 0) {
+        /* Small block — push onto bucket (O(1)) */
+        struct FreeNode *node = (struct FreeNode *)hdr;
+        node->size = BUCKET_SIZES[idx];
+        node->next = g_buckets[idx];
+        g_buckets[idx] = node;
+    } else {
+        /* Large block — sorted insert with coalescing */
+        heap_insert_overflow((void *)hdr, blockSize);
+    }
 }
 
 void *calloc(size_t nmemb, size_t size) {
@@ -315,6 +457,17 @@ void *realloc(void *ptr, size_t size) {
 
     struct HeapHeader *hdr = (struct HeapHeader *)((uint8_t *)ptr - sizeof(struct HeapHeader));
     uint64_t old = hdr->size;
+
+    /* Compute actual block size (accounting for bucket rounding) */
+    uint64_t oldBlock = (old + sizeof(struct HeapHeader) + 15) & ~15ULL;
+    int idx = heap_bucket_index(oldBlock);
+    if (idx >= 0) oldBlock = BUCKET_SIZES[idx];
+
+    uint64_t newNeed = (size + sizeof(struct HeapHeader) + 15) & ~15ULL;
+    if (newNeed <= oldBlock) {
+        hdr->size = size;
+        return ptr;
+    }
 
     void *newp = malloc(size);
     if (newp == NULL) return NULL;

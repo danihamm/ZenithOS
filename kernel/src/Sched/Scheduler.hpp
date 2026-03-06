@@ -13,7 +13,7 @@ namespace Sched {
     static constexpr int MaxProcesses = 256;
     static constexpr uint64_t StackPages = 4;  // 16 KiB kernel stack per process
     static constexpr uint64_t StackSize = StackPages * 0x1000;
-    static constexpr uint64_t UserStackPages = 4;  // 16 KiB user stack
+    static constexpr uint64_t UserStackPages = 8;  // 32 KiB user stack
     static constexpr uint64_t UserStackSize = UserStackPages * 0x1000;
     static constexpr uint64_t UserStackTop = 0x7FFFFFF000ULL;  // User stack top VA
     static constexpr uint64_t UserHeapBase = 0x40000000ULL;    // User heap start VA

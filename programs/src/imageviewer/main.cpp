@@ -1,7 +1,6 @@
 /*
  * main.cpp
- * MontaukOS Image Viewer - standalone Window Server process
- * Displays images with zoom, pan, fit-to-window, and 1:1 modes
+ * MontaukOS Image Viewer
  * Copyright (c) 2026 Daniel Hammer
  */
 

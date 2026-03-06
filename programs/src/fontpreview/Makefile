@@ -15,6 +15,7 @@ endif
 
 # ---- Paths ----
 
+LIBC_LIB := ../../lib/libc
 PROG_INC := ../../include
 LINK_LD  := ../../link.ld
 BINDIR   := ../../bin
@@ -59,6 +60,10 @@ LDFLAGS := \
     -z max-page-size=0x1000 \
     -T $(LINK_LD)
 
+# ---- Libraries ----
+
+LIBS := $(LIBC_LIB)/liblibc.a
+
 # ---- Source files ----
 
 SRCS := main.cpp stb_truetype_impl.cpp
@@ -72,9 +77,9 @@ TARGET := $(BINDIR)/os/fontpreview.elf
 
 all: $(TARGET)
 
-$(TARGET): $(OBJS) $(LINK_LD) Makefile
+$(TARGET): $(OBJS) $(LIBS) $(LINK_LD) Makefile
 	mkdir -p $(BINDIR)/os
-	$(CXX) $(CXXFLAGS) $(LDFLAGS) $(OBJS) -o $@
+	$(CXX) $(CXXFLAGS) $(LDFLAGS) $(OBJS) $(LIBS) -o $@
 
 $(OBJDIR)/%.o: %.cpp Makefile
 	mkdir -p $(OBJDIR)
