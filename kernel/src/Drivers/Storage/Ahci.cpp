@@ -5,6 +5,7 @@
 */
 
 #include "Ahci.hpp"
+#include "BlockDevice.hpp"
 #include <Pci/Pci.hpp>
 #include <Terminal/Terminal.hpp>
 #include <CppLib/Stream.hpp>
@@ -164,13 +165,23 @@ namespace Drivers::Storage::Ahci {
             return PortType::None;
         }
 
+        // Wait for device to become ready (BSY clear) so the signature is valid.
+        // After HBA/port reset, the device sends a D2H Register FIS with its
+        // signature once it finishes COMRESET.  Until that FIS arrives PORT_SIG
+        // may contain stale data.
+        for (int i = 0; i < 1000000; i++) {
+            uint32_t tfd = ReadPortReg(port, PORT_TFD);
+            if (!(tfd & PORT_TFD_BSY)) break;
+            asm volatile("" ::: "memory");
+        }
+
         uint32_t sig = ReadPortReg(port, PORT_SIG);
         switch (sig) {
             case SIG_ATA:   return PortType::Sata;
             case SIG_ATAPI: return PortType::Satapi;
             case SIG_SEMB:  return PortType::Semb;
             case SIG_PM:    return PortType::PortMultiplier;
-            default:        return PortType::Sata; // Default to SATA for unknown signatures
+            default:        return PortType::None;
         }
     }
 
@@ -725,6 +736,20 @@ namespace Drivers::Storage::Ahci {
                 if (IdentifyDevice(i)) {
                     g_ports[i].Active = true;
                     g_activePortCount++;
+
+                    // Register as a block device
+                    Storage::BlockDevice bdev = {};
+                    bdev.ReadSectors = [](void* ctx, uint64_t lba, uint32_t count, void* buffer) -> bool {
+                        return ReadSectors((int)(uintptr_t)ctx, lba, count, buffer);
+                    };
+                    bdev.WriteSectors = [](void* ctx, uint64_t lba, uint32_t count, const void* buffer) -> bool {
+                        return WriteSectors((int)(uintptr_t)ctx, lba, count, buffer);
+                    };
+                    bdev.Ctx = (void*)(uintptr_t)i;
+                    bdev.SectorCount = g_ports[i].SectorCount;
+                    bdev.SectorSize = g_ports[i].SectorSizeLog;
+                    memcpy(bdev.Model, g_ports[i].Model, 41);
+                    Storage::RegisterBlockDevice(bdev);
                 }
             }
         }

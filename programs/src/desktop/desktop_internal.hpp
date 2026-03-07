@@ -24,7 +24,7 @@ struct MenuRow {
     int app_id;           // -1 for category headers / dividers
 };
 
-static constexpr int MENU_ROW_COUNT = 22;
+static constexpr int MENU_ROW_COUNT = 23;
 static const MenuRow menu_rows[MENU_ROW_COUNT] = {
     { true,  "Applications", -1 },   // cat 0
     { false, "Terminal",      0 },
@@ -41,6 +41,7 @@ static const MenuRow menu_rows[MENU_ROW_COUNT] = {
     { false, "Kernel Log",    5 },
     { false, "Processes",     6 },
     { false, "Devices",       8 },
+    { false, "Disks",        17 },
     { true,  "Games",        -1 },    // cat 3
     { false, "Mandelbrot",    7 },
     { false, "DOOM",         10 },

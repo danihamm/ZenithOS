@@ -27,7 +27,8 @@
 #include "IoRedir.hpp"    // SYS_SPAWN_REDIR, SYS_CHILDIO_READ, SYS_CHILDIO_WRITE, SYS_CHILDIO_WRITEKEY, SYS_CHILDIO_SETTERMSZ
 #include "Random.hpp"     // SYS_GETRANDOM
 #include "MemInfo.hpp"    // SYS_MEMSTATS
-#include "Device.hpp"     // SYS_DEVLIST
+#include "Device.hpp"     // SYS_DEVLIST, SYS_DISKINFO
+#include "Storage.hpp"    // SYS_PARTLIST, SYS_DISKREAD, SYS_DISKWRITE
 #include "Window.hpp"     // SYS_WINCREATE, SYS_WINDESTROY, SYS_WINPRESENT, SYS_WINPOLL, SYS_WINENUM, SYS_WINMAP, SYS_WINSENDEVENT, SYS_WINRESIZE, SYS_WINSETSCALE, SYS_WINGETSCALE
 
 // Assembly entry point
@@ -154,6 +155,8 @@ namespace Montauk {
                                            frame->arg3, frame->arg4);
             case SYS_FCREATE:
                 return (int64_t)Sys_FCreate((const char*)frame->arg1);
+            case SYS_FDELETE:
+                return (int64_t)Sys_FDelete((const char*)frame->arg1);
             case SYS_TERMSCALE:
                 return Sys_TermScale(frame->arg1, frame->arg2);
             case SYS_RESOLVE:
@@ -220,6 +223,22 @@ namespace Montauk {
             case SYS_MEMSTATS:
                 Sys_MemStats((MemStats*)frame->arg1);
                 return 0;
+            case SYS_PARTLIST:
+                return (int64_t)Sys_PartList((PartInfo*)frame->arg1, (int)frame->arg2);
+            case SYS_DISKREAD:
+                return (int64_t)Sys_DiskRead((int)frame->arg1, frame->arg2,
+                                             (uint32_t)frame->arg3, (void*)frame->arg4);
+            case SYS_DISKWRITE:
+                return (int64_t)Sys_DiskWrite((int)frame->arg1, frame->arg2,
+                                              (uint32_t)frame->arg3, (const void*)frame->arg4);
+            case SYS_GPTINIT:
+                return (int64_t)Sys_GptInit((int)frame->arg1);
+            case SYS_GPTADD:
+                return (int64_t)Sys_GptAdd((const GptAddParams*)frame->arg1);
+            case SYS_FSMOUNT:
+                return (int64_t)Sys_FsMount((int)frame->arg1, (int)frame->arg2);
+            case SYS_FSFORMAT:
+                return (int64_t)Sys_FsFormat((const FsFormatParams*)frame->arg1);
             default:
                 return -1;
         }

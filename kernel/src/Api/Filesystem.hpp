@@ -72,4 +72,8 @@ namespace Montauk {
     static int Sys_FCreate(const char* path) {
         return Fs::Vfs::VfsCreate(path);
     }
+
+    static int Sys_FDelete(const char* path) {
+        return Fs::Vfs::VfsDelete(path);
+    }
 };

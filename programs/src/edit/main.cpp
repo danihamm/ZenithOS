@@ -279,15 +279,11 @@ static bool save_file() {
         if (i < numLines - 1) totalSize++; // newline
     }
 
-    // Try to open existing file first
-    int handle = montauk::open(path);
+    // Create (or truncate existing) file
+    int handle = montauk::fcreate(path);
     if (handle < 0) {
-        // Create new file
-        handle = montauk::fcreate(path);
-        if (handle < 0) {
-            set_status("Error: could not create file");
-            return false;
-        }
+        set_status("Error: could not create file");
+        return false;
     }
 
     // Build content buffer and write

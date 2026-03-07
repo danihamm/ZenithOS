@@ -161,6 +161,23 @@ inline int svg_parse_fixed(const char* s, fixed_t* out) {
         val += (int32_t)(((int64_t)frac << 16) / frac_div);
     }
 
+    // Scientific notation (e.g. 2e-3, 7e-3)
+    if (*p == 'e' || *p == 'E') {
+        ++p;
+        bool exp_neg = false;
+        if (*p == '-') { exp_neg = true; ++p; }
+        else if (*p == '+') { ++p; }
+        int exp_val = 0;
+        while (*p >= '0' && *p <= '9') {
+            exp_val = exp_val * 10 + (*p - '0');
+            ++p;
+        }
+        for (int i = 0; i < exp_val; i++) {
+            if (exp_neg) val /= 10;
+            else         val *= 10;
+        }
+    }
+
     if (neg) val = -val;
     *out = val;
     return (int)(p - s);
@@ -1207,6 +1224,12 @@ inline SvgIcon svg_render(const char* svg_data, int svg_len, int target_w, int t
     // Heap-allocated path data buffer (avoids 8 KiB on the stack)
     char* d_buf = (char*)montauk::malloc(SVG_MAX_PATH_LEN);
 
+    // Group fill inheritance stack: track <g fill="..."> so child elements inherit
+    static constexpr int MAX_GROUP_DEPTH = 8;
+    struct GroupFill { Color color; bool has_fill; };
+    GroupFill g_stack[MAX_GROUP_DEPTH];
+    int g_depth = 0;
+
     // Scan for <path, <circle, <rect elements — rasterize each individually
     // Skip elements inside <defs> blocks (they define reusable items, not rendered directly)
     const char* p = svg_data;
@@ -1230,6 +1253,42 @@ inline SvgIcon svg_render(const char* svg_data, int svg_len, int target_w, int t
             continue;
         }
 
+        // Track </g> closing tags to pop the group fill stack
+        if (remaining > 3 && svg_strncmp(p, "</g>", 4)) {
+            if (g_depth > 0) g_depth--;
+            p += 4;
+            continue;
+        }
+
+        // Track <g> opening tags for fill inheritance
+        if (remaining > 2 && svg_strncmp(p, "<g", 2) && (svg_char_is_ws(p[2]) || p[2] == '>')) {
+            const char* g_start = p;
+            const char* g_end = p;
+            while (g_end < end && *g_end != '>') ++g_end;
+            if (g_end < end) ++g_end;
+            int g_len = (int)(g_end - g_start);
+
+            if (g_depth < MAX_GROUP_DEPTH) {
+                g_stack[g_depth].has_fill = false;
+                Color gc = fill_color;
+                char fbuf[64];
+                int fLen = svg_get_attr(g_start, g_len, " fill", fbuf, sizeof(fbuf));
+                if (fLen > 0) {
+                    int fr = svg_resolve_fill_value(fbuf, &gc, &grads);
+                    if (fr == 1) {
+                        g_stack[g_depth].color = gc;
+                        g_stack[g_depth].has_fill = true;
+                    } else if (fr == -1) {
+                        // fill="none" on group — children inherit none
+                        g_stack[g_depth].has_fill = false;
+                    }
+                }
+                g_depth++;
+            }
+            p = g_end;
+            continue;
+        }
+
         // Check for <path
         if (remaining > 5 && svg_strncmp(p, "<path", 5) && (svg_char_is_ws(p[5]) || p[5] == '/')) {
             const char* elem_start = p;
@@ -1244,8 +1303,12 @@ inline SvgIcon svg_render(const char* svg_data, int svg_len, int target_w, int t
                 continue;
             }
 
-            // Determine fill color for this element
+            // Determine fill color: element's own fill, or inherit from nearest <g>
             Color elem_color = fill_color;
+            // Apply inherited group fill as default
+            for (int gi = g_depth - 1; gi >= 0; gi--) {
+                if (g_stack[gi].has_fill) { elem_color = g_stack[gi].color; break; }
+            }
             int fillResult = svg_get_element_fill(elem_start, elem_len, &elem_color, &grads, &css);
             if (fillResult == -1) { p = elem_end; continue; } // fill="none"
 
@@ -1278,6 +1341,9 @@ inline SvgIcon svg_render(const char* svg_data, int svg_len, int target_w, int t
             }
 
             Color elem_color = fill_color;
+            for (int gi = g_depth - 1; gi >= 0; gi--) {
+                if (g_stack[gi].has_fill) { elem_color = g_stack[gi].color; break; }
+            }
             int fillResult = svg_get_element_fill(elem_start, elem_len, &elem_color, &grads, &css);
             if (fillResult == -1) { p = elem_end; continue; }
 
@@ -1321,6 +1387,9 @@ inline SvgIcon svg_render(const char* svg_data, int svg_len, int target_w, int t
             }
 
             Color elem_color = fill_color;
+            for (int gi = g_depth - 1; gi >= 0; gi--) {
+                if (g_stack[gi].has_fill) { elem_color = g_stack[gi].color; break; }
+            }
             int fillResult = svg_get_element_fill(elem_start, elem_len, &elem_color, &grads, &css);
             if (fillResult == -1) { p = elem_end; continue; }
 

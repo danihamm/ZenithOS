@@ -1,6 +1,6 @@
 /*
     * app_terminal.cpp
-    * MontaukOS Desktop - Terminal application with tab support
+    * MontaukOS Desktop
     * Copyright (c) 2026 Daniel Hammer
 */
 
@@ -17,12 +17,11 @@ static constexpr int TERM_TAB_GAP   = 4;
 static constexpr int TERM_PLUS_W    = 28;
 static constexpr int TERM_PLUS_PAD  = 8;
 
-// Compute the x-offset that centers all tabs within bar_w
+// Compute the x-offset for left-aligned tabs within bar_w
 static int term_tabs_origin(int bar_w, int tab_count) {
-    int total = tab_count * TERM_TAB_W + (tab_count - 1) * TERM_TAB_GAP;
-    int x = (bar_w - total) / 2;
-    if (x < 4) x = 4;
-    return x;
+    (void)bar_w;
+    (void)tab_count;
+    return 8;
 }
 
 struct TermTabState {

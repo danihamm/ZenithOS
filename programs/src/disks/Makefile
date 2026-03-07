@@ -1,5 +1,5 @@
-# Makefile for desktop (GUI desktop environment) on MontaukOS
-# Copyright (c) 2025 Daniel Hammer
+# Makefile for disks (standalone Disk Tool) on MontaukOS
+# Copyright (c) 2026 Daniel Hammer
 
 MAKEFLAGS += -rR
 .SUFFIXES:
@@ -16,13 +16,12 @@ endif
 # ---- Paths ----
 
 PROG_INC := ../../include
-JPEG_LIB := ../../lib/libjpeg
-LIBC_LIB := ../../lib/libc
 LINK_LD  := ../../link.ld
 BINDIR   := ../../bin
 OBJDIR   := obj
+LIBDIR   := ../../lib
 
-# ---- C++ compiler flags ----
+# ---- Compiler flags ----
 
 CXXFLAGS := \
     -std=gnu++20 \
@@ -46,8 +45,8 @@ CXXFLAGS := \
     -msse2 \
     -mno-red-zone \
     -mcmodel=small \
-    -MMD -MP \
     -I $(PROG_INC) \
+    -isystem $(PROG_INC)/libc \
     -isystem ../../../kernel/freestnd-c-hdrs/x86_64/include \
     -isystem ../../../kernel/freestnd-cxx-hdrs/x86_64/include
 
@@ -62,40 +61,26 @@ LDFLAGS := \
     -z max-page-size=0x1000 \
     -T $(LINK_LD)
 
-# ---- C++ source files ----
+# ---- Source files ----
 
-CORE_SRCS := main.cpp window.cpp panel.cpp compose.cpp input.cpp dialogs.cpp font_data.cpp stb_truetype_impl.cpp
-APP_SRCS  := $(wildcard apps/*.cpp)
-SRCS      := $(CORE_SRCS) $(APP_SRCS)
-OBJS      := $(addprefix $(OBJDIR)/,$(notdir $(SRCS:.cpp=.o)))
+SRCS := main.cpp render.cpp actions.cpp stb_truetype_impl.cpp
+OBJS := $(addprefix $(OBJDIR)/,$(SRCS:.cpp=.o))
 
 # ---- Target ----
 
-TARGET := $(BINDIR)/os/desktop.elf
+TARGET := $(BINDIR)/os/disks.elf
 
 .PHONY: all clean
 
 all: $(TARGET)
 
-# ---- Libraries ----
-
-LIBS := $(JPEG_LIB)/libjpeg.a $(LIBC_LIB)/liblibc.a
-
-$(TARGET): $(OBJS) $(LIBS) $(LINK_LD) Makefile
+$(TARGET): $(OBJS) $(LINK_LD) Makefile
 	mkdir -p $(BINDIR)/os
-	$(CXX) $(CXXFLAGS) $(LDFLAGS) $(OBJS) $(LIBS) -o $@
+	$(CXX) $(CXXFLAGS) $(LDFLAGS) $(OBJS) $(LIBDIR)/libc/liblibc.a -o $@
 
-# Core sources
 $(OBJDIR)/%.o: %.cpp Makefile
 	mkdir -p $(OBJDIR)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
-
-# App sources
-$(OBJDIR)/%.o: apps/%.cpp Makefile
-	mkdir -p $(OBJDIR)
-	$(CXX) $(CXXFLAGS) -c $< -o $@
-
--include $(OBJS:.o=.d)
 
 clean:
 	rm -rf $(OBJDIR) $(TARGET)

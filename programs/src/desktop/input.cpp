@@ -230,6 +230,7 @@ void gui::desktop_handle_mouse(DesktopState* ds) {
                         case 14: open_shutdown_dialog(ds); break;
                         case 15: open_wordprocessor(ds); break;
                         case 16: open_spreadsheet(ds); break;
+                        case 17: open_disks(ds); break;
                         }
                         ds->app_menu_open = false;
                     }

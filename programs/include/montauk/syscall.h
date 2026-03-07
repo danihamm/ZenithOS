@@ -143,6 +143,9 @@ namespace montauk {
     inline int fcreate(const char* path) {
         return (int)syscall1(Montauk::SYS_FCREATE, (uint64_t)path);
     }
+    inline int fdelete(const char* path) {
+        return (int)syscall1(Montauk::SYS_FDELETE, (uint64_t)path);
+    }
 
     // Memory
     inline void* alloc(uint64_t size) { return (void*)syscall1(Montauk::SYS_ALLOC, size); }
@@ -296,6 +299,35 @@ namespace montauk {
     }
     inline int diskinfo(Montauk::DiskInfo* buf, int port) {
         return (int)syscall2(Montauk::SYS_DISKINFO, (uint64_t)buf, (uint64_t)port);
+    }
+
+    // Partition table
+    inline int partlist(Montauk::PartInfo* buf, int max) {
+        return (int)syscall2(Montauk::SYS_PARTLIST, (uint64_t)buf, (uint64_t)max);
+    }
+
+    // Raw block device I/O (driver-agnostic)
+    inline int64_t disk_read(int blockDev, uint64_t lba, uint32_t sectorCount, void* buf) {
+        return syscall4(Montauk::SYS_DISKREAD, (uint64_t)blockDev, lba,
+                        (uint64_t)sectorCount, (uint64_t)buf);
+    }
+    inline int64_t disk_write(int blockDev, uint64_t lba, uint32_t sectorCount, const void* buf) {
+        return syscall4(Montauk::SYS_DISKWRITE, (uint64_t)blockDev, lba,
+                        (uint64_t)sectorCount, (uint64_t)buf);
+    }
+
+    // GPT management
+    inline int gpt_init(int blockDev) {
+        return (int)syscall1(Montauk::SYS_GPTINIT, (uint64_t)blockDev);
+    }
+    inline int gpt_add(const Montauk::GptAddParams* params) {
+        return (int)syscall1(Montauk::SYS_GPTADD, (uint64_t)params);
+    }
+    inline int fs_mount(int partIndex, int driveNum) {
+        return (int)syscall2(Montauk::SYS_FSMOUNT, (uint64_t)partIndex, (uint64_t)driveNum);
+    }
+    inline int fs_format(const Montauk::FsFormatParams* params) {
+        return (int)syscall1(Montauk::SYS_FSFORMAT, (uint64_t)params);
     }
 
     // Kernel introspection

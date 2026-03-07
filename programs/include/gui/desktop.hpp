@@ -76,6 +76,9 @@ struct DesktopState {
     SvgIcon icon_folder_lg;
     SvgIcon icon_file_lg;
     SvgIcon icon_exec_lg;
+    SvgIcon icon_drive;
+    SvgIcon icon_drive_lg;
+    SvgIcon icon_delete;
 
     SvgIcon icon_settings;
     SvgIcon icon_reboot;
@@ -88,6 +91,7 @@ struct DesktopState {
     SvgIcon icon_mandelbrot;
     SvgIcon icon_devexplorer;
     SvgIcon icon_spreadsheet;
+    SvgIcon icon_disks;
 
     bool ctx_menu_open;
     int ctx_menu_x, ctx_menu_y;

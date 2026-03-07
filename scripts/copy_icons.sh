@@ -85,6 +85,9 @@ ICONS=(
     "apps/symbolic/utilities-system-monitor-symbolic.svg" # system monitor
     "apps/scalable/utilities-system-monitor.svg" # system monitor
     "mimetypes/scalable/spreadsheet.svg"
+    "apps/scalable/drive-harddisk.svg"
+    "actions/16/trash-empty.svg"
+    "apps/scalable/gparted.svg"
 )
 
 copied=0

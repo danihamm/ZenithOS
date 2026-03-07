@@ -54,6 +54,7 @@ namespace Montauk {
     static constexpr uint64_t SYS_RECVFROM       = 40;
     static constexpr uint64_t SYS_FWRITE         = 41;
     static constexpr uint64_t SYS_FCREATE        = 42;
+    static constexpr uint64_t SYS_FDELETE        = 77;
     static constexpr uint64_t SYS_TERMSCALE     = 43;
     static constexpr uint64_t SYS_RESOLVE        = 44;
     static constexpr uint64_t SYS_GETRANDOM     = 45;
@@ -87,6 +88,15 @@ namespace Montauk {
 
     // Kernel introspection syscalls
     static constexpr uint64_t SYS_MEMSTATS    = 67;
+
+    // Storage / partition syscalls
+    static constexpr uint64_t SYS_PARTLIST    = 70;
+    static constexpr uint64_t SYS_DISKREAD    = 71;
+    static constexpr uint64_t SYS_DISKWRITE   = 72;
+    static constexpr uint64_t SYS_GPTINIT     = 73;
+    static constexpr uint64_t SYS_GPTADD      = 74;
+    static constexpr uint64_t SYS_FSMOUNT     = 75;
+    static constexpr uint64_t SYS_FSFORMAT    = 76;
 
     static constexpr int SOCK_TCP = 1;
     static constexpr int SOCK_UDP = 2;
@@ -196,6 +206,44 @@ namespace Montauk {
         char     serial[21];
         char     firmware[9];
         char     _pad2[1];
+    };
+
+    struct PartGuid {
+        uint32_t Data1;
+        uint16_t Data2;
+        uint16_t Data3;
+        uint8_t  Data4[8];
+    };
+
+    struct PartInfo {
+        int32_t  blockDev;        // block device index
+        uint32_t _pad0;
+        uint64_t startLba;
+        uint64_t endLba;
+        uint64_t sectorCount;
+        PartGuid typeGuid;
+        PartGuid uniqueGuid;
+        uint64_t attributes;
+        char     name[72];        // ASCII partition name
+        char     typeName[24];    // human-readable type name
+    };
+
+    struct GptAddParams {
+        int32_t  blockDev;
+        uint32_t _pad0;
+        uint64_t startLba;        // 0 = auto (fill largest free region)
+        uint64_t endLba;          // 0 = auto
+        PartGuid typeGuid;
+        char     name[72];
+    };
+
+    // Filesystem type IDs for SYS_FSFORMAT
+    static constexpr int FS_TYPE_FAT32 = 1;
+
+    struct FsFormatParams {
+        int32_t  partIndex;       // global partition index
+        int32_t  fsType;          // FS_TYPE_FAT32, etc.
+        char     label[32];       // volume label
     };
 
     struct ProcInfo {

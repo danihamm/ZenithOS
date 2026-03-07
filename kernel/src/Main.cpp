@@ -33,6 +33,8 @@
 #include <Hal/Cpu.hpp>
 #include <Fs/Ramdisk.hpp>
 #include <Fs/Vfs.hpp>
+#include <Fs/Fat32.hpp>
+#include <Fs/FsProbe.hpp>
 #include <Sched/Scheduler.hpp>
 #include <Api/Syscall.hpp>
 using namespace Kt;
@@ -191,9 +193,14 @@ extern "C" void kmain() {
         Fs::Ramdisk::Close,
         Fs::Ramdisk::ReadDir,
         Fs::Ramdisk::Write,
-        Fs::Ramdisk::Create
+        Fs::Ramdisk::Create,
+        nullptr
     };
     Fs::Vfs::RegisterDrive(0, &ramdiskDriver);
+
+    // Register filesystem probes and auto-mount partitions
+    Fs::Fat32::RegisterProbe();
+    Fs::FsProbe::MountPartitions();
 
     Hal::LoadTSS();
     Montauk::InitializeSyscalls();

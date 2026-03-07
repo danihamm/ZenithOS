@@ -28,19 +28,48 @@ static void scat(char* dst, const char* src, int maxLen) {
     dst[dLen + i] = '\0';
 }
 
-// Current working directory (relative to 0:/).
+// Current working directory (relative to N:/).
 // "" = root, "man" = 0:/man, "man/sub" = 0:/man/sub
 static char cwd[128] = "";
+static int current_drive = 0;
 
-// Build VFS directory path: "0:/" or "0:/<dir>"
-static void build_dir_path(const char* dir, char* out, int outMax) {
+// Build VFS path with explicit drive number
+static void build_drive_path(int drive, const char* dir, char* out, int outMax) {
     int i = 0;
-    out[i++] = '0'; out[i++] = ':'; out[i++] = '/';
+    if (drive >= 10) { out[i++] = '0' + drive / 10; }
+    out[i++] = '0' + drive % 10;
+    out[i++] = ':'; out[i++] = '/';
     if (dir && dir[0]) {
         int j = 0;
         while (dir[j] && i < outMax - 1) out[i++] = dir[j++];
     }
     out[i] = '\0';
+}
+
+// Build VFS directory path: "N:/" or "N:/<dir>" using current_drive
+static void build_dir_path(const char* dir, char* out, int outMax) {
+    build_drive_path(current_drive, dir, out, outMax);
+}
+
+// Parse drive number from a drive prefix like "0:" or "12:". Returns -1 if invalid.
+static int parse_drive_prefix(const char* s) {
+    if (s[0] < '0' || s[0] > '9') return -1;
+    int n = s[0] - '0';
+    if (s[1] >= '0' && s[1] <= '9') {
+        n = n * 10 + (s[1] - '0');
+        if (s[2] != ':') return -1;
+    } else if (s[1] == ':') {
+        // single digit drive
+    } else {
+        return -1;
+    }
+    return n;
+}
+
+// Length of drive prefix ("0:" = 2, "12:" = 3). Assumes valid prefix.
+static int drive_prefix_len(const char* s) {
+    if (s[1] >= '0' && s[1] <= '9') return 3; // e.g. "12:"
+    return 2; // e.g. "0:"
 }
 
 // ---- Command history ----
@@ -72,7 +101,17 @@ static const char* history_get(int idx) {
 // ---- Prompt ----
 
 static void prompt() {
-    montauk::print("0:/");
+    char drv[4];
+    if (current_drive >= 10) {
+        drv[0] = '0' + current_drive / 10;
+        drv[1] = '0' + current_drive % 10;
+        drv[2] = '\0';
+    } else {
+        drv[0] = '0' + current_drive;
+        drv[1] = '\0';
+    }
+    montauk::print(drv);
+    montauk::print(":/");
     if (cwd[0]) montauk::print(cwd);
     montauk::print("> ");
 }
@@ -108,6 +147,7 @@ static void cmd_help() {
     montauk::print("  help          Show this help message\n");
     montauk::print("  ls [dir]      List files in directory\n");
     montauk::print("  cd [dir]      Change working directory\n");
+    montauk::print("  N:            Switch to drive N (e.g. 1:)\n");
     montauk::print("  exit          Exit the shell\n");
     montauk::print("\n");
     montauk::print("System commands:\n");
@@ -138,9 +178,9 @@ static void cmd_help() {
     montauk::print("Any .elf on the ramdisk is executable.\n");
 }
 
-// Check if a string already has a VFS drive prefix (e.g. "0:/")
+// Check if a string already has a VFS drive prefix (e.g. "0:/" or "12:/")
 static bool has_drive_prefix(const char* s) {
-    return s[0] >= '0' && s[0] <= '9' && s[1] == ':';
+    return parse_drive_prefix(s) >= 0;
 }
 
 // ---- Builtin: ls ----
@@ -150,10 +190,13 @@ static void cmd_ls(const char* arg) {
 
     // Build the target directory (relative path from root)
     char dir[128];
+    int drive = current_drive;
     if (*arg) {
         if (has_drive_prefix(arg)) {
-            // Absolute VFS path: "0:/something"
-            scopy(dir, arg + 3, sizeof(dir));
+            // Absolute VFS path: "N:/something"
+            drive = parse_drive_prefix(arg);
+            int plen = drive_prefix_len(arg);
+            scopy(dir, arg + plen + 1, sizeof(dir)); // skip "N:/"
         } else if (arg[0] == '/') {
             // Absolute path from root: "/something"
             scopy(dir, arg + 1, sizeof(dir));
@@ -172,7 +215,7 @@ static void cmd_ls(const char* arg) {
     }
 
     char path[128];
-    build_dir_path(dir, path, sizeof(path));
+    build_drive_path(drive, dir, path, sizeof(path));
 
     const char* entries[64];
     int count = montauk::readdir(path, entries, 64);
@@ -197,6 +240,18 @@ static void cmd_ls(const char* arg) {
 }
 
 // ---- Builtin: cd ----
+
+// Switch to a drive. Returns true if valid.
+static bool switch_drive(int drive) {
+    // Validate drive exists by trying to readdir its root
+    char path[8];
+    build_drive_path(drive, "", path, sizeof(path));
+    const char* entries[1];
+    if (montauk::readdir(path, entries, 1) < 0) return false;
+    current_drive = drive;
+    cwd[0] = '\0';
+    return true;
+}
 
 static void cmd_cd(const char* arg) {
     arg = skip_spaces(arg);
@@ -247,20 +302,41 @@ static void cmd_cd(const char* arg) {
         return;
     }
 
-    // cd 0:/path -> absolute VFS path
+    // cd N:/ or cd N:/path -> switch drive and optionally cd into path
     if (has_drive_prefix(arg)) {
-        const char* rel = arg + 3;  // skip "0:/"
-        if (*rel == '\0') { cwd[0] = '\0'; return; }
-        char path[128];
-        build_dir_path(rel, path, sizeof(path));
-        const char* entries[1];
-        if (montauk::readdir(path, entries, 1) < 0) {
-            montauk::print("cd: no such directory: ");
+        int drive = parse_drive_prefix(arg);
+        int plen = drive_prefix_len(arg);
+        const char* rel = arg + plen; // points at ":/" or ":"
+        if (*rel == '/') rel++;       // skip the '/'
+
+        // Validate drive exists
+        char rootPath[8];
+        build_drive_path(drive, "", rootPath, sizeof(rootPath));
+        const char* rootEntries[1];
+        if (montauk::readdir(rootPath, rootEntries, 1) < 0) {
+            montauk::print("cd: no such drive: ");
             montauk::print(arg);
             montauk::putchar('\n');
             return;
         }
-        scopy(cwd, rel, sizeof(cwd));
+
+        // If there's a path after the drive, validate it
+        if (*rel != '\0') {
+            char path[128];
+            build_drive_path(drive, rel, path, sizeof(path));
+            const char* entries[1];
+            if (montauk::readdir(path, entries, 1) < 0) {
+                montauk::print("cd: no such directory: ");
+                montauk::print(arg);
+                montauk::putchar('\n');
+                return;
+            }
+            current_drive = drive;
+            scopy(cwd, rel, sizeof(cwd));
+        } else {
+            current_drive = drive;
+            cwd[0] = '\0';
+        }
         return;
     }
 
@@ -346,28 +422,39 @@ static void resolve_args(const char* args, char* out, int outMax) {
 
         // Decide whether to resolve this token as a path.
         // Don't resolve if it already has a drive prefix, or starts with '-'
-        bool resolve = cwd[0] && !has_drive_prefix(tokStart) && tokStart[0] != '-';
+        bool resolve = (cwd[0] || current_drive != 0) && !has_drive_prefix(tokStart) && tokStart[0] != '-';
 
         if (resolve) {
             // Build candidate resolved path and check if the file exists
             char candidate[256];
             int r = 0;
-            candidate[r++] = '0'; candidate[r++] = ':'; candidate[r++] = '/';
+            if (current_drive >= 10) candidate[r++] = '0' + current_drive / 10;
+            candidate[r++] = '0' + current_drive % 10;
+            candidate[r++] = ':'; candidate[r++] = '/';
             int j = 0;
             while (cwd[j] && r < 255) candidate[r++] = cwd[j++];
-            if (r < 255) candidate[r++] = '/';
+            if (cwd[0] && r < 255) candidate[r++] = '/';
             for (int k = 0; k < tokLen && r < 255; k++) candidate[r++] = tokStart[k];
             candidate[r] = '\0';
 
-            // Only use the resolved path if the file actually exists;
-            // otherwise pass the argument through unchanged (it may be
-            // a hostname, IP address, URL, or other non-path argument).
+            // Use the resolved path if the file exists. If it doesn't
+            // exist, still use the resolved path when the token looks
+            // like a filename (contains a dot) so that programs creating
+            // new files get the correct drive/directory prefix.
             int h = montauk::open(candidate);
             if (h >= 0) {
                 montauk::close(h);
                 for (int k = 0; k < r && o < outMax - 1; k++) out[o++] = candidate[k];
             } else {
-                for (int k = 0; k < tokLen && o < outMax - 1; k++) out[o++] = tokStart[k];
+                bool looksLikeFile = false;
+                for (int k = 0; k < tokLen; k++) {
+                    if (tokStart[k] == '.') { looksLikeFile = true; break; }
+                }
+                if (looksLikeFile) {
+                    for (int k = 0; k < r && o < outMax - 1; k++) out[o++] = candidate[k];
+                } else {
+                    for (int k = 0; k < tokLen && o < outMax - 1; k++) out[o++] = tokStart[k];
+                }
             }
         } else {
             for (int k = 0; k < tokLen && o < outMax - 1; k++) out[o++] = tokStart[k];
@@ -386,6 +473,7 @@ static void exec_external(const char* cmd, const char* args) {
     resolve_args(args, resolvedArgs, sizeof(resolvedArgs));
     const char* finalArgs = resolvedArgs[0] ? resolvedArgs : nullptr;
 
+    // Always search drive 0 for system commands (os/, games/)
     // 1. Try 0:/os/<cmd>.elf
     scopy(path, "0:/os/", sizeof(path));
     scat(path, cmd, sizeof(path));
@@ -398,9 +486,9 @@ static void exec_external(const char* cmd, const char* args) {
     scat(path, ".elf", sizeof(path));
     if (try_exec(path, finalArgs)) return;
 
-    // 3. Try 0:/<cwd>/<cmd>.elf (if cwd is set)
+    // 3. Try N:/<cwd>/<cmd>.elf on current drive (if cwd is set)
     if (cwd[0]) {
-        scopy(path, "0:/", sizeof(path));
+        build_drive_path(current_drive, "", path, sizeof(path));
         scat(path, cwd, sizeof(path));
         scat(path, "/", sizeof(path));
         scat(path, cmd, sizeof(path));
@@ -408,11 +496,19 @@ static void exec_external(const char* cmd, const char* args) {
         if (try_exec(path, finalArgs)) return;
     }
 
-    // 4. Try 0:/<cmd>.elf
-    scopy(path, "0:/", sizeof(path));
+    // 4. Try N:/<cmd>.elf on current drive
+    build_drive_path(current_drive, "", path, sizeof(path));
     scat(path, cmd, sizeof(path));
     scat(path, ".elf", sizeof(path));
     if (try_exec(path, finalArgs)) return;
+
+    // 5. If on a non-zero drive, also try 0:/<cmd>.elf
+    if (current_drive != 0) {
+        scopy(path, "0:/", sizeof(path));
+        scat(path, cmd, sizeof(path));
+        scat(path, ".elf", sizeof(path));
+        if (try_exec(path, finalArgs)) return;
+    }
 
     // Not found
     montauk::print(cmd);
@@ -438,6 +534,17 @@ static void process_command(const char* line) {
     if (line[i] == ' ') {
         args = skip_spaces(line + i);
         if (*args == '\0') args = nullptr;
+    }
+
+    // Bare drive switch: "1:", "2:", etc.
+    if (has_drive_prefix(cmd) && cmd[drive_prefix_len(cmd)] == '\0' && args == nullptr) {
+        int drive = parse_drive_prefix(cmd);
+        if (!switch_drive(drive)) {
+            montauk::print("No such drive: ");
+            montauk::print(cmd);
+            montauk::print("/\n");
+        }
+        return;
     }
 
     // Builtins

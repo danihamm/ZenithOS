@@ -59,7 +59,7 @@ BINDIR := bin
 PROGRAMS := $(notdir $(wildcard src/*))
 
 # Programs with custom Makefiles (built separately).
-CUSTOM_BUILDS := doom fetch wiki wikipedia weather imageviewer fontpreview spreadsheet pdfviewer desktop
+CUSTOM_BUILDS := doom fetch wiki wikipedia weather imageviewer fontpreview spreadsheet pdfviewer disks devexplorer desktop
 SYSTEM_PROGRAMS := $(filter-out $(CUSTOM_BUILDS),$(PROGRAMS))
 
 # Build targets: system programs go to bin/os/, games are handled separately.
@@ -84,9 +84,9 @@ CA_CERTS := $(BINDIR)/etc/ca-certificates.crt
 # Home directory placeholder.
 HOMEKEEP := $(BINDIR)/home/.keep
 
-.PHONY: all clean doom fetch wiki wikipedia weather imageviewer fontpreview spreadsheet pdfviewer desktop icons fonts bearssl libc tls libjpeg
+.PHONY: all clean doom fetch wiki wikipedia weather imageviewer fontpreview spreadsheet pdfviewer disks devexplorer desktop icons fonts bearssl libc tls libjpeg
 
-all: bearssl libc libjpeg tls $(TARGETS) fetch wiki wikipedia weather imageviewer fontpreview spreadsheet pdfviewer doom desktop icons fonts $(GAME_DATA) $(MANDST) $(WWWDST) $(CA_CERTS) $(HOMEKEEP)
+all: bearssl libc libjpeg tls $(TARGETS) fetch wiki wikipedia weather imageviewer fontpreview spreadsheet pdfviewer disks devexplorer doom desktop icons fonts $(GAME_DATA) $(MANDST) $(WWWDST) $(CA_CERTS) $(HOMEKEEP)
 
 # Build BearSSL static library (cross-compiled for freestanding x86_64).
 BEARSSL_INCLUDES := -isystem $(shell cd .. && pwd)/kernel/freestnd-c-hdrs/x86_64/include -isystem $(abspath include/libc)
@@ -142,6 +142,14 @@ spreadsheet: libc
 # Build PDF viewer standalone GUI client (depends on libc).
 pdfviewer: libc
 	$(MAKE) -C src/pdfviewer
+
+# Build disks standalone GUI tool (depends on libc).
+disks: libc
+	$(MAKE) -C src/disks
+
+# Build devexplorer standalone GUI tool (depends on libc).
+devexplorer: libc
+	$(MAKE) -C src/devexplorer
 
 # Build desktop via its own Makefile (depends on libc and libjpeg for wallpaper).
 desktop: libc libjpeg
@@ -205,3 +213,5 @@ clean:
 	$(MAKE) -C src/fontpreview clean
 	$(MAKE) -C src/spreadsheet clean
 	$(MAKE) -C src/pdfviewer clean
+	$(MAKE) -C src/disks clean
+	$(MAKE) -C src/devexplorer clean

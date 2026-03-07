@@ -11,6 +11,7 @@
 #include <Drivers/Net/E1000E.hpp>
 #include <Drivers/USB/Xhci.hpp>
 #include <Drivers/Storage/Ahci.hpp>
+#include <Drivers/Storage/Gpt.hpp>
 #include <Graphics/Cursor.hpp>
 #include <Net/Net.hpp>
 #include <Terminal/Terminal.hpp>
@@ -157,9 +158,9 @@ namespace Drivers {
     }
 
     void InitializeStorage() {
-        // AHCI driver registered SATA devices during ProbeNormal().
-        // Nothing else to do here for now — the VFS registration
-        // is handled in Main.cpp after this call.
+        // AHCI driver registered SATA devices as block devices during
+        // ProbeNormal(). Now probe all block devices for GPT partitions.
+        Storage::Gpt::ProbeAll();
     }
 
 }

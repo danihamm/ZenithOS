@@ -152,7 +152,7 @@ void desktop_draw_app_menu(DesktopState* ds) {
     draw_rect(fb, menu_x, menu_y, MENU_W, menu_h, colors::BORDER);
 
     // Icon lookup by app_id
-    SvgIcon* icons[17] = {
+    SvgIcon* icons[18] = {
         &ds->icon_terminal,     // 0
         &ds->icon_filemanager,  // 1
         &ds->icon_sysinfo,      // 2
@@ -170,6 +170,7 @@ void desktop_draw_app_menu(DesktopState* ds) {
         &ds->icon_shutdown,     // 14
         &ds->icon_texteditor,   // 15
         &ds->icon_spreadsheet,  // 16
+        &ds->icon_disks,        // 17 (Disks)
     };
 
     int mx = ds->mouse.x;
@@ -238,7 +239,7 @@ void desktop_draw_app_menu(DesktopState* ds) {
             // Icon
             int icon_x = item_rect.x + 8;
             int icon_y = item_rect.y + (row_h - 20) / 2;
-            if (row.app_id >= 0 && row.app_id < 17) {
+            if (row.app_id >= 0 && row.app_id < 18) {
                 SvgIcon* icon = icons[row.app_id];
                 if (icon && icon->pixels) {
                     fb.blit_alpha(icon_x, icon_y, icon->width, icon->height, icon->pixels);

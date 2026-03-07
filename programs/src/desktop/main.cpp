@@ -52,6 +52,7 @@ void gui::desktop_init(DesktopState* ds) {
     ds->icon_folder_lg = svg_load("0:/icons/folder.svg",                   48, 48, defColor);
     ds->icon_file_lg   = svg_load("0:/icons/text-x-generic.svg",           48, 48, defColor);
     ds->icon_exec_lg   = svg_load("0:/icons/utilities-terminal.svg",        48, 48, defColor);
+    // drive icons loaded lazily by file manager to reduce startup heap pressure
 
     ds->icon_settings = svg_load("0:/icons/help-about.svg",     20, 20, defColor);
     ds->icon_reboot   = svg_load("0:/icons/system-reboot.svg", 20, 20, defColor);
@@ -63,6 +64,7 @@ void gui::desktop_init(DesktopState* ds) {
     ds->icon_procmgr  = svg_load("0:/icons/system-monitor.svg", 20, 20, defColor);
     ds->icon_mandelbrot = svg_load("0:/icons/applications-science.svg", 20, 20, defColor);
     ds->icon_devexplorer = svg_load("0:/icons/hardware.svg", 20, 20, defColor);
+    ds->icon_disks      = svg_load("0:/icons/gparted.svg", 20, 20, defColor); // gparted icon, i.e. disk/partition management
     ds->icon_spreadsheet = svg_load("0:/icons/spreadsheet.svg", 20, 20, defColor);
 
     // Settings defaults
@@ -82,7 +84,7 @@ void gui::desktop_init(DesktopState* ds) {
     ds->settings.ui_scale = 1;
 
     // Try to load default wallpaper
-    wallpaper_load(&ds->settings, "0:/home/kristaps-ungurs-llezNN2OGEY-unsplash.jpg",
+    wallpaper_load(&ds->settings, "0:/home/lucas-alexander-2dJn8XoIKCg-unsplash.jpg",
                    ds->screen_w, ds->screen_h);
     montauk::win_setscale(1);
 

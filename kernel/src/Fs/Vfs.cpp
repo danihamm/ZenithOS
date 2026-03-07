@@ -163,6 +163,19 @@ namespace Fs::Vfs {
         return globalHandle;
     }
 
+    int VfsDelete(const char* path) {
+        int drive;
+        const char* localPath;
+
+        if (!ParsePath(path, drive, localPath)) return -1;
+
+        if (drive < 0 || drive >= MaxDrives || driveTable[drive] == nullptr) return -1;
+
+        if (driveTable[drive]->Delete == nullptr) return -1;
+
+        return driveTable[drive]->Delete(localPath);
+    }
+
     int VfsReadDir(const char* path, const char** outNames, int maxEntries) {
         int drive;
         const char* localPath;
