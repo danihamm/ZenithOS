@@ -172,4 +172,5 @@ void open_settings(DesktopState* ds);
 void open_reboot_dialog(DesktopState* ds);
 void open_wordprocessor(DesktopState* ds);
 void open_shutdown_dialog(DesktopState* ds);
+void open_sleep_dialog(DesktopState* ds);
 void desktop_poll_external_windows(DesktopState* ds);

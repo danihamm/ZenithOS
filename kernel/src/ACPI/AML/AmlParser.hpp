@@ -1,6 +1,6 @@
 /*
     * AmlParser.hpp
-    * Primitive AML bytecode parser for extracting ACPI sleep state values
+    * AML bytecode parser — S5 extraction and interpreter initialization
     * Copyright (c) 2026 Daniel Hammer
 */
 
@@ -10,26 +10,28 @@
 namespace Hal {
     namespace AML {
 
-        // AML opcodes used during \_S5_ parsing
-        static constexpr uint8_t NameOp      = 0x08;
-        static constexpr uint8_t PackageOp   = 0x12;
-        static constexpr uint8_t ZeroOp      = 0x00;
-        static constexpr uint8_t OneOp       = 0x01;
-        static constexpr uint8_t OnesOp      = 0xFF;
-        static constexpr uint8_t BytePrefix  = 0x0A;
-        static constexpr uint8_t WordPrefix  = 0x0B;
-        static constexpr uint8_t DWordPrefix = 0x0C;
-
-        struct S5Object {
+        struct SleepObject {
             uint16_t SLP_TYPa;
             uint16_t SLP_TYPb;
             bool     Valid;
         };
 
+        // Legacy compat alias
+        using S5Object = SleepObject;
+
         // Parse a DSDT (or SSDT) AML block to find the \_S5_ object.
-        // dsdtData points to the CommonSDTHeader of the DSDT (HHDM-mapped).
-        // Returns the parsed S5 values on success.
         S5Object FindS5(void* dsdtData);
+
+        // Parse a DSDT to find any \_Sx_ object (x = 0-5) via brute-force scan.
+        // Works on any DSDT regardless of complexity — does not require the
+        // interpreter or namespace.
+        SleepObject FindSleepState(void* dsdtData, int state);
+
+        // Initialize the AML interpreter with the DSDT.
+        // This loads the full table into the namespace and enables
+        // method evaluation, device enumeration, and field access.
+        // Should be called during boot after ACPI table discovery.
+        void InitializeInterpreter(void* dsdtData);
 
     };
 };

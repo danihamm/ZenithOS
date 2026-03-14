@@ -32,6 +32,12 @@ namespace Hal {
         constexpr uint32_t MSR_APIC_BASE = 0x1B;
 
         void Initialize(uint64_t apicBasePhys);
+
+        // Re-enable the Local APIC after S3 resume.
+        // The MMIO mapping and base address survive (they're in page tables / RAM).
+        // Only the SVR and TPR hardware registers need reprogramming.
+        void Reinitialize();
+
         void SendEOI();
         uint32_t GetId();
 

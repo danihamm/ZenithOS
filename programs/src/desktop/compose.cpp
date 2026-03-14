@@ -224,7 +224,7 @@ void gui::desktop_compose(DesktopState* ds) {
     if (ds->ctx_menu_open) {
         static constexpr int CTX_MENU_W = 180;
         static constexpr int CTX_ITEM_H = 36;
-        static constexpr int CTX_ITEM_COUNT = 5;
+        static constexpr int CTX_ITEM_COUNT = 6;
         int cmx = ds->ctx_menu_x;
         int cmy = ds->ctx_menu_y;
         int cmh = CTX_ITEM_H * CTX_ITEM_COUNT + 8;
@@ -242,6 +242,7 @@ void gui::desktop_compose(DesktopState* ds) {
             { "Terminal", &ds->icon_terminal },
             { "Files",    &ds->icon_filemanager },
             { "About",    &ds->icon_settings },
+            { "Sleep",    &ds->icon_sleep },
             { "Reboot",   &ds->icon_reboot },
             { "Shutdown", &ds->icon_shutdown },
         };

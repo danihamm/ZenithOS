@@ -21,6 +21,11 @@ namespace Hal {
         static MADT::InterruptSourceOverride g_overrides[MADT::ParsedMADT::MaxOverrides];
         static int g_overrideCount = 0;
 
+        // Shadow copy of redirection entries for S3 resume replay
+        static constexpr uint32_t MAX_REDIR_ENTRIES = 24;
+        static uint64_t g_savedRedirEntries[MAX_REDIR_ENTRIES];
+        static uint32_t g_savedEntryCount = 0;
+
         static uint32_t ReadRegister(uint32_t reg) {
             // Write the register index to IOREGSEL (offset 0x00)
             g_ioApicBase[0] = reg;
@@ -39,6 +44,13 @@ namespace Hal {
 
             WriteRegister(regHigh, (uint32_t)(entry >> 32));
             WriteRegister(regLow,  (uint32_t)(entry & 0xFFFFFFFF));
+
+            // Shadow the entry for S3 resume replay
+            if (index < MAX_REDIR_ENTRIES) {
+                g_savedRedirEntries[index] = entry;
+                if (index >= g_savedEntryCount)
+                    g_savedEntryCount = index + 1;
+            }
         }
 
         uint64_t GetRedirectionEntry(uint8_t index) {
@@ -104,6 +116,24 @@ namespace Hal {
                 << " -> GSI " << (uint64_t)gsi
                 << " -> vector " << (uint64_t)vector
                 << " -> APIC " << (uint64_t)destinationApicId;
+        }
+
+        void Reinitialize() {
+            if (!g_ioApicBase || g_savedEntryCount == 0) return;
+
+            // Replay all saved redirection entries into the I/O APIC hardware.
+            // The hardware registers are lost during S3 but our shadow copy in
+            // RAM survives.
+            for (uint32_t i = 0; i < g_savedEntryCount; i++) {
+                uint32_t regLow  = IOREDTBL_BASE + (i * 2);
+                uint32_t regHigh = IOREDTBL_BASE + (i * 2) + 1;
+
+                WriteRegister(regHigh, (uint32_t)(g_savedRedirEntries[i] >> 32));
+                WriteRegister(regLow,  (uint32_t)(g_savedRedirEntries[i] & 0xFFFFFFFF));
+            }
+
+            KernelLogStream(DEBUG, "IOAPIC") << "Restored " << base::dec
+                << (uint64_t)g_savedEntryCount << " redirection entries after S3 resume";
         }
 
         void Initialize(uint64_t ioApicBasePhys, uint32_t gsiBase,

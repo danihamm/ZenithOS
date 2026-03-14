@@ -5,8 +5,11 @@
 */
 
 #include "AcpiShutdown.hpp"
+#include "AcpiSleep.hpp"
 #include <ACPI/FADT.hpp>
 #include <ACPI/AML/AmlParser.hpp>
+#include <ACPI/AML/AmlInterpreter.hpp>
+#include <ACPI/AcpiDevices.hpp>
 #include <Io/IoPort.hpp>
 #include <Terminal/Terminal.hpp>
 #include <CppLib/Stream.hpp>
@@ -29,7 +32,7 @@ namespace Hal {
         void Initialize(ACPI::CommonSDTHeader* xsdt) {
             FADT::ParsedFADT fadt{};
             if (!FADT::Parse(xsdt, fadt) || !fadt.Valid) {
-                KernelLogStream(ERROR, "ACPI") << "Failed to parse FADT — ACPI shutdown unavailable";
+                KernelLogStream(ERROR, "ACPI") << "Failed to parse FADT - ACPI shutdown unavailable";
                 return;
             }
 
@@ -38,7 +41,7 @@ namespace Hal {
             AML::S5Object s5 = AML::FindS5(dsdt);
 
             if (!s5.Valid) {
-                KernelLogStream(ERROR, "ACPI") << "Could not find \\_S5_ in DSDT — ACPI shutdown unavailable";
+                KernelLogStream(ERROR, "ACPI") << "Could not find \\_S5_ in DSDT - ACPI shutdown unavailable";
                 return;
             }
 
@@ -50,6 +53,20 @@ namespace Hal {
 
             KernelLogStream(OK, "ACPI") << "ACPI shutdown initialized (PM1a=" << base::hex
                 << (uint64_t)g_pm1aControlBlock << " SLP_TYPa=" << (uint64_t)g_slpTypA << ")";
+
+            // Initialize the full AML interpreter with the DSDT.
+            // This loads the entire DSDT namespace, enabling device enumeration,
+            // method evaluation, and field I/O for the rest of the kernel.
+            AML::InitializeInterpreter(dsdt);
+
+            // Enumerate ACPI devices now that the namespace is loaded
+            if (AML::GetInterpreter().IsInitialized()) {
+                AcpiDevices::DeviceList devices{};
+                AcpiDevices::EnumerateAll(devices);
+            }
+
+            // Initialize S3 suspend support (reads FACS and \_S3_ from namespace)
+            AcpiSleep::Initialize(xsdt);
         }
 
         bool IsAvailable() {

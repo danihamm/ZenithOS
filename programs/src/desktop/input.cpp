@@ -153,7 +153,7 @@ void gui::desktop_handle_mouse(DesktopState* ds) {
         if (left_pressed) {
             static constexpr int CTX_MENU_W = 180;
             static constexpr int CTX_ITEM_H = 36;
-            static constexpr int CTX_ITEM_COUNT = 5;
+            static constexpr int CTX_ITEM_COUNT = 6;
             int cmx = ds->ctx_menu_x;
             int cmy = ds->ctx_menu_y;
             int cmh = CTX_ITEM_H * CTX_ITEM_COUNT + 8;
@@ -170,8 +170,9 @@ void gui::desktop_handle_mouse(DesktopState* ds) {
                     case 0: open_terminal(ds); break;
                     case 1: open_filemanager(ds); break;
                     case 2: open_settings(ds); break;
-                    case 3: open_reboot_dialog(ds); break;
-                    case 4: open_shutdown_dialog(ds); break;
+                    case 3: open_sleep_dialog(ds); break;
+                    case 4: open_reboot_dialog(ds); break;
+                    case 5: open_shutdown_dialog(ds); break;
                     }
                     return;
                 }
@@ -357,6 +358,7 @@ void gui::desktop_handle_mouse(DesktopState* ds) {
                             case 15: open_wordprocessor(ds); break;
                             case 16: montauk::exit(0); break;  // Log Out
                             case 17: lock_screen(ds); break;   // Lock Screen
+                            case 18: open_sleep_dialog(ds); break; // Sleep
                             }
                         }
                         ds->app_menu_open = false;

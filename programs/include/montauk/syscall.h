@@ -265,6 +265,10 @@ namespace montauk {
         __builtin_unreachable();
     }
 
+    inline int suspend() {
+        return (int)syscall0(Montauk::SYS_SUSPEND);
+    }
+
     // Mouse
     inline void mouse_state(Montauk::MouseState* out) { syscall1(Montauk::SYS_MOUSESTATE, (uint64_t)out); }
     inline void set_mouse_bounds(int32_t maxX, int32_t maxY) {

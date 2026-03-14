@@ -94,6 +94,7 @@ ICONS=(
     "status/symbolic/audio-volume-high-symbolic.svg"
     "apps/scalable/gnome-logout.svg"
     "apps/scalable/lock.svg"
+    "apps/scalable/sleep.svg"
 )
 
 copied=0

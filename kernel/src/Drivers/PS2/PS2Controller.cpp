@@ -63,6 +63,31 @@ namespace Drivers::PS2 {
         return g_DualChannel;
     }
 
+    void Reinitialize() {
+        // Flush any stale data from the output buffer
+        FlushOutputBuffer();
+
+        // Re-enable both ports
+        SendCommand(CmdEnablePort1);
+        if (g_DualChannel) {
+            SendCommand(CmdEnablePort2);
+        }
+
+        // Re-enable interrupts and translation in the config byte
+        SendCommand(CmdReadConfig);
+        uint8_t config = ReadData();
+
+        config |= ConfigPort1Interrupt | ConfigPort1Translation;
+        if (g_DualChannel) {
+            config |= ConfigPort2Interrupt;
+        }
+
+        SendCommand(CmdWriteConfig);
+        SendData(config);
+
+        Kt::KernelLogStream(Kt::OK, "PS2") << "Controller re-enabled after S3 resume";
+    }
+
     void Initialize() {
         Kt::KernelLogStream(Kt::INFO, "PS2") << "Initializing PS/2 controller";
 

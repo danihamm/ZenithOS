@@ -173,6 +173,7 @@ void desktop_build_menu(DesktopState* ds) {
     menu_add_embedded("Settings",    11, &ds->icon_settings);
     menu_add_embedded("Lock Screen", 17, &ds->icon_lock);
     menu_add_embedded("Log Out",     16, &ds->icon_logout);
+    menu_add_embedded("Sleep",       18, &ds->icon_sleep);
     menu_add_embedded("Reboot",      12, &ds->icon_reboot);
     menu_add_embedded("Shutdown",    14, &ds->icon_shutdown);
 }
@@ -228,6 +229,7 @@ void gui::desktop_init(DesktopState* ds) {
     ds->icon_settings = svg_load("0:/icons/help-about.svg",     20, 20, defColor);
     ds->icon_reboot   = svg_load("0:/icons/system-reboot.svg", 20, 20, defColor);
     ds->icon_shutdown = svg_load("0:/icons/system-shutdown.svg", 20, 20, defColor);
+    ds->icon_sleep    = svg_load("0:/icons/sleep.svg", 20, 20, defColor);
     ds->icon_logout   = svg_load("0:/icons/gnome-logout.svg",    20, 20, defColor);
 
     ds->icon_procmgr    = svg_load("0:/icons/system-monitor.svg",        20, 20, defColor);
@@ -508,8 +510,8 @@ void gui::desktop_run(DesktopState* ds) {
         desktop_compose(ds);
         ds->fb.flip();
 
-        // Target ~60fps
-        montauk::sleep_ms(16);
+        // Yield to scheduler without artificial frame cap
+        montauk::sleep_ms(1);
     }
 }
 

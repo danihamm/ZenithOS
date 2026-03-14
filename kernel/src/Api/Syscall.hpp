@@ -171,6 +171,9 @@ namespace Montauk {
     static constexpr uint64_t SYS_BTLIST       = 87;
     static constexpr uint64_t SYS_BTINFO       = 88;
 
+    /* Power.hpp */
+    static constexpr uint64_t SYS_SUSPEND      = 89;
+
     static constexpr int SOCK_TCP = 1;
     static constexpr int SOCK_UDP = 2;
 

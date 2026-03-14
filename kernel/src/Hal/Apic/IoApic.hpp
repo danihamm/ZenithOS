@@ -29,6 +29,11 @@ namespace Hal {
         void Initialize(uint64_t ioApicBasePhys, uint32_t gsiBase,
                          MADT::InterruptSourceOverride* overrides, int overrideCount);
 
+        // Re-apply all I/O APIC redirection entries after S3 resume.
+        // The I/O APIC hardware state is lost during S3; the saved routing
+        // table (in RAM) is replayed into the redirection registers.
+        void Reinitialize();
+
         void SetRedirectionEntry(uint8_t irq, uint64_t entry);
         uint64_t GetRedirectionEntry(uint8_t irq);
 

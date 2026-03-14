@@ -113,6 +113,9 @@ namespace Montauk {
     static constexpr uint64_t SYS_BTLIST       = 87;
     static constexpr uint64_t SYS_BTINFO       = 88;
 
+    // Power management
+    static constexpr uint64_t SYS_SUSPEND      = 89;
+
     // Audio control commands (for SYS_AUDIOCTL)
     static constexpr int AUDIO_CTL_SET_VOLUME = 0;
     static constexpr int AUDIO_CTL_GET_VOLUME = 1;

@@ -64,6 +64,30 @@ namespace Hal {
                 << " max LVT=" << base::dec << (uint64_t)((version >> 16) & 0xFF);
         }
 
+        void Reinitialize() {
+            if (!g_apicBase) return;
+
+            // Re-assert the APIC Global Enable in the IA32_APIC_BASE MSR.
+            // Some firmware clears bit 11 during S3 resume. If the global
+            // enable is off, all subsequent MMIO register writes (SVR, TPR,
+            // timer LVT, etc.) are silently ignored - meaning no interrupts
+            // are delivered, no timer fires, and the system appears frozen.
+            uint64_t msrValue = ReadMSR(MSR_APIC_BASE);
+            if (!(msrValue & (1ULL << 11))) {
+                msrValue |= (1ULL << 11);
+                WriteMSR(MSR_APIC_BASE, msrValue);
+            }
+
+            // Re-enable APIC software enable bit in SVR + set spurious vector
+            uint32_t svr = ReadRegister(REG_SPURIOUS);
+            svr |= (1 << 8);
+            svr = (svr & 0xFFFFFF00) | SPURIOUS_VECTOR;
+            WriteRegister(REG_SPURIOUS, svr);
+
+            // Accept all interrupts
+            WriteRegister(REG_TPR, 0);
+        }
+
         void SendEOI() {
             WriteRegister(REG_EOI, 0);
         }

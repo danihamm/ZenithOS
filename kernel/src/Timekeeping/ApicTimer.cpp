@@ -136,6 +136,23 @@ namespace Timekeeping {
             << " Hz periodic, initial count=" << (uint64_t)initialCount;
     }
 
+    void ApicTimerReinitialize() {
+        if (g_ticksPerMs == 0) {
+            KernelLogStream(ERROR, "Timer") << "Cannot reinit APIC timer - not calibrated";
+            return;
+        }
+
+        // Reprogram the APIC timer registers (they were lost during S3).
+        // The calibrated g_ticksPerMs value is still valid (it's in RAM).
+        // The IRQ handler registration also survives (it's a function pointer array in RAM).
+        uint32_t lvt = (Hal::IRQ_VECTOR_BASE + Hal::IRQ_TIMER) | LVT_PERIODIC;
+        Hal::LocalApic::WriteRegister(Hal::LocalApic::REG_TIMER_DIVIDE, DIVIDE_BY_16);
+        Hal::LocalApic::WriteRegister(Hal::LocalApic::REG_TIMER_LVT, lvt);
+        Hal::LocalApic::WriteRegister(Hal::LocalApic::REG_TIMER_INITIAL, g_ticksPerMs);
+
+        KernelLogStream(OK, "Timer") << "APIC timer restarted after S3 resume";
+    }
+
     uint64_t GetTicks() {
         return g_tickCount;
     }

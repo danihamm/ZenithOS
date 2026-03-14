@@ -1,6 +1,6 @@
 /*
     * dialogs.cpp
-    * Reboot and shutdown confirmation dialogs
+    * Reboot, shutdown, and sleep confirmation dialogs
     * Copyright (c) 2026 Daniel Hammer
 */
 
@@ -233,4 +233,132 @@ void open_shutdown_dialog(DesktopState* ds) {
     win->on_mouse = shutdown_dialog_on_mouse;
     win->on_key = shutdown_dialog_on_key;
     win->on_close = shutdown_dialog_on_close;
+}
+
+// ============================================================================
+// Sleep (S3 Suspend) Dialog
+// ============================================================================
+
+struct SleepDialogState {
+    DesktopState* ds;
+    int btn_w, btn_h, btn_y, sleep_x, cancel_x;
+    bool hover_sleep, hover_cancel;
+};
+
+static void sleep_dialog_on_draw(Window* win, Framebuffer& fb) {
+    SleepDialogState* ss = (SleepDialogState*)win->app_data;
+    if (!ss) return;
+
+    Canvas c(win);
+    c.fill(colors::WINDOW_BG);
+
+    const char* msg = "Suspend the system?";
+    int tw = text_width(msg);
+    c.text((c.w - tw) / 2, 30, msg, colors::TEXT_COLOR);
+
+    int btn_w = 100;
+    int btn_h = 32;
+    int btn_y = c.h - btn_h - 20;
+    int gap = 20;
+    int total_w = btn_w * 2 + gap;
+    int bx = (c.w - total_w) / 2;
+    ss->btn_w = btn_w;
+    ss->btn_h = btn_h;
+    ss->btn_y = btn_y;
+    ss->sleep_x = bx;
+    ss->cancel_x = bx + btn_w + gap;
+
+    Color sleep_bg = ss->hover_sleep
+        ? Color::from_rgb(0x44, 0x77, 0xDD)
+        : Color::from_rgb(0x33, 0x66, 0xCC);
+    c.button(ss->sleep_x, btn_y, btn_w, btn_h, "Sleep", sleep_bg, colors::WHITE, 4);
+
+    Color cancel_bg = ss->hover_cancel
+        ? Color::from_rgb(0x99, 0x99, 0x99)
+        : Color::from_rgb(0x88, 0x88, 0x88);
+    c.button(ss->cancel_x, btn_y, btn_w, btn_h, "Cancel", cancel_bg, colors::WHITE, 4);
+}
+
+static void sleep_dialog_on_mouse(Window* win, MouseEvent& ev) {
+    SleepDialogState* ss = (SleepDialogState*)win->app_data;
+    if (!ss) return;
+
+    Rect cr = win->content_rect();
+    int lx = ev.x - cr.x;
+    int ly = ev.y - cr.y;
+
+    Rect sb = {ss->sleep_x, ss->btn_y, ss->btn_w, ss->btn_h};
+    Rect cb = {ss->cancel_x, ss->btn_y, ss->btn_w, ss->btn_h};
+    ss->hover_sleep = sb.contains(lx, ly);
+    ss->hover_cancel = cb.contains(lx, ly);
+
+    if (ev.left_pressed()) {
+        if (ss->hover_sleep) {
+            montauk::suspend();
+            // If suspend returns (resume from S3), close the dialog
+            for (int i = 0; i < ss->ds->window_count; i++) {
+                if (ss->ds->windows[i].app_data == ss) {
+                    desktop_close_window(ss->ds, i);
+                    return;
+                }
+            }
+        }
+        if (ss->hover_cancel) {
+            for (int i = 0; i < ss->ds->window_count; i++) {
+                if (ss->ds->windows[i].app_data == ss) {
+                    desktop_close_window(ss->ds, i);
+                    return;
+                }
+            }
+        }
+    }
+}
+
+static void sleep_dialog_on_key(Window* win, const Montauk::KeyEvent& key) {
+    SleepDialogState* ss = (SleepDialogState*)win->app_data;
+    if (!ss || !key.pressed) return;
+
+    if (key.ascii == '\n' || key.ascii == '\r') {
+        montauk::suspend();
+        // If suspend returns, close the dialog
+        for (int i = 0; i < ss->ds->window_count; i++) {
+            if (ss->ds->windows[i].app_data == ss) {
+                desktop_close_window(ss->ds, i);
+                return;
+            }
+        }
+    }
+    if (key.scancode == 0x01) { // Escape
+        for (int i = 0; i < ss->ds->window_count; i++) {
+            if (ss->ds->windows[i].app_data == ss) {
+                desktop_close_window(ss->ds, i);
+                return;
+            }
+        }
+    }
+}
+
+static void sleep_dialog_on_close(Window* win) {
+    if (win->app_data) {
+        montauk::mfree(win->app_data);
+        win->app_data = nullptr;
+    }
+}
+
+void open_sleep_dialog(DesktopState* ds) {
+    int wx = (ds->screen_w - 300) / 2;
+    int wy = (ds->screen_h - 150) / 2;
+    int idx = desktop_create_window(ds, "Sleep", wx, wy, 300, 150);
+    if (idx < 0) return;
+
+    Window* win = &ds->windows[idx];
+    SleepDialogState* ss = (SleepDialogState*)montauk::malloc(sizeof(SleepDialogState));
+    montauk::memset(ss, 0, sizeof(SleepDialogState));
+    ss->ds = ds;
+
+    win->app_data = ss;
+    win->on_draw = sleep_dialog_on_draw;
+    win->on_mouse = sleep_dialog_on_mouse;
+    win->on_key = sleep_dialog_on_key;
+    win->on_close = sleep_dialog_on_close;
 }

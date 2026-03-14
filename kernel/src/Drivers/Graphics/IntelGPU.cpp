@@ -640,4 +640,58 @@ namespace Drivers::Graphics::IntelGPU {
         return g_fbPitch;
     }
 
+    void Reinitialize() {
+        if (!g_initialized || !g_mmioBase) return;
+
+        KernelLogStream(INFO, "IntelGPU") << "Reinitializing display after S3 resume";
+
+        // 1. Re-enable PCI memory space and bus mastering. S3 resets the PCI
+        //    command register, so MMIO writes to the GPU are silently dropped
+        //    until we re-enable these bits.
+        Pci::EnableBusMaster(g_gpuInfo.pciBus, g_gpuInfo.pciDevice, g_gpuInfo.pciFunction);
+
+        KernelLogStream(DEBUG, "IntelGPU") << "PCI memory space and bus mastering re-enabled";
+
+        // 2. Disable VGA plane (firmware may have re-enabled it during POST)
+        DisableVga();
+
+        // 3. Reprogram GTT entries (hardware lost all GTT state during S3)
+        uint64_t pageCount = (g_fbSize + 0xFFF) / 0x1000;
+        if (g_gpuGen >= 8) {
+            volatile uint64_t* gtt64 = (volatile uint64_t*)g_gttBase;
+            for (uint64_t i = 0; i < pageCount; i++) {
+                gtt64[i] = MakeGttPte64(g_fbPhysBase + i * 0x1000);
+            }
+            // Flush GTT writes by reading back the last entry
+            (void)gtt64[pageCount - 1];
+        } else {
+            volatile uint32_t* gtt32 = (volatile uint32_t*)g_gttBase;
+            for (uint64_t i = 0; i < pageCount; i++) {
+                gtt32[i] = MakeGttPte32(g_fbPhysBase + i * 0x1000);
+            }
+            // Flush GTT writes by reading back the last entry
+            (void)gtt32[pageCount - 1];
+        }
+
+        // 4. Re-enable the display pipe. After S3, the pipe may be off even
+        //    though the firmware lit the backlight. Wait for it to become
+        //    active before programming the display plane.
+        uint32_t pipeConf = ReadReg(PIPEACONF);
+        if (!(pipeConf & PIPECONF_ENABLE)) {
+            WriteReg(PIPEACONF, pipeConf | PIPECONF_ENABLE);
+
+            // Wait for pipe to become active (PIPECONF_STATE bit 30)
+            for (int i = 0; i < 100000; i++) {
+                if (ReadReg(PIPEACONF) & PIPECONF_STATE)
+                    break;
+                asm volatile("pause");
+            }
+        }
+
+        // 5. Reprogram display plane to point at our GTT-mapped framebuffer
+        ProgramDisplayPlane();
+
+        KernelLogStream(OK, "IntelGPU") << "Display restored after S3 resume";
+    }
+
 };

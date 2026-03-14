@@ -22,7 +22,7 @@
 #include "Info.hpp"       // SYS_GETINFO
 #include "Graphics.hpp"   // SYS_FBINFO, SYS_FBMAP, SYS_TERMSIZE, SYS_TERMSCALE
 #include "Net.hpp"        // SYS_PING, SYS_SOCKET, SYS_CONNECT, SYS_BIND, SYS_LISTEN, SYS_ACCEPT, SYS_SEND, SYS_RECV, SYS_CLOSESOCK, SYS_SENDTO, SYS_RECVFROM, SYS_GETNETCFG, SYS_SETNETCFG, SYS_RESOLVE
-#include "Power.hpp"      // SYS_RESET, SYS_SHUTDOWN
+#include "Power.hpp"      // SYS_RESET, SYS_SHUTDOWN, SYS_SUSPEND
 #include "Mouse.hpp"      // SYS_MOUSESTATE, SYS_SETMOUSEBOUNDS
 #include "IoRedir.hpp"    // SYS_SPAWN_REDIR, SYS_CHILDIO_READ, SYS_CHILDIO_WRITE, SYS_CHILDIO_WRITEKEY, SYS_CHILDIO_SETTERMSZ
 #include "Random.hpp"     // SYS_GETRANDOM
@@ -331,6 +331,8 @@ namespace Montauk {
             case SYS_BTINFO:
                 if (!ValidUserPtr(frame->arg1)) return -1;
                 return Sys_BtInfo((BtAdapterInfo*)frame->arg1);
+            case SYS_SUSPEND:
+                return Sys_Suspend();
             default:
                 return -1;
         }

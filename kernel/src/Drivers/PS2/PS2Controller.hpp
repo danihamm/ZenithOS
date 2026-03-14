@@ -43,6 +43,11 @@ namespace Drivers::PS2 {
 
     void Initialize();
 
+    // Lightweight re-enable after S3 resume. Skips the full self-test
+    // and port-test sequence (which can reset attached devices); just
+    // re-enables ports and interrupts so keyboard/mouse work again.
+    void Reinitialize();
+
     void SendCommand(uint8_t command);
     void SendData(uint8_t data);
     uint8_t ReadData();

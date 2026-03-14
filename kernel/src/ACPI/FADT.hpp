@@ -71,11 +71,23 @@ namespace Hal {
 
         struct ParsedFADT {
             uint64_t DsdtAddress;
+            uint64_t FacsAddress;
+            uint32_t PM1aEventBlock;
+            uint32_t PM1bEventBlock;
             uint32_t PM1aControlBlock;
             uint32_t PM1bControlBlock;
+            uint32_t PM2ControlBlock;
+            uint32_t PMTimerBlock;
+            uint32_t GPE0Block;
+            uint32_t GPE1Block;
             uint32_t SMI_CommandPort;
+            uint16_t SCI_Interrupt;
+            uint8_t  PM1EventLength;
+            uint8_t  GPE0Length;
+            uint8_t  GPE1Length;
             uint8_t  AcpiEnable;
             uint8_t  AcpiDisable;
+            uint32_t Flags;
             bool     Valid;
         };
 

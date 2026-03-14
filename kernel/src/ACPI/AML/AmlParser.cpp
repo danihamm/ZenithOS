@@ -1,10 +1,11 @@
 /*
     * AmlParser.cpp
-    * Primitive AML bytecode parser for extracting ACPI sleep state values
+    * AML bytecode parser — S5 extraction (brute-force) and interpreter init
     * Copyright (c) 2026 Daniel Hammer
 */
 
 #include "AmlParser.hpp"
+#include "AmlInterpreter.hpp"
 #include <ACPI/ACPI.hpp>
 #include <Terminal/Terminal.hpp>
 #include <CppLib/Stream.hpp>
@@ -14,19 +15,28 @@ using namespace Kt;
 namespace Hal {
     namespace AML {
 
-        // Decode a PkgLength field and return its value.
-        // Advances *pos past the PkgLength bytes.
+        // ── Legacy S5 extraction (brute-force scan) ─────────────────────
+        // Kept for fast S5 extraction during early boot before the full
+        // interpreter is loaded.
+
+        static constexpr uint8_t NameOp_     = 0x08;
+        static constexpr uint8_t PackageOp_  = 0x12;
+        static constexpr uint8_t ZeroOp_     = 0x00;
+        static constexpr uint8_t OneOp_      = 0x01;
+        static constexpr uint8_t OnesOp_     = 0xFF;
+        static constexpr uint8_t BytePrefix_ = 0x0A;
+        static constexpr uint8_t WordPrefix_ = 0x0B;
+        static constexpr uint8_t DWordPrefix_= 0x0C;
+
         static uint32_t DecodePkgLength(const uint8_t* aml, uint32_t* pos) {
             uint8_t lead = aml[*pos];
             uint32_t byteCount = (lead >> 6) & 0x03;
 
             if (byteCount == 0) {
-                // Single byte encoding: bits 0-5 are the length
                 (*pos)++;
                 return lead & 0x3F;
             }
 
-            // Multi-byte: lead bits 0-3 are low nibble, followed by byteCount bytes
             uint32_t length = lead & 0x0F;
             (*pos)++;
 
@@ -38,35 +48,32 @@ namespace Hal {
             return length;
         }
 
-        // Decode an AML integer at position *pos.
-        // Handles ZeroOp, OneOp, OnesOp, BytePrefix, WordPrefix, DWordPrefix.
-        // Returns the decoded value and advances *pos.
-        static uint32_t DecodeInteger(const uint8_t* aml, uint32_t* pos) {
+        static uint32_t DecodeIntegerLegacy(const uint8_t* aml, uint32_t* pos) {
             uint8_t op = aml[*pos];
 
             switch (op) {
-                case ZeroOp:
+                case ZeroOp_:
                     (*pos)++;
                     return 0;
-                case OneOp:
+                case OneOp_:
                     (*pos)++;
                     return 1;
-                case OnesOp:
+                case OnesOp_:
                     (*pos)++;
                     return 0xFFFFFFFF;
-                case BytePrefix: {
+                case BytePrefix_: {
                     (*pos)++;
                     uint8_t val = aml[*pos];
                     (*pos)++;
                     return val;
                 }
-                case WordPrefix: {
+                case WordPrefix_: {
                     (*pos)++;
                     uint16_t val = aml[*pos] | ((uint16_t)aml[*pos + 1] << 8);
                     *pos += 2;
                     return val;
                 }
-                case DWordPrefix: {
+                case DWordPrefix_: {
                     (*pos)++;
                     uint32_t val = aml[*pos]
                                  | ((uint32_t)aml[*pos + 1] << 8)
@@ -76,7 +83,6 @@ namespace Hal {
                     return val;
                 }
                 default:
-                    // Unknown encoding — treat as zero and skip
                     (*pos)++;
                     return 0;
             }
@@ -93,23 +99,17 @@ namespace Hal {
                 return result;
             }
 
-            // The AML bytecode starts right after the CommonSDTHeader
             const uint8_t* aml = (const uint8_t*)dsdtData;
             uint32_t amlLength = header->Length;
             uint32_t dataStart = sizeof(ACPI::CommonSDTHeader);
 
-            // Scan for the \_S5_ name in the AML stream.
-            // We look for the 4-byte sequence '_S5_' preceded by a NameOp (0x08)
-            // or preceded by a scope path like '\' (0x5C).
             for (uint32_t i = dataStart; i + 4 < amlLength; i++) {
                 if (aml[i] == '_' && aml[i+1] == 'S' && aml[i+2] == '5' && aml[i+3] == '_') {
-                    // Verify a valid AML context: either NameOp before it,
-                    // or '\' + NameOp pattern, or just the name in a scope
                     bool validContext = false;
 
-                    if (i >= 1 && aml[i-1] == NameOp) {
+                    if (i >= 1 && aml[i-1] == NameOp_) {
                         validContext = true;
-                    } else if (i >= 2 && aml[i-2] == NameOp && aml[i-1] == '\\') {
+                    } else if (i >= 2 && aml[i-2] == NameOp_ && aml[i-1] == '\\') {
                         validContext = true;
                     }
 
@@ -118,21 +118,16 @@ namespace Hal {
 
                     KernelLogStream(OK, "AML") << "Found \\_S5_ object at offset " << base::hex << (uint64_t)i;
 
-                    // Move past the name
                     uint32_t pos = i + 4;
 
-                    // Expect PackageOp
-                    if (pos >= amlLength || aml[pos] != PackageOp) {
+                    if (pos >= amlLength || aml[pos] != PackageOp_) {
                         KernelLogStream(ERROR, "AML") << "Expected PackageOp after \\_S5_, got " << base::hex << (uint64_t)aml[pos];
                         continue;
                     }
                     pos++;
 
-                    // Decode package length (we don't actually need the value,
-                    // but must advance past it)
                     DecodePkgLength(aml, &pos);
 
-                    // Number of elements in the package
                     if (pos >= amlLength) continue;
                     uint8_t numElements = aml[pos];
                     pos++;
@@ -142,12 +137,10 @@ namespace Hal {
                         continue;
                     }
 
-                    // First element: SLP_TYPa
-                    result.SLP_TYPa = (uint16_t)DecodeInteger(aml, &pos);
+                    result.SLP_TYPa = (uint16_t)DecodeIntegerLegacy(aml, &pos);
 
-                    // Second element: SLP_TYPb (if present)
                     if (numElements >= 2 && pos < amlLength) {
-                        result.SLP_TYPb = (uint16_t)DecodeInteger(aml, &pos);
+                        result.SLP_TYPb = (uint16_t)DecodeIntegerLegacy(aml, &pos);
                     } else {
                         result.SLP_TYPb = 0;
                     }
@@ -163,6 +156,82 @@ namespace Hal {
 
             KernelLogStream(ERROR, "AML") << "\\_S5_ object not found in DSDT";
             return result;
+        }
+
+        // ── Generalized brute-force sleep state scanner ──────────────────
+        SleepObject FindSleepState(void* dsdtData, int state) {
+            SleepObject result{};
+            result.Valid = false;
+
+            if (state < 0 || state > 5) return result;
+
+            auto* header = (ACPI::CommonSDTHeader*)dsdtData;
+
+            if (!ACPI::TestChecksum(header)) {
+                KernelLogStream(ERROR, "AML") << "DSDT checksum failed";
+                return result;
+            }
+
+            // Build the 4-char name we're looking for: _S0_ through _S5_
+            char target[4] = { '_', 'S', (char)('0' + state), '_' };
+
+            const uint8_t* aml = (const uint8_t*)dsdtData;
+            uint32_t amlLength = header->Length;
+            uint32_t dataStart = sizeof(ACPI::CommonSDTHeader);
+
+            for (uint32_t i = dataStart; i + 4 < amlLength; i++) {
+                if (aml[i] == target[0] && aml[i+1] == target[1] &&
+                    aml[i+2] == target[2] && aml[i+3] == target[3]) {
+
+                    bool validContext = false;
+                    if (i >= 1 && aml[i-1] == NameOp_)
+                        validContext = true;
+                    else if (i >= 2 && aml[i-2] == NameOp_ && aml[i-1] == '\\')
+                        validContext = true;
+
+                    if (!validContext) continue;
+
+                    uint32_t pos = i + 4;
+
+                    if (pos >= amlLength || aml[pos] != PackageOp_) continue;
+                    pos++;
+
+                    DecodePkgLength(aml, &pos);
+
+                    if (pos >= amlLength) continue;
+                    uint8_t numElements = aml[pos];
+                    pos++;
+
+                    if (numElements < 1) continue;
+
+                    result.SLP_TYPa = (uint16_t)DecodeIntegerLegacy(aml, &pos);
+
+                    if (numElements >= 2 && pos < amlLength)
+                        result.SLP_TYPb = (uint16_t)DecodeIntegerLegacy(aml, &pos);
+                    else
+                        result.SLP_TYPb = 0;
+
+                    result.Valid = true;
+
+                    KernelLogStream(OK, "AML") << "\\_S" << base::dec << (uint64_t)state
+                        << "_ found: SLP_TYPa=" << base::hex << (uint64_t)result.SLP_TYPa
+                        << " SLP_TYPb=" << base::hex << (uint64_t)result.SLP_TYPb;
+
+                    return result;
+                }
+            }
+
+            KernelLogStream(INFO, "AML") << "\\_S" << base::dec << (uint64_t)state
+                << "_ not found in DSDT";
+            return result;
+        }
+
+        // ── Full interpreter initialization ─────────────────────────────
+        void InitializeInterpreter(void* dsdtData) {
+            auto& interp = GetInterpreter();
+            if (!interp.LoadTable(dsdtData)) {
+                KernelLogStream(ERROR, "AML") << "Failed to load DSDT into AML interpreter";
+            }
         }
 
     };

@@ -401,6 +401,9 @@ namespace Drivers::Graphics::IntelGPU {
     // Check if an Intel GPU was found and initialized
     bool IsInitialized();
 
+    // Restore display state after S3 resume (GTT entries, pipe, display plane)
+    void Reinitialize();
+
     // Get detected GPU information
     const GpuInfo* GetGpuInfo();
 

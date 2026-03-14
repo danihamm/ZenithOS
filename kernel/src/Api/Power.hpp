@@ -1,6 +1,6 @@
 /*
     * Power.hpp
-    * SYS_RESET, SYS_SHUTDOWN syscalls
+    * SYS_RESET, SYS_SHUTDOWN, SYS_SUSPEND syscalls
     * Copyright (c) 2026 Daniel Hammer
 */
 
@@ -9,6 +9,7 @@
 #include <Efi/UEFI.hpp>
 #include <Memory/Paging.hpp>
 #include <ACPI/AcpiShutdown.hpp>
+#include <ACPI/AcpiSleep.hpp>
 
 namespace Montauk {
 
@@ -40,5 +41,12 @@ namespace Montauk {
         /* Last resort: halt the CPU */
         asm volatile("cli; hlt");
         __builtin_unreachable();
+    }
+
+    static int64_t Sys_Suspend() {
+        if (!Hal::AcpiSleep::IsS3Available()) {
+            return -1; // S3 not supported
+        }
+        return (int64_t)Hal::AcpiSleep::Suspend();
     }
 };

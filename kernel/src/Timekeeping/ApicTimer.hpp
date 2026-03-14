@@ -11,6 +11,11 @@ namespace Timekeeping {
     // Initialize the APIC timer: calibrate against PIT, start periodic interrupts
     void ApicTimerInitialize();
 
+    // Reinitialize the APIC timer after S3 resume using the previously
+    // calibrated tick rate. Skips PIT calibration and IRQ registration
+    // (both survive in RAM). Only reprograms the timer hardware registers.
+    void ApicTimerReinitialize();
+
     // Get the monotonic tick count (increments on each timer interrupt)
     uint64_t GetTicks();
 
