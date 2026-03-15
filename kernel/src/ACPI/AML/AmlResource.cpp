@@ -9,14 +9,22 @@
 namespace Hal {
     namespace AML {
 
-        // ── Small Resource Tags (bits 6:3 of the tag byte) ──────────────
+        // ============================================================================
+
+        // Small Resource Tags (bits 6:3 of the tag byte)
+
+        // ============================================================================
         static constexpr uint8_t SmallIrqTag       = 0x04; // IRQ descriptor
         static constexpr uint8_t SmallDmaTag       = 0x05; // DMA descriptor
         static constexpr uint8_t SmallIoPortTag    = 0x08; // I/O port descriptor
         static constexpr uint8_t SmallFixedIoTag   = 0x09; // Fixed I/O port descriptor
         static constexpr uint8_t SmallEndTag       = 0x0F; // End tag
 
-        // ── Large Resource Tags (byte following the large tag prefix) ───
+        // ============================================================================
+
+        // Large Resource Tags (byte following the large tag prefix)
+
+        // ============================================================================
         static constexpr uint8_t LargeMemory24Tag  = 0x01;
         static constexpr uint8_t LargeVendorTag    = 0x04;
         static constexpr uint8_t LargeMemory32Tag  = 0x05;
@@ -63,7 +71,9 @@ namespace Hal {
                     break;
 
                 if (tag & 0x80) {
-                    // ── Large resource descriptor ───────────────────────
+                    // ============================================================================
+                    // Large resource descriptor
+                    // ============================================================================
                     uint8_t largeType = tag & 0x7F;
                     if (pos + 3 > length) break;
                     uint16_t resLen = Read16(&data[pos + 1]);
@@ -154,7 +164,9 @@ namespace Hal {
 
                     pos = dataEnd;
                 } else {
-                    // ── Small resource descriptor ───────────────────────
+                    // ============================================================================
+                    // Small resource descriptor
+                    // ============================================================================
                     uint8_t smallType = (tag >> 3) & 0x0F;
                     uint8_t resLen = tag & 0x07;
                     uint32_t dataStart = pos + 1;

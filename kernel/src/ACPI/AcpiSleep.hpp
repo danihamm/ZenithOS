@@ -11,7 +11,11 @@
 namespace Hal {
     namespace AcpiSleep {
 
-        // ── FACS (Firmware ACPI Control Structure) ──────────────────────
+        // ============================================================================
+
+        // FACS (Firmware ACPI Control Structure)
+
+        // ============================================================================
         struct FACS {
             char     Signature[4];       // "FACS"
             uint32_t Length;
@@ -33,7 +37,11 @@ namespace Hal {
         static constexpr uint32_t FADT_S4_RTC_STS_VALID = (1 << 16);
         static constexpr uint32_t FADT_HW_REDUCED_ACPI  = (1 << 20);
 
-        // ── PM1 Status Register Bits ────────────────────────────────────
+        // ============================================================================
+
+        // PM1 Status Register Bits
+
+        // ============================================================================
         static constexpr uint16_t PM1_TMR_STS   = (1 << 0);
         static constexpr uint16_t PM1_BM_STS    = (1 << 4);
         static constexpr uint16_t PM1_GBL_STS   = (1 << 5);
@@ -42,20 +50,32 @@ namespace Hal {
         static constexpr uint16_t PM1_RTC_STS   = (1 << 10);
         static constexpr uint16_t PM1_WAK_STS   = (1 << 15);
 
-        // ── PM1 Enable Register Bits ────────────────────────────────────
+        // ============================================================================
+
+        // PM1 Enable Register Bits
+
+        // ============================================================================
         static constexpr uint16_t PM1_TMR_EN    = (1 << 0);
         static constexpr uint16_t PM1_GBL_EN    = (1 << 5);
         static constexpr uint16_t PM1_PWRBTN_EN = (1 << 8);
         static constexpr uint16_t PM1_SLPBTN_EN = (1 << 9);
         static constexpr uint16_t PM1_RTC_EN    = (1 << 10);
 
-        // ── PM1 Control Register Bits ───────────────────────────────────
+        // ============================================================================
+
+        // PM1 Control Register Bits
+
+        // ============================================================================
         static constexpr uint16_t PM1_SCI_EN    = (1 << 0);
         static constexpr uint16_t PM1_BM_RLD    = (1 << 1);
         static constexpr uint16_t PM1_SLP_TYP_MASK = 0x1C00; // bits 10-12
         static constexpr uint16_t PM1_SLP_EN    = (1 << 13);
 
-        // ── CPU State (saved across S3) ─────────────────────────────────
+        // ============================================================================
+
+        // CPU State (saved across S3)
+
+        // ============================================================================
         // Layout must match S3Wake.asm offsets exactly.
         // No FPU/SSE state — the kernel is compiled with -mno-sse.
         struct CpuState {
@@ -71,8 +91,11 @@ namespace Hal {
             uint8_t  IdtPtr[10];           // 0xB2
         } __attribute__((aligned(16)));
 
-        // ── Sleep API ───────────────────────────────────────────────────
+        // ============================================================================
 
+        // Sleep API
+
+        // ============================================================================
         // Initialize sleep support. Called during boot after ACPI init.
         // xsdt is used to read FADT for FACS and PM register addresses.
         void Initialize(ACPI::CommonSDTHeader* xsdt);

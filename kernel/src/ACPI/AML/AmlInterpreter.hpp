@@ -12,7 +12,11 @@
 namespace Hal {
     namespace AML {
 
-        // ── Extended AML Opcodes ────────────────────────────────────────
+        // ============================================================================
+
+        // Extended AML Opcodes
+
+        // ============================================================================
         // Single-byte opcodes
         static constexpr uint8_t  ZeroOp        = 0x00;
         static constexpr uint8_t  OneOp         = 0x01;
@@ -93,11 +97,19 @@ namespace Hal {
         static constexpr uint8_t  ToHexStringOp = 0x98;
         static constexpr uint8_t  ToDecimalStringOp = 0x97;
 
-        // ── Interpreter Configuration ───────────────────────────────────
+        // ============================================================================
+
+        // Interpreter Configuration
+
+        // ============================================================================
         static constexpr int MaxCallDepth       = 16;
         static constexpr int MaxLoopIterations  = 1024;
 
-        // ── Interpreter ─────────────────────────────────────────────────
+        // ============================================================================
+
+        // Interpreter
+
+        // ============================================================================
         class Interpreter {
         public:
             Interpreter();
@@ -127,7 +139,9 @@ namespace Hal {
             bool IsInitialized() const { return m_initialized; }
 
         private:
-            // ── Parsing (table load) ────────────────────────────────────
+            // ============================================================================
+            // Parsing (table load)
+            // ============================================================================
             bool ParseBlock(const uint8_t* aml, uint32_t offset, uint32_t endOffset,
                             int32_t scopeNode);
 
@@ -137,7 +151,11 @@ namespace Hal {
             bool ParseExtendedOp(const uint8_t* aml, uint32_t* pos, uint32_t endOffset,
                                  int32_t scopeNode);
 
-            // ── Name resolution ─────────────────────────────────────────
+            // ============================================================================
+
+            // Name resolution
+
+            // ============================================================================
             // Read a NameString from AML and produce an absolute path.
             // Advances *pos past the name.
             int ReadNameString(const uint8_t* aml, uint32_t* pos, int32_t scopeNode,
@@ -146,11 +164,19 @@ namespace Hal {
             // Read a single 4-char NameSeg from AML. Advances *pos.
             void ReadNameSeg(const uint8_t* aml, uint32_t* pos, char* outSeg);
 
-            // ── Value decoding ──────────────────────────────────────────
+            // ============================================================================
+
+            // Value decoding
+
+            // ============================================================================
             uint32_t DecodePkgLength(const uint8_t* aml, uint32_t* pos);
             uint64_t DecodeInteger(const uint8_t* aml, uint32_t* pos);
 
-            // ── Method execution ────────────────────────────────────────
+            // ============================================================================
+
+            // Method execution
+
+            // ============================================================================
             struct ExecContext {
                 const uint8_t* Aml;
                 uint32_t       AmlBase;     // start of the block within the table
@@ -182,18 +208,30 @@ namespace Hal {
                                int32_t nodeIndex, bool isLocal, int localIdx,
                                bool isArg, int argIdx);
 
-            // ── Field I/O ───────────────────────────────────────────────
+            // ============================================================================
+
+            // Field I/O
+
+            // ============================================================================
             bool ReadRegion(RegionSpace space, uint64_t address, uint32_t bitWidth, uint64_t& value);
             bool WriteRegion(RegionSpace space, uint64_t address, uint32_t bitWidth, uint64_t value);
 
-            // ── State ───────────────────────────────────────────────────
+            // ============================================================================
+
+            // State
+
+            // ============================================================================
             Namespace     m_ns;
             const uint8_t* m_dsdt;
             uint32_t      m_dsdtLength;
             bool          m_initialized;
         };
 
-        // ── Global interpreter instance ─────────────────────────────────
+        // ============================================================================
+
+        // Global interpreter instance
+
+        // ============================================================================
         Interpreter& GetInterpreter();
 
     };

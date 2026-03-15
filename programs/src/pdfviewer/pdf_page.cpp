@@ -36,6 +36,32 @@ static int next_token(const uint8_t* d, int len, int p, Token* tok) {
 
     if (p >= len) { tok->type = TOK_EOF; return p; }
 
+    // Dictionary << ... >> (e.g., marked-content properties in tagged PDFs)
+    if (d[p] == '<' && p + 1 < len && d[p + 1] == '<') {
+        p += 2;
+        int depth = 1;
+        while (p + 1 < len && depth > 0) {
+            if (d[p] == '<' && d[p + 1] == '<') { depth++; p += 2; }
+            else if (d[p] == '>' && d[p + 1] == '>') { depth--; p += 2; }
+            else p++;
+        }
+        if (p < len && depth > 0) p++; // skip stray last char on malformed input
+        tok->type = TOK_NAME;
+        tok->str[0] = '\0';
+        tok->str_len = 0;
+        return p;
+    }
+
+    // Stray > or >> (skip gracefully)
+    if (d[p] == '>') {
+        p++;
+        if (p < len && d[p] == '>') p++;
+        tok->type = TOK_NAME;
+        tok->str[0] = '\0';
+        tok->str_len = 0;
+        return p;
+    }
+
     // Literal string
     if (d[p] == '(') {
         p++;
@@ -249,6 +275,65 @@ static void add_text_item(PdfPage* page, float x, float y, float size,
     item->text[copy] = '\0';
 }
 
+// ============================================================================
+// Graphics State
+// ============================================================================
+
+static constexpr int MAX_PATH_SEGS  = 512;
+static constexpr int MAX_PATH_RECTS = 128;
+static constexpr int MAX_GFX_STACK  = 16;
+
+struct PathSeg  { float x1, y1, x2, y2; };
+struct PathRect { float x, y, w, h; };
+
+struct GfxState {
+    float ctm[6];       // current transformation matrix
+    float line_width;
+    uint8_t stroke_r, stroke_g, stroke_b;
+    uint8_t fill_r, fill_g, fill_b;
+};
+
+static void ctm_transform(const float* ctm, float x, float y, float* ox, float* oy) {
+    *ox = ctm[0] * x + ctm[2] * y + ctm[4];
+    *oy = ctm[1] * x + ctm[3] * y + ctm[5];
+}
+
+static float ctm_scale(const float* ctm) {
+    // Approximate scale factor (geometric mean of axis scales)
+    float sx = ctm[0] * ctm[0] + ctm[1] * ctm[1];
+    float sy = ctm[2] * ctm[2] + ctm[3] * ctm[3];
+    // sqrt approximation: just use max for simplicity
+    if (sx < sy) sx = sy;
+    // Manual sqrt via Newton's method (2 iterations)
+    if (sx <= 0) return 1.0f;
+    float g = sx;
+    g = 0.5f * (g + sx / g);
+    g = 0.5f * (g + sx / g);
+    return g;
+}
+
+static void add_gfx_item(PdfPage* page, GfxType type,
+                          float x1, float y1, float x2, float y2,
+                          float lw, uint8_t r, uint8_t g, uint8_t b) {
+    if (page->gfx_count >= page->gfx_cap) {
+        int new_cap = page->gfx_cap ? page->gfx_cap * 2 : 64;
+        GraphicsItem* ni = (GraphicsItem*)montauk::malloc(new_cap * sizeof(GraphicsItem));
+        if (!ni) return;
+        if (page->gfx_items) {
+            montauk::memcpy(ni, page->gfx_items, page->gfx_count * sizeof(GraphicsItem));
+            montauk::mfree(page->gfx_items);
+        }
+        page->gfx_items = ni;
+        page->gfx_cap = new_cap;
+    }
+    GraphicsItem* item = &page->gfx_items[page->gfx_count++];
+    item->type = type;
+    item->x1 = x1; item->y1 = y1;
+    item->x2 = x2; item->y2 = y2;
+    item->line_width = lw;
+    item->r = r; item->g = g; item->b = b;
+}
+
 static void matrix_multiply(float* result, const float* a, const float* b) {
     // Multiply two 3x3 matrices represented as [a b c d e f]
     // where the matrix is: [a b 0]
@@ -367,6 +452,24 @@ void parse_page(int page_idx, int page_obj_num) {
         ts.font_flags = 0;
         ts.tounicode = nullptr;
         ts.embedded_font = nullptr;
+
+        // Graphics state
+        GfxState gs;
+        gs.ctm[0] = 1; gs.ctm[1] = 0; gs.ctm[2] = 0; gs.ctm[3] = 1;
+        gs.ctm[4] = 0; gs.ctm[5] = 0;
+        gs.line_width = 1.0f;
+        gs.stroke_r = 0; gs.stroke_g = 0; gs.stroke_b = 0;
+        gs.fill_r = 0; gs.fill_g = 0; gs.fill_b = 0;
+
+        GfxState gs_stack[MAX_GFX_STACK];
+        int gs_depth = 0;
+
+        // Path accumulation
+        PathSeg* path_segs = (PathSeg*)montauk::malloc(MAX_PATH_SEGS * sizeof(PathSeg));
+        PathRect* path_rects = (PathRect*)montauk::malloc(MAX_PATH_RECTS * sizeof(PathRect));
+        int seg_count = 0, rect_count = 0;
+        float path_cx = 0, path_cy = 0; // current point
+        float path_sx = 0, path_sy = 0; // subpath start
 
         bool in_text = false;
         Token tok;
@@ -523,7 +626,9 @@ void parse_page(int page_idx, int page_obj_num) {
                     if (sy < 0) sy = -sy;
                     if (sy > 0.01f) eff_size *= sy;
 
-                    add_text_item(page, ts.tm[4], ts.tm[5], eff_size,
+                    float gx, gy;
+                    ctm_transform(gs.ctm, ts.tm[4], ts.tm[5], &gx, &gy);
+                    add_text_item(page, gx, gy, eff_size,
                                   ops[0].str, ops[0].str_len, ts.font_flags, ts.tounicode, ts.embedded_font);
 
                     // Advance text position using font metrics when available
@@ -555,7 +660,9 @@ void parse_page(int page_idx, int page_obj_num) {
                     if (sy < 0) sy = -sy;
                     if (sy > 0.01f) eff_size *= sy;
 
-                    add_text_item(page, ts.tm[4], ts.tm[5], eff_size,
+                    float gx, gy;
+                    ctm_transform(gs.ctm, ts.tm[4], ts.tm[5], &gx, &gy);
+                    add_text_item(page, gx, gy, eff_size,
                                   sop->str, sop->str_len, ts.font_flags, ts.tounicode, ts.embedded_font);
 
                     TrueTypeFont* adv_font = ts.embedded_font;
@@ -592,7 +699,9 @@ void parse_page(int page_idx, int page_obj_num) {
                     if (sy < 0) sy = -sy;
                     if (sy > 0.01f) eff_size *= sy;
 
-                    add_text_item(page, ts.tm[4], ts.tm[5], eff_size,
+                    float gx, gy;
+                    ctm_transform(gs.ctm, ts.tm[4], ts.tm[5], &gx, &gy);
+                    add_text_item(page, gx, gy, eff_size,
                                   ops[0].str, ops[0].str_len, ts.font_flags, ts.tounicode, ts.embedded_font);
                 }
             }
@@ -611,15 +720,250 @@ void parse_page(int page_idx, int page_obj_num) {
                     if (sy < 0) sy = -sy;
                     if (sy > 0.01f) eff_size *= sy;
 
-                    add_text_item(page, ts.tm[4], ts.tm[5], eff_size,
+                    float gx, gy;
+                    ctm_transform(gs.ctm, ts.tm[4], ts.tm[5], &gx, &gy);
+                    add_text_item(page, gx, gy, eff_size,
                                   ops[2].str, ops[2].str_len, ts.font_flags, ts.tounicode, ts.embedded_font);
                 }
+            }
+
+            // ---- Graphics state operators ----
+            // q - save graphics state
+            else if (op[0] == 'q' && op[1] == '\0') {
+                if (gs_depth < MAX_GFX_STACK)
+                    gs_stack[gs_depth++] = gs;
+            }
+            // Q - restore graphics state
+            else if (op[0] == 'Q' && op[1] == '\0') {
+                if (gs_depth > 0)
+                    gs = gs_stack[--gs_depth];
+            }
+            // cm - concat matrix
+            else if (op[0] == 'c' && op[1] == 'm' && op[2] == '\0') {
+                if (op_count >= 6) {
+                    float m[6] = { ops[0].num, ops[1].num, ops[2].num,
+                                   ops[3].num, ops[4].num, ops[5].num };
+                    float r[6];
+                    // new_ctm = m * old_ctm
+                    r[0] = m[0]*gs.ctm[0] + m[1]*gs.ctm[2];
+                    r[1] = m[0]*gs.ctm[1] + m[1]*gs.ctm[3];
+                    r[2] = m[2]*gs.ctm[0] + m[3]*gs.ctm[2];
+                    r[3] = m[2]*gs.ctm[1] + m[3]*gs.ctm[3];
+                    r[4] = m[4]*gs.ctm[0] + m[5]*gs.ctm[2] + gs.ctm[4];
+                    r[5] = m[4]*gs.ctm[1] + m[5]*gs.ctm[3] + gs.ctm[5];
+                    for (int i = 0; i < 6; i++) gs.ctm[i] = r[i];
+                }
+            }
+            // w - set line width
+            else if (op[0] == 'w' && op[1] == '\0' && !in_text) {
+                if (op_count >= 1) gs.line_width = ops[0].num;
+            }
+            // ---- Color operators ----
+            // g - set fill gray
+            else if (op[0] == 'g' && op[1] == '\0') {
+                if (op_count >= 1) {
+                    uint8_t v = (uint8_t)(ops[0].num * 255);
+                    gs.fill_r = v; gs.fill_g = v; gs.fill_b = v;
+                }
+            }
+            // G - set stroke gray
+            else if (op[0] == 'G' && op[1] == '\0') {
+                if (op_count >= 1) {
+                    uint8_t v = (uint8_t)(ops[0].num * 255);
+                    gs.stroke_r = v; gs.stroke_g = v; gs.stroke_b = v;
+                }
+            }
+            // rg - set fill RGB
+            else if (op[0] == 'r' && op[1] == 'g' && op[2] == '\0') {
+                if (op_count >= 3) {
+                    gs.fill_r = (uint8_t)(ops[0].num * 255);
+                    gs.fill_g = (uint8_t)(ops[1].num * 255);
+                    gs.fill_b = (uint8_t)(ops[2].num * 255);
+                }
+            }
+            // RG - set stroke RGB
+            else if (op[0] == 'R' && op[1] == 'G' && op[2] == '\0') {
+                if (op_count >= 3) {
+                    gs.stroke_r = (uint8_t)(ops[0].num * 255);
+                    gs.stroke_g = (uint8_t)(ops[1].num * 255);
+                    gs.stroke_b = (uint8_t)(ops[2].num * 255);
+                }
+            }
+            // k - set fill CMYK (approximate as RGB)
+            else if (op[0] == 'k' && op[1] == '\0') {
+                if (op_count >= 4) {
+                    float c_ = ops[0].num, m_ = ops[1].num, y_ = ops[2].num, k_ = ops[3].num;
+                    gs.fill_r = (uint8_t)((1 - c_) * (1 - k_) * 255);
+                    gs.fill_g = (uint8_t)((1 - m_) * (1 - k_) * 255);
+                    gs.fill_b = (uint8_t)((1 - y_) * (1 - k_) * 255);
+                }
+            }
+            // K - set stroke CMYK
+            else if (op[0] == 'K' && op[1] == '\0') {
+                if (op_count >= 4) {
+                    float c_ = ops[0].num, m_ = ops[1].num, y_ = ops[2].num, k_ = ops[3].num;
+                    gs.stroke_r = (uint8_t)((1 - c_) * (1 - k_) * 255);
+                    gs.stroke_g = (uint8_t)((1 - m_) * (1 - k_) * 255);
+                    gs.stroke_b = (uint8_t)((1 - y_) * (1 - k_) * 255);
+                }
+            }
+            // ---- Path construction operators ----
+            // m - moveto
+            else if (op[0] == 'm' && op[1] == '\0' && !in_text) {
+                if (op_count >= 2) {
+                    ctm_transform(gs.ctm, ops[0].num, ops[1].num, &path_cx, &path_cy);
+                    path_sx = path_cx;
+                    path_sy = path_cy;
+                }
+            }
+            // l - lineto
+            else if (op[0] == 'l' && op[1] == '\0' && !in_text) {
+                if (op_count >= 2 && seg_count < MAX_PATH_SEGS) {
+                    float nx, ny;
+                    ctm_transform(gs.ctm, ops[0].num, ops[1].num, &nx, &ny);
+                    path_segs[seg_count].x1 = path_cx;
+                    path_segs[seg_count].y1 = path_cy;
+                    path_segs[seg_count].x2 = nx;
+                    path_segs[seg_count].y2 = ny;
+                    seg_count++;
+                    path_cx = nx;
+                    path_cy = ny;
+                }
+            }
+            // re - rectangle (x y w h)
+            else if (op[0] == 'r' && op[1] == 'e' && op[2] == '\0') {
+                if (op_count >= 4 && rect_count < MAX_PATH_RECTS) {
+                    float rx = ops[0].num, ry = ops[1].num;
+                    float rw = ops[2].num, rh = ops[3].num;
+                    // Transform corners through CTM
+                    float tx, ty;
+                    ctm_transform(gs.ctm, rx, ry, &tx, &ty);
+                    float tw = rw * ctm_scale(gs.ctm);
+                    float th = rh * ctm_scale(gs.ctm);
+                    path_rects[rect_count].x = tx;
+                    path_rects[rect_count].y = ty;
+                    path_rects[rect_count].w = tw;
+                    path_rects[rect_count].h = th;
+                    rect_count++;
+                    // re also adds 4 line segments and sets current point
+                    if (seg_count + 4 <= MAX_PATH_SEGS) {
+                        float x0, y0, x1, y1, x2, y2, x3, y3;
+                        ctm_transform(gs.ctm, rx, ry, &x0, &y0);
+                        ctm_transform(gs.ctm, rx + rw, ry, &x1, &y1);
+                        ctm_transform(gs.ctm, rx + rw, ry + rh, &x2, &y2);
+                        ctm_transform(gs.ctm, rx, ry + rh, &x3, &y3);
+                        path_segs[seg_count++] = {x0, y0, x1, y1};
+                        path_segs[seg_count++] = {x1, y1, x2, y2};
+                        path_segs[seg_count++] = {x2, y2, x3, y3};
+                        path_segs[seg_count++] = {x3, y3, x0, y0};
+                    }
+                    path_cx = tx;
+                    path_cy = ty;
+                    path_sx = tx;
+                    path_sy = ty;
+                }
+            }
+            // h - closepath
+            else if (op[0] == 'h' && op[1] == '\0') {
+                if (seg_count < MAX_PATH_SEGS &&
+                    (path_cx != path_sx || path_cy != path_sy)) {
+                    path_segs[seg_count].x1 = path_cx;
+                    path_segs[seg_count].y1 = path_cy;
+                    path_segs[seg_count].x2 = path_sx;
+                    path_segs[seg_count].y2 = path_sy;
+                    seg_count++;
+                    path_cx = path_sx;
+                    path_cy = path_sy;
+                }
+            }
+            // ---- Path painting operators ----
+            // S - stroke
+            else if (op[0] == 'S' && op[1] == '\0' && !in_text) {
+                float lw = gs.line_width * ctm_scale(gs.ctm);
+                for (int si = 0; si < seg_count; si++)
+                    add_gfx_item(page, GFX_LINE,
+                                 path_segs[si].x1, path_segs[si].y1,
+                                 path_segs[si].x2, path_segs[si].y2,
+                                 lw, gs.stroke_r, gs.stroke_g, gs.stroke_b);
+                seg_count = 0;
+                rect_count = 0;
+            }
+            // s - close and stroke
+            else if (op[0] == 's' && op[1] == '\0' && !in_text) {
+                // Close first
+                if (seg_count < MAX_PATH_SEGS &&
+                    (path_cx != path_sx || path_cy != path_sy)) {
+                    path_segs[seg_count++] = {path_cx, path_cy, path_sx, path_sy};
+                }
+                float lw = gs.line_width * ctm_scale(gs.ctm);
+                for (int si = 0; si < seg_count; si++)
+                    add_gfx_item(page, GFX_LINE,
+                                 path_segs[si].x1, path_segs[si].y1,
+                                 path_segs[si].x2, path_segs[si].y2,
+                                 lw, gs.stroke_r, gs.stroke_g, gs.stroke_b);
+                seg_count = 0;
+                rect_count = 0;
+            }
+            // f or F - fill
+            else if ((op[0] == 'f' || op[0] == 'F') &&
+                     (op[1] == '\0' || (op[1] == '*' && op[2] == '\0')) && !in_text) {
+                for (int ri = 0; ri < rect_count; ri++)
+                    add_gfx_item(page, GFX_RECT_FILL,
+                                 path_rects[ri].x, path_rects[ri].y,
+                                 path_rects[ri].w, path_rects[ri].h,
+                                 0, gs.fill_r, gs.fill_g, gs.fill_b);
+                seg_count = 0;
+                rect_count = 0;
+            }
+            // B or B* - fill then stroke
+            else if (op[0] == 'B' && (op[1] == '\0' || (op[1] == '*' && op[2] == '\0'))
+                     && !in_text) {
+                for (int ri = 0; ri < rect_count; ri++)
+                    add_gfx_item(page, GFX_RECT_FILL,
+                                 path_rects[ri].x, path_rects[ri].y,
+                                 path_rects[ri].w, path_rects[ri].h,
+                                 0, gs.fill_r, gs.fill_g, gs.fill_b);
+                float lw = gs.line_width * ctm_scale(gs.ctm);
+                for (int si = 0; si < seg_count; si++)
+                    add_gfx_item(page, GFX_LINE,
+                                 path_segs[si].x1, path_segs[si].y1,
+                                 path_segs[si].x2, path_segs[si].y2,
+                                 lw, gs.stroke_r, gs.stroke_g, gs.stroke_b);
+                seg_count = 0;
+                rect_count = 0;
+            }
+            // b or b* - close, fill then stroke
+            else if (op[0] == 'b' && (op[1] == '\0' || (op[1] == '*' && op[2] == '\0'))
+                     && !in_text) {
+                if (seg_count < MAX_PATH_SEGS &&
+                    (path_cx != path_sx || path_cy != path_sy))
+                    path_segs[seg_count++] = {path_cx, path_cy, path_sx, path_sy};
+                for (int ri = 0; ri < rect_count; ri++)
+                    add_gfx_item(page, GFX_RECT_FILL,
+                                 path_rects[ri].x, path_rects[ri].y,
+                                 path_rects[ri].w, path_rects[ri].h,
+                                 0, gs.fill_r, gs.fill_g, gs.fill_b);
+                float lw = gs.line_width * ctm_scale(gs.ctm);
+                for (int si = 0; si < seg_count; si++)
+                    add_gfx_item(page, GFX_LINE,
+                                 path_segs[si].x1, path_segs[si].y1,
+                                 path_segs[si].x2, path_segs[si].y2,
+                                 lw, gs.stroke_r, gs.stroke_g, gs.stroke_b);
+                seg_count = 0;
+                rect_count = 0;
+            }
+            // n - end path without painting (clipping only)
+            else if (op[0] == 'n' && op[1] == '\0' && !in_text) {
+                seg_count = 0;
+                rect_count = 0;
             }
 
             op_count = 0; // reset operand stack after operator
         }
 
         montauk::mfree(ops);
+        if (path_segs) montauk::mfree(path_segs);
+        if (path_rects) montauk::mfree(path_rects);
         montauk::mfree(stream_data);
     }
 

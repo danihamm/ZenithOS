@@ -11,7 +11,11 @@
 namespace Hal {
     namespace AML {
 
-        // ── AML Object Types ────────────────────────────────────────────
+        // ============================================================================
+
+        // AML Object Types
+
+        // ============================================================================
         enum class ObjectType : uint8_t {
             None = 0,
             Integer,
@@ -29,7 +33,11 @@ namespace Hal {
             BufferField,
         };
 
-        // ── Region address spaces (OperationRegion) ─────────────────────
+        // ============================================================================
+
+        // Region address spaces (OperationRegion)
+
+        // ============================================================================
         enum class RegionSpace : uint8_t {
             SystemMemory    = 0x00,
             SystemIO        = 0x01,
@@ -40,7 +48,11 @@ namespace Hal {
             PciBarTarget    = 0x06,
         };
 
-        // ── Constants ───────────────────────────────────────────────────
+        // ============================================================================
+
+        // Constants
+
+        // ============================================================================
         static constexpr int MaxNameSegLen     = 4;
         static constexpr int MaxPathDepth      = 16;
         static constexpr int MaxChildren       = 32;
@@ -51,7 +63,11 @@ namespace Hal {
         static constexpr int MaxMethodLocals   = 8;
         static constexpr int MaxNamespaceNodes = 256;
 
-        // ── AML Object ──────────────────────────────────────────────────
+        // ============================================================================
+
+        // AML Object
+
+        // ============================================================================
         // Tagged union representing any AML value. Kept small for kernel use.
         struct Object {
             ObjectType Type = ObjectType::None;
@@ -99,7 +115,11 @@ namespace Hal {
             Object() : Type(ObjectType::None), Integer(0) {}
         };
 
-        // ── Namespace Node ──────────────────────────────────────────────
+        // ============================================================================
+
+        // Namespace Node
+
+        // ============================================================================
         // Each node has a 4-char name segment and an associated object.
         struct NamespaceNode {
             char         Name[MaxNameSegLen + 1]; // null-terminated 4-char segment
@@ -118,7 +138,11 @@ namespace Hal {
             }
         };
 
-        // ── Namespace ───────────────────────────────────────────────────
+        // ============================================================================
+
+        // Namespace
+
+        // ============================================================================
         // Flat array of nodes forming a tree via parent/child indices.
         class Namespace {
         public:

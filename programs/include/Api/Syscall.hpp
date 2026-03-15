@@ -206,7 +206,7 @@ namespace Montauk {
     };
 
     struct DevInfo {
-        uint8_t  category;     // 0=CPU, 1=Interrupt, 2=Timer, 3=Input, 4=USB, 5=Network, 6=Display, 7=Storage, 8=PCI
+        uint8_t  category;     // 0=CPU, 1=Interrupt, 2=Timer, 3=Input, 4=USB, 5=Network, 6=Display, 7=Storage, 8=PCI, 9=Audio, 10=ACPI
         uint8_t  _pad[3];
         char     name[48];
         char     detail[48];

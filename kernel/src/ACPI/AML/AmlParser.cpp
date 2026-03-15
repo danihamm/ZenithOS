@@ -15,7 +15,11 @@ using namespace Kt;
 namespace Hal {
     namespace AML {
 
-        // ── Legacy S5 extraction (brute-force scan) ─────────────────────
+        // ============================================================================
+
+        // Legacy S5 extraction (brute-force scan)
+
+        // ============================================================================
         // Kept for fast S5 extraction during early boot before the full
         // interpreter is loaded.
 
@@ -158,7 +162,11 @@ namespace Hal {
             return result;
         }
 
-        // ── Generalized brute-force sleep state scanner ──────────────────
+        // ============================================================================
+
+        // Generalized brute-force sleep state scanner
+
+        // ============================================================================
         SleepObject FindSleepState(void* dsdtData, int state) {
             SleepObject result{};
             result.Valid = false;
@@ -226,7 +234,11 @@ namespace Hal {
             return result;
         }
 
-        // ── Full interpreter initialization ─────────────────────────────
+        // ============================================================================
+
+        // Full interpreter initialization
+
+        // ============================================================================
         void InitializeInterpreter(void* dsdtData) {
             auto& interp = GetInterpreter();
             if (!interp.LoadTable(dsdtData)) {

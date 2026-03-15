@@ -320,7 +320,7 @@ void desktop_draw_net_popup(DesktopState* ds) {
 
     rows[0].label = "IP";
     if (connected) format_ip(rows[0].value, nc.ipAddress);
-    else montauk::strcpy(rows[0].value, "\xE2\x80\x94");  // em dash
+    else montauk::strcpy(rows[0].value, "0.0.0.0");
 
     rows[1].label = "Subnet";
     format_ip(rows[1].value, nc.subnetMask);

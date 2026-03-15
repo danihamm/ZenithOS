@@ -238,8 +238,11 @@ static bool copy_recursive(const char* src_dir, const char* dst_dir,
         } else {
             // Skip ramdisk and limine.conf — installed system boots from
             // disk and gets a fresh config without the ramdisk module.
+            // Skip setup.toml — live/setup environment config that should
+            // not be present on the installed system.
             if (strcmp(basename, "ramdisk.tar") == 0) continue;
             if (strcmp(basename, "limine.conf") == 0) continue;
+            if (strcmp(basename, "setup.toml") == 0) continue;
 
             // It's a file — copy it
             char src_path[256];

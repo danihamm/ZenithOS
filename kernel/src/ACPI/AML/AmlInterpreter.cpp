@@ -17,14 +17,22 @@ using namespace Kt;
 namespace Hal {
     namespace AML {
 
-        // ── Global instance ─────────────────────────────────────────────
+        // ============================================================================
+
+        // Global instance
+
+        // ============================================================================
         static Interpreter g_interpreter;
 
         Interpreter& GetInterpreter() {
             return g_interpreter;
         }
 
-        // ── Helper: is a byte a lead name character? ────────────────────
+        // ============================================================================
+
+        // Helper: is a byte a lead name character?
+
+        // ============================================================================
         static bool IsLeadNameChar(uint8_t c) {
             return (c >= 'A' && c <= 'Z') || c == '_';
         }
@@ -33,11 +41,19 @@ namespace Hal {
             return IsLeadNameChar(c) || (c >= '0' && c <= '9');
         }
 
-        // ── Constructor ─────────────────────────────────────────────────
+        // ============================================================================
+
+        // Constructor
+
+        // ============================================================================
         Interpreter::Interpreter()
             : m_dsdt(nullptr), m_dsdtLength(0), m_initialized(false) {}
 
-        // ── PkgLength decoding ──────────────────────────────────────────
+        // ============================================================================
+
+        // PkgLength decoding
+
+        // ============================================================================
         uint32_t Interpreter::DecodePkgLength(const uint8_t* aml, uint32_t* pos) {
             uint8_t lead = aml[*pos];
             uint32_t byteCount = (lead >> 6) & 0x03;
@@ -58,7 +74,11 @@ namespace Hal {
             return length;
         }
 
-        // ── Integer decoding (data objects) ─────────────────────────────
+        // ============================================================================
+
+        // Integer decoding (data objects)
+
+        // ============================================================================
         uint64_t Interpreter::DecodeInteger(const uint8_t* aml, uint32_t* pos) {
             uint8_t op = aml[*pos];
 
@@ -107,7 +127,11 @@ namespace Hal {
             }
         }
 
-        // ── NameSeg reading ─────────────────────────────────────────────
+        // ============================================================================
+
+        // NameSeg reading
+
+        // ============================================================================
         void Interpreter::ReadNameSeg(const uint8_t* aml, uint32_t* pos, char* outSeg) {
             for (int i = 0; i < 4; i++) {
                 outSeg[i] = (char)aml[*pos + i];
@@ -116,7 +140,11 @@ namespace Hal {
             *pos += 4;
         }
 
-        // ── NameString reading ──────────────────────────────────────────
+        // ============================================================================
+
+        // NameString reading
+
+        // ============================================================================
         // Reads a NameString (which may include root prefix, parent prefixes,
         // dual/multi name prefix) and produces an absolute path.
         int Interpreter::ReadNameString(const uint8_t* aml, uint32_t* pos, int32_t scopeNode,
@@ -195,7 +223,11 @@ namespace Hal {
             return pathPos;
         }
 
-        // ── LoadTable ───────────────────────────────────────────────────
+        // ============================================================================
+
+        // LoadTable
+
+        // ============================================================================
         bool Interpreter::LoadTable(void* tableData) {
             auto* header = (ACPI::CommonSDTHeader*)tableData;
 
@@ -231,7 +263,11 @@ namespace Hal {
             return result;
         }
 
-        // ── ParseBlock ──────────────────────────────────────────────────
+        // ============================================================================
+
+        // ParseBlock
+
+        // ============================================================================
         // Parse a block of AML opcodes, creating namespace objects.
         bool Interpreter::ParseBlock(const uint8_t* aml, uint32_t offset, uint32_t endOffset,
                                      int32_t scopeNode) {
@@ -332,7 +368,11 @@ namespace Hal {
             return true;
         }
 
-        // ── ParseNamedObject ────────────────────────────────────────────
+        // ============================================================================
+
+        // ParseNamedObject
+
+        // ============================================================================
         bool Interpreter::ParseNamedObject(const uint8_t* aml, uint32_t* pos, uint32_t endOffset,
                                            int32_t scopeNode) {
             uint8_t op = aml[*pos];
@@ -484,7 +524,11 @@ namespace Hal {
             return true;
         }
 
-        // ── ParseExtendedOp ─────────────────────────────────────────────
+        // ============================================================================
+
+        // ParseExtendedOp
+
+        // ============================================================================
         bool Interpreter::ParseExtendedOp(const uint8_t* aml, uint32_t* pos, uint32_t endOffset,
                                           int32_t scopeNode) {
             (*pos)++; // skip ExtOpPrefix
@@ -743,7 +787,11 @@ namespace Hal {
             }
         }
 
-        // ── EvaluateObject ──────────────────────────────────────────────
+        // ============================================================================
+
+        // EvaluateObject
+
+        // ============================================================================
         bool Interpreter::EvaluateObject(const char* path, Object& result) {
             int32_t node = m_ns.FindNode(path);
             if (node < 0) return false;
@@ -772,7 +820,11 @@ namespace Hal {
             return true;
         }
 
-        // ── EvaluateMethod ──────────────────────────────────────────────
+        // ============================================================================
+
+        // EvaluateMethod
+
+        // ============================================================================
         bool Interpreter::EvaluateMethod(const char* path, const Object* args, int argCount,
                                          Object& result) {
             int32_t node = m_ns.FindNode(path);
@@ -812,7 +864,11 @@ namespace Hal {
             return ok;
         }
 
-        // ── ExecuteBlock ────────────────────────────────────────────────
+        // ============================================================================
+
+        // ExecuteBlock
+
+        // ============================================================================
         bool Interpreter::ExecuteBlock(ExecContext& ctx, uint32_t offset, uint32_t endOffset) {
             uint32_t pos = offset;
 
@@ -824,7 +880,11 @@ namespace Hal {
             return true;
         }
 
-        // ── ExecuteOpcode ───────────────────────────────────────────────
+        // ============================================================================
+
+        // ExecuteOpcode
+
+        // ============================================================================
         bool Interpreter::ExecuteOpcode(ExecContext& ctx, uint32_t* pos, uint32_t endOffset) {
             if (*pos >= endOffset) return true;
 
@@ -1015,7 +1075,11 @@ namespace Hal {
             return EvalTerm(ctx, pos, endOffset, discard);
         }
 
-        // ── EvalTerm ────────────────────────────────────────────────────
+        // ============================================================================
+
+        // EvalTerm
+
+        // ============================================================================
         // Evaluate an AML term that produces a value.
         bool Interpreter::EvalTerm(ExecContext& ctx, uint32_t* pos, uint32_t endOffset,
                                    Object& result) {
@@ -1412,7 +1476,11 @@ namespace Hal {
             return true;
         }
 
-        // ── EvalTarget ──────────────────────────────────────────────────
+        // ============================================================================
+
+        // EvalTarget
+
+        // ============================================================================
         bool Interpreter::EvalTarget(ExecContext& ctx, uint32_t* pos,
                                      int32_t& nodeIndex, bool& isLocal, int& localIdx,
                                      bool& isArg, int& argIdx) {
@@ -1464,7 +1532,11 @@ namespace Hal {
             return true;
         }
 
-        // ── StoreToTarget ───────────────────────────────────────────────
+        // ============================================================================
+
+        // StoreToTarget
+
+        // ============================================================================
         void Interpreter::StoreToTarget(ExecContext& ctx, const Object& value,
                                         int32_t nodeIndex, bool isLocal, int localIdx,
                                         bool isArg, int argIdx) {
@@ -1484,7 +1556,11 @@ namespace Hal {
             }
         }
 
-        // ── ReadField ───────────────────────────────────────────────────
+        // ============================================================================
+
+        // ReadField
+
+        // ============================================================================
         bool Interpreter::ReadField(int32_t nodeIndex, uint64_t& value) {
             auto* node = m_ns.GetNode(nodeIndex);
             if (!node || node->Obj.Type != ObjectType::Field) return false;
@@ -1505,7 +1581,11 @@ namespace Hal {
             return ReadRegion(regionNode->Obj.Region.Space, byteAddr, bitLen + bitShift, value);
         }
 
-        // ── WriteField ──────────────────────────────────────────────────
+        // ============================================================================
+
+        // WriteField
+
+        // ============================================================================
         bool Interpreter::WriteField(int32_t nodeIndex, uint64_t value) {
             auto* node = m_ns.GetNode(nodeIndex);
             if (!node || node->Obj.Type != ObjectType::Field) return false;
@@ -1534,7 +1614,11 @@ namespace Hal {
             return WriteRegion(regionNode->Obj.Region.Space, byteAddr, bitLen + bitShift, value);
         }
 
-        // ── ReadRegion ──────────────────────────────────────────────────
+        // ============================================================================
+
+        // ReadRegion
+
+        // ============================================================================
         bool Interpreter::ReadRegion(RegionSpace space, uint64_t address, uint32_t bitWidth,
                                      uint64_t& value) {
             value = 0;
@@ -1576,7 +1660,11 @@ namespace Hal {
             return false;
         }
 
-        // ── WriteRegion ─────────────────────────────────────────────────
+        // ============================================================================
+
+        // WriteRegion
+
+        // ============================================================================
         bool Interpreter::WriteRegion(RegionSpace space, uint64_t address, uint32_t bitWidth,
                                       uint64_t value) {
             uint32_t accessBytes = (bitWidth + 7) / 8;

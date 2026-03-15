@@ -5,6 +5,7 @@
 */
 
 #include "AcpiSleep.hpp"
+#include "AcpiEvents.hpp"
 #include <ACPI/FADT.hpp>
 #include <ACPI/AML/AmlParser.hpp>
 #include <ACPI/AML/AmlInterpreter.hpp>
@@ -22,6 +23,8 @@
 #include <Drivers/PS2/PS2Controller.hpp>
 #include <Graphics/Cursor.hpp>
 #include <Libraries/Memory.hpp>
+#include <Hal/MSR.hpp>
+#include <Api/Syscall.hpp>
 
 using namespace Kt;
 
@@ -30,6 +33,11 @@ extern "C" int  AcpiSaveAndSuspend(Hal::AcpiSleep::CpuState* stateArea);
 extern "C" void AcpiResumeLongMode(Hal::AcpiSleep::CpuState* stateArea);
 extern "C" void AcpiWakeEntry();
 extern "C" void* g_wakeStatePtr;
+
+// Called directly by AcpiResumeLongMode after restoring CPU state.
+// This avoids returning to Suspend() via ret, which is fragile because
+// the compiler's stack frame expectations may not match the restored state.
+extern "C" void AcpiResumeEntry();
 
 // Real-mode trampoline from S3Trampoline.asm
 extern "C" char S3TrampolineStart[];
@@ -40,6 +48,11 @@ extern "C" char S3TrampolineEnd[];
 // Physical address where the trampoline is copied (must be < 1MB, page-aligned)
 static constexpr uint32_t TRAMPOLINE_PHYS = 0x8000;
 
+// Physical address for the shadow PML4 used by the trampoline (must be < 4GB).
+// The kernel PML4 may be above 4GB, but the 32-bit trampoline can only load
+// a 32-bit CR3. We copy the kernel PML4 entries here before entering S3.
+static constexpr uint32_t SHADOW_PML4_PHYS = 0x9000;
+
 // GDT/TSS reload helpers
 namespace Hal {
     extern void BridgeLoadGDT();
@@ -49,7 +62,11 @@ namespace Hal {
 namespace Hal {
     namespace AcpiSleep {
 
-        // ── State ───────────────────────────────────────────────────────
+        // ============================================================================
+
+        // State
+
+        // ============================================================================
         static bool     g_s3Available = false;
         static uint16_t g_s3SlpTypA = 0;
         static uint16_t g_s3SlpTypB = 0;
@@ -65,9 +82,65 @@ namespace Hal {
         // CPU state save area (aligned for fxsave)
         static CpuState g_cpuState __attribute__((aligned(64)));
 
-        // ── Initialize ──────────────────────────────────────────────────
+        // Set by AcpiResumeEntry to signal Suspend() that resume completed.
+        static volatile int g_resumeComplete = 0;
+
+        // ============================================================================
+
+        // Initialize
+
+        // ============================================================================
         void Initialize(ACPI::CommonSDTHeader* xsdt) {
             g_s3Available = false;
+
+            // Check CMOS 0x72 for S3 wake progress from a previous attempt.
+            // Non-zero means the last wake attempt reached a specific stage.
+            Io::Out8(0xF2, 0x70);  // CMOS register 0x72 | NMI disable
+            uint8_t wakeProgress = Io::In8(0x71);
+            // Check CMOS 0x73 — set to 0xDD if C resume code was ever reached
+            // (survives trampoline overwrites of 0x72 during sleep-wake loops)
+            Io::Out8(0xF3, 0x70);
+            uint8_t cReached = Io::In8(0x71);
+            if (wakeProgress != 0 || cReached != 0) {
+                KernelLogStream(WARNING, "S3") << "Previous S3 wake progress: 0x"
+                    << base::hex << (uint64_t)wakeProgress
+                    << (wakeProgress == 0xA1 ? " (16-bit trampoline)" :
+                        wakeProgress == 0xA2 ? " (32-bit mode)" :
+                        wakeProgress == 0xA3 ? " (entering long mode)" :
+                        wakeProgress == 0xB1 ? " (64-bit UEFI entry)" :
+                        wakeProgress == 0xC1 ? " (AcpiResumeLongMode entry)" :
+                        wakeProgress == 0xC2 ? " (GDT+CS reloaded)" :
+                        wakeProgress == 0xC3 ? " (IDT+CR4/CR0/CR3 restored)" :
+                        wakeProgress == 0xC4 ? " (about to ret to Suspend)" :
+                        wakeProgress == 0xD1 ? " (C resume path)" : " (unknown)");
+                if (cReached == 0xEE)
+                    KernelLogStream(WARNING, "S3") << "Full resume completed (all reinit done)";
+                else if (cReached == 0xDD)
+                    KernelLogStream(WARNING, "S3") << "C resume entered but did NOT complete all reinit";
+                else
+                    KernelLogStream(WARNING, "S3") << "C resume path was NOT reached";
+                // Read reinit step progress from CMOS 0x74
+                Io::Out8(0xF4, 0x70);
+                uint8_t reinitStep = Io::In8(0x71);
+                if (reinitStep != 0) {
+                    const char* stepNames[] = {
+                        "?", "GDT", "TSS", "Syscalls", "PAT", "PIC",
+                        "LocalAPIC", "IoAPIC", "APICTimer", "PM1Clear",
+                        "WAK", "PS2", "IntelGPU", "sti"
+                    };
+                    const char* stepName = reinitStep <= 0x0D ? stepNames[reinitStep] : "?";
+                    KernelLogStream(WARNING, "S3") << "Reinit stopped after step 0x"
+                        << base::hex << (uint64_t)reinitStep << " (" << stepName
+                        << ") - next step crashed/hung";
+                }
+                Io::Out8(0xF4, 0x70);
+                Io::Out8(0x00, 0x71);
+                // Clear both
+                Io::Out8(0xF2, 0x70);
+                Io::Out8(0x00, 0x71);
+                Io::Out8(0xF3, 0x70);
+                Io::Out8(0x00, 0x71);
+            }
 
             FADT::ParsedFADT fadt{};
             if (!FADT::Parse(xsdt, fadt) || !fadt.Valid)
@@ -96,9 +169,9 @@ namespace Hal {
             g_pm1bControlBlock = fadt.PM1bControlBlock;
             g_pm1EventLength   = fadt.PM1EventLength;
 
-            // Find \_S3_ via brute-force DSDT scan (same approach as \_S5_).
-            // This works on any DSDT regardless of complexity — does not
-            // require the AML interpreter or namespace to be loaded.
+            // Find \_S3_ via brute-force DSDT scan. The AML interpreter stores
+            // packages as raw bytecode (no structured element access yet), so
+            // the brute-force scanner is the reliable path for now.
             auto* dsdt = (void*)Memory::HHDM(fadt.DsdtAddress);
             AML::SleepObject s3 = AML::FindSleepState(dsdt, 3);
             if (s3.Valid) {
@@ -111,6 +184,11 @@ namespace Hal {
                     << " SLP_TYPb=" << base::hex << (uint64_t)g_s3SlpTypB << ")";
                 KernelLogStream(INFO, "S3") << "Kernel PML4 phys = " << base::hex
                     << (uint64_t)Memory::VMM::g_paging->PML4;
+                KernelLogStream(INFO, "S3") << "FACS at phys " << base::hex
+                    << (uint64_t)fadt.FacsAddress << " version=" << base::dec
+                    << (uint64_t)g_facs->Version << " flags=" << base::hex
+                    << (uint64_t)g_facs->Flags
+                    << (g_facs->Flags & FACS_64BIT_WAKE_F ? " (64BIT_WAKE)" : " (32BIT_WAKE only)");
             } else {
                 KernelLogStream(INFO, "S3") << "\\_S3_ not found in DSDT - S3 unavailable";
             }
@@ -120,7 +198,11 @@ namespace Hal {
             return g_s3Available;
         }
 
-        // ── Evaluate _PTS (Prepare To Sleep) ────────────────────────────
+        // ============================================================================
+
+        // Evaluate _PTS (Prepare To Sleep)
+
+        // ============================================================================
         static void EvaluatePts(int sleepState) {
             auto& interp = AML::GetInterpreter();
             if (!interp.IsInitialized()) return;
@@ -138,7 +220,11 @@ namespace Hal {
             KernelLogStream(DEBUG, "S3") << "Evaluated \\_PTS(" << base::dec << (uint64_t)sleepState << ")";
         }
 
-        // ── Evaluate _WAK (System Wake) ─────────────────────────────────
+        // ============================================================================
+
+        // Evaluate _WAK (System Wake)
+
+        // ============================================================================
         static void EvaluateWak(int sleepState) {
             auto& interp = AML::GetInterpreter();
             if (!interp.IsInitialized()) return;
@@ -156,7 +242,11 @@ namespace Hal {
             KernelLogStream(DEBUG, "S3") << "Evaluated \\_WAK(" << base::dec << (uint64_t)sleepState << ")";
         }
 
-        // ── Clear PM1 Status Registers ──────────────────────────────────
+        // ============================================================================
+
+        // Clear PM1 Status Registers
+
+        // ============================================================================
         static void ClearPM1Status() {
             // Write 1 to clear all status bits (write-1-to-clear semantics)
             uint16_t clearMask = PM1_WAK_STS | PM1_PWRBTN_STS | PM1_SLPBTN_STS |
@@ -168,7 +258,11 @@ namespace Hal {
                 Io::Out16(clearMask, (uint16_t)g_pm1bEventBlock);
         }
 
-        // ── Enable Wake Events ──────────────────────────────────────────
+        // ============================================================================
+
+        // Enable Wake Events
+
+        // ============================================================================
         static void EnableWakeEvents() {
             // Enable register is at event block + PM1EventLength/2
             uint16_t enableOffset = g_pm1EventLength / 2;
@@ -182,7 +276,11 @@ namespace Hal {
                 Io::Out16(enableMask, (uint16_t)(g_pm1bEventBlock + enableOffset));
         }
 
-        // ── Install real-mode trampoline and set waking vector ────────────
+        // ============================================================================
+
+        // Install real-mode trampoline and set waking vector
+
+        // ============================================================================
         static void SetWakingVector() {
             if (!g_facs) return;
 
@@ -197,26 +295,31 @@ namespace Hal {
             uint8_t* trampolineSrc = (uint8_t*)S3TrampolineStart;
             memcpy(trampolineDst, trampolineSrc, trampolineSize);
 
-            // Patch the trampoline data area with CR3 and resume addresses.
+            // Patch the trampoline data area with CR3, resume addresses,
+            // and PM1 control port addresses.
             // Data layout (from S3Trampoline.asm):
             //   +0:  uint64_t CR3 (full 64-bit PML4 physical address)
             //   +8:  uint64_t CpuState virtual address
             //  +16:  uint64_t AcpiResumeLongMode virtual address
+            //  +24:  uint16_t PM1a control block I/O port
+            //  +26:  uint16_t PM1b control block I/O port
             uint32_t dataOffset = (uint32_t)(S3TrampolineData - S3TrampolineStart);
             uint8_t* dataArea = trampolineDst + dataOffset;
 
-            // Use the kernel master PML4 (which has 0x8000 identity-mapped)
-            // rather than the saved process PML4 (which doesn't).
-            // AcpiResumeLongMode will restore the saved CR3 after we're
-            // safely back in long mode with kernel GDT/IDT.
-            uint64_t cr3val = (uint64_t)Memory::VMM::g_paging->PML4;
+            // The kernel PML4 may be above 4GB (e.g. at 0x8BF7CC000), but
+            // the 32-bit trampoline can only load a 32-bit CR3. Create a
+            // shadow copy of the PML4 at a fixed low-memory address.
+            // Only the PML4 page itself needs to be below 4GB — its entries
+            // contain full 52-bit physical addresses for sub-tables.
+            uint64_t kernelPml4Phys = (uint64_t)Memory::VMM::g_paging->PML4;
+            uint8_t* kernelPml4Virt = (uint8_t*)Memory::HHDM(kernelPml4Phys);
+            uint8_t* shadowPml4Virt = (uint8_t*)Memory::HHDM((uint64_t)SHADOW_PML4_PHYS);
+            memcpy(shadowPml4Virt, kernelPml4Virt, 4096);
 
-            // The 16-bit->32-bit trampoline path can only load 32-bit CR3.
-            // If the PML4 is above 4GB, the real-mode wake path would fail.
-            if (cr3val > 0xFFFFFFFF) {
-                KernelLogStream(ERROR, "S3") << "PML4 at " << base::hex << cr3val
-                    << " is above 4GB - real-mode wake path will fail!";
-            }
+            uint64_t cr3val = (uint64_t)SHADOW_PML4_PHYS;
+
+            KernelLogStream(DEBUG, "S3") << "Shadow PML4 at " << base::hex << cr3val
+                << " (kernel PML4 at " << base::hex << kernelPml4Phys << ")";
 
             memcpy(dataArea + 0, &cr3val, 8);
 
@@ -226,10 +329,24 @@ namespace Hal {
             uint64_t resumeAddr = (uint64_t)&AcpiResumeLongMode;
             memcpy(dataArea + 16, &resumeAddr, 8);
 
-            // Set the 32-bit waking vector only. Setting X_FirmwareWakingVector
-            // to non-zero causes this laptop's firmware to hang during wake.
+            uint16_t pm1a = (uint16_t)g_pm1aControlBlock;
+            uint16_t pm1b = (uint16_t)g_pm1bControlBlock;
+            memcpy(dataArea + 24, &pm1a, 2);
+            memcpy(dataArea + 26, &pm1b, 2);
+
+            // Always set the 32-bit real-mode waking vector (universal fallback).
             g_facs->FirmwareWakingVector = TRAMPOLINE_PHYS;
-            g_facs->X_FirmwareWakingVector = 0;
+
+            // Use the 64-bit waking vector if the firmware advertises support.
+            // FACS flags bit 1 (64BIT_WAKE_F) indicates the platform can
+            // transfer control in 64-bit mode.
+            if (g_facs->Flags & FACS_64BIT_WAKE_F) {
+                g_facs->X_FirmwareWakingVector = TRAMPOLINE_PHYS + 0x100;
+                KernelLogStream(DEBUG, "S3") << "Using 64-bit waking vector (0x8100)";
+            } else {
+                g_facs->X_FirmwareWakingVector = 0;
+                KernelLogStream(DEBUG, "S3") << "Using 32-bit waking vector (0x8000)";
+            }
 
             KernelLogStream(DEBUG, "S3") << "Trampoline installed at " << base::hex
                 << (uint64_t)TRAMPOLINE_PHYS << " (" << base::dec
@@ -237,7 +354,11 @@ namespace Hal {
             KernelLogStream(DEBUG, "S3") << "Trampoline CR3 = " << base::hex << cr3val;
         }
 
-        // ── Wait for WAK_STS ────────────────────────────────────────────
+        // ============================================================================
+
+        // Wait for WAK_STS
+
+        // ============================================================================
         static void WaitForWake() {
             // After entering S3, the CPU halts. On resume, firmware runs the
             // waking vector. But if we somehow didn't enter sleep (e.g. immediate
@@ -251,7 +372,101 @@ namespace Hal {
             }
         }
 
-        // ── Suspend ─────────────────────────────────────────────────────
+        // ============================================================================
+
+        // Resume Entry (called directly by AcpiResumeLongMode)
+
+        // ============================================================================
+        // This is a standalone function with its own stack frame, avoiding
+        // any dependency on the compiler's layout of Suspend().
+        extern "C" void AcpiResumeEntry() {
+            // Progress: reached C resume path (0xD1)
+            Io::Out8(0xF2, 0x70);
+            Io::Out8(0xD1, 0x71);
+            Io::Out8(0xF3, 0x70);
+            Io::Out8(0xDD, 0x71);
+
+            // CRITICAL: Clear SLP_EN and SLP_TYP in PM1 control registers
+            if (g_pm1aControlBlock != 0) {
+                uint16_t pm1a = Io::In16((uint16_t)g_pm1aControlBlock);
+                pm1a &= ~(PM1_SLP_EN | PM1_SLP_TYP_MASK);
+                Io::Out16(pm1a, (uint16_t)g_pm1aControlBlock);
+            }
+            if (g_pm1bControlBlock != 0) {
+                uint16_t pm1b = Io::In16((uint16_t)g_pm1bControlBlock);
+                pm1b &= ~(PM1_SLP_EN | PM1_SLP_TYP_MASK);
+                Io::Out16(pm1b, (uint16_t)g_pm1bControlBlock);
+            }
+
+            // Debug: green rectangle on framebuffer
+            {
+                uint32_t* fb = ::Graphics::Cursor::GetFramebufferBase();
+                uint64_t pitch = ::Graphics::Cursor::GetFramebufferPitch();
+                if (fb && pitch > 0) {
+                    for (int y = 0; y < 32; y++) {
+                        uint32_t* row = (uint32_t*)((uint8_t*)fb + y * pitch);
+                        for (int x = 0; x < 32; x++) {
+                            row[x] = 0xFF00FF00;
+                        }
+                    }
+                }
+            }
+
+            // Use CMOS 0x74 as step-by-step progress through reinit
+            auto reinitProgress = [](uint8_t step) {
+                Io::Out8(0xF4, 0x70);
+                Io::Out8(step, 0x71);
+            };
+
+            reinitProgress(0x01);  // GDT
+            Hal::BridgeLoadGDT();
+            reinitProgress(0x02);  // TSS
+            Hal::LoadTSS();
+            reinitProgress(0x03);  // Syscalls
+            Montauk::InitializeSyscalls();
+            reinitProgress(0x04);  // PAT
+            Hal::InitializePAT();
+            reinitProgress(0x05);  // PIC
+            Hal::DisableLegacyPic();
+            reinitProgress(0x06);  // Local APIC
+            Hal::LocalApic::Reinitialize();
+            reinitProgress(0x07);  // IO APIC
+            Hal::IoApic::Reinitialize();
+            reinitProgress(0x08);  // APIC Timer
+            Timekeeping::ApicTimerReinitialize();
+            reinitProgress(0x09);  // PM1 clear
+            ClearPM1Status();
+            reinitProgress(0x0A);  // _WAK
+            EvaluateWak(3);
+            reinitProgress(0x0B);  // PS/2
+            Drivers::PS2::Reinitialize();
+            // Re-enable ACPI events (power button) after S3
+            AcpiEvents::Reinitialize();
+            reinitProgress(0x0C);  // Intel GPU
+            if (Drivers::Graphics::IntelGPU::IsInitialized()) {
+                Drivers::Graphics::IntelGPU::Reinitialize();
+            }
+            reinitProgress(0x0D);  // sti
+            asm volatile("sti");
+
+            KernelLogStream(OK, "S3") << "Resumed from S3 suspend";
+
+            // Progress: all reinit complete (0xEE in CMOS 0x73)
+            Io::Out8(0xF3, 0x70);
+            Io::Out8(0xEE, 0x71);
+
+            // Signal Suspend() that resume is complete. AcpiResumeEntry
+            // was entered via jmp (not call), so our ret will pop the
+            // original return address from call AcpiSaveAndSuspend,
+            // returning to Suspend() which checks this flag.
+            g_resumeComplete = 1;
+        }
+
+        // ============================================================================
+
+        // Suspend
+
+        // ============================================================================
         int Suspend() {
             if (!g_s3Available) {
                 KernelLogStream(ERROR, "S3") << "S3 suspend not available";
@@ -263,77 +478,27 @@ namespace Hal {
             // 1. Evaluate _PTS(3) — Prepare To Sleep
             EvaluatePts(3);
 
-            // 2. Save CPU state. AcpiSaveAndSuspend returns 1 on initial call,
-            //    and 0 when we resume from S3 (AcpiResumeLongMode sets RAX=0).
-            int resumed = !AcpiSaveAndSuspend(&g_cpuState);
-            if (resumed) {
-                // ── RESUME PATH ─────────────────────────────────────────
-                // We just woke from S3. Firmware ran our waking vector which
-                // called AcpiResumeLongMode, restoring all registers and
-                // returning here with 0.
+            // 2. Save CPU state. On resume, AcpiResumeLongMode jumps to
+            //    AcpiResumeEntry (not back here), which does all reinit and
+            //    sets g_resumeComplete=1, then returns here via the stack.
+            g_resumeComplete = 0;
+            AcpiSaveAndSuspend(&g_cpuState);
 
-                // Debug: write a green rectangle to the top-left corner of the
-                // framebuffer. The framebuffer memory survives S3 (it's RAM).
-                // This will be visible once the GPU display plane is restored,
-                // confirming the CPU successfully completed the resume path.
-                {
-                    uint32_t* fb = ::Graphics::Cursor::GetFramebufferBase();
-                    uint64_t pitch = ::Graphics::Cursor::GetFramebufferPitch();
-                    if (fb && pitch > 0) {
-                        for (int y = 0; y < 32; y++) {
-                            uint32_t* row = (uint32_t*)((uint8_t*)fb + y * pitch);
-                            for (int x = 0; x < 32; x++) {
-                                row[x] = 0xFF00FF00; // Green (ARGB)
-                            }
-                        }
-                    }
-                }
-
-                // Reload GDT and TSS (firmware may have clobbered them)
-                Hal::BridgeLoadGDT();
-                Hal::LoadTSS();
-
-                // Re-disable legacy 8259 PIC. Firmware may have re-enabled
-                // it during S3 resume POST, which could cause spurious
-                // interrupts on conflicting vectors once we enable interrupts.
-                Hal::DisableLegacyPic();
-
-                // Re-enable the Local APIC (MSR global enable + SVR + TPR)
-                Hal::LocalApic::Reinitialize();
-
-                // Restore I/O APIC redirection entries (lost during S3).
-                // Must be done before enabling interrupts so IRQ routing
-                // is in place when devices start generating interrupts.
-                Hal::IoApic::Reinitialize();
-
-                // Restart the APIC timer
-                Timekeeping::ApicTimerReinitialize();
-
-                // Clear WAK_STS
-                ClearPM1Status();
-
-                // Evaluate _WAK(3)
-                EvaluateWak(3);
-
-                // Re-enable PS/2 controller (ports and interrupts may be
-                // disabled after S3; skip full self-test to avoid resetting
-                // attached devices)
-                Drivers::PS2::Reinitialize();
-
-                // Restore Intel GPU display (GTT + display plane lost during S3)
-                if (Drivers::Graphics::IntelGPU::IsInitialized()) {
-                    Drivers::Graphics::IntelGPU::Reinitialize();
-                }
-
-                // Re-enable interrupts
-                asm volatile("sti");
-
-                KernelLogStream(OK, "S3") << "Resumed from S3 suspend";
-
+            // If we get here after resume, AcpiResumeEntry already ran.
+            if (g_resumeComplete) {
                 return 0;
             }
 
-            // ── SUSPEND PATH (initial save returned 1) ──────────────────
+            // ============================================================================
+
+            // SUSPEND PATH (initial save returned 1)
+
+            // ============================================================================
+            // Clear CMOS progress markers before entering S3.
+            Io::Out8(0xF2, 0x70);  // CMOS register 0x72 | NMI disable
+            Io::Out8(0x00, 0x71);
+            Io::Out8(0xF3, 0x70);  // CMOS register 0x73
+            Io::Out8(0x00, 0x71);
 
             // 3. Disable interrupts
             asm volatile("cli");

@@ -16,7 +16,11 @@ using namespace Kt;
 namespace Hal {
     namespace AcpiDevices {
 
-        // ── EISAID decoding ─────────────────────────────────────────────
+        // ============================================================================
+
+        // EISAID decoding
+
+        // ============================================================================
         // ACPI encodes PNP IDs as compressed 32-bit EISAIDs.
         static void DecodeEisaId(uint32_t id, char* out) {
             // EISA ID encoding:
@@ -35,7 +39,11 @@ namespace Hal {
             out[7] = '\0';
         }
 
-        // ── String comparison ───────────────────────────────────────────
+        // ============================================================================
+
+        // String comparison
+
+        // ============================================================================
         static bool StrEqual(const char* a, const char* b) {
             while (*a && *b) {
                 if (*a != *b) return false;
@@ -53,7 +61,11 @@ namespace Hal {
             dst[i] = '\0';
         }
 
-        // ── DeviceList methods ──────────────────────────────────────────
+        // ============================================================================
+
+        // DeviceList methods
+
+        // ============================================================================
         const DeviceInfo* DeviceList::FindByHid(const char* hid) const {
             for (int i = 0; i < Count; i++) {
                 if (StrEqual(Devices[i].HardwareId, hid))
@@ -70,7 +82,11 @@ namespace Hal {
             return nullptr;
         }
 
-        // ── EvaluateSta ─────────────────────────────────────────────────
+        // ============================================================================
+
+        // EvaluateSta
+
+        // ============================================================================
         uint32_t EvaluateSta(int32_t deviceNodeIndex) {
             auto& interp = AML::GetInterpreter();
             auto& ns = interp.GetNamespace();
@@ -107,7 +123,11 @@ namespace Hal {
             return STA_DEFAULT;
         }
 
-        // ── EvaluateAdr ─────────────────────────────────────────────────
+        // ============================================================================
+
+        // EvaluateAdr
+
+        // ============================================================================
         uint64_t EvaluateAdr(int32_t deviceNodeIndex) {
             auto& interp = AML::GetInterpreter();
             auto& ns = interp.GetNamespace();
@@ -143,7 +163,11 @@ namespace Hal {
             return 0;
         }
 
-        // ── EvaluateHid ─────────────────────────────────────────────────
+        // ============================================================================
+
+        // EvaluateHid
+
+        // ============================================================================
         bool EvaluateHid(int32_t deviceNodeIndex, char* outHid, int maxLen) {
             auto& interp = AML::GetInterpreter();
             auto& ns = interp.GetNamespace();
@@ -182,7 +206,11 @@ namespace Hal {
             return false;
         }
 
-        // ── EvaluateUid ─────────────────────────────────────────────────
+        // ============================================================================
+
+        // EvaluateUid
+
+        // ============================================================================
         bool EvaluateUid(int32_t deviceNodeIndex, char* outUid, int maxLen) {
             auto& interp = AML::GetInterpreter();
             auto& ns = interp.GetNamespace();
@@ -237,7 +265,11 @@ namespace Hal {
             return false;
         }
 
-        // ── EvaluateCrs ─────────────────────────────────────────────────
+        // ============================================================================
+
+        // EvaluateCrs
+
+        // ============================================================================
         bool EvaluateCrs(int32_t deviceNodeIndex, AML::ResourceList& result) {
             auto& interp = AML::GetInterpreter();
             auto& ns = interp.GetNamespace();
@@ -268,7 +300,11 @@ namespace Hal {
             return AML::ParseResourceTemplate(crsResult.Buffer.Data, crsResult.Buffer.Length, result);
         }
 
-        // ── EnumerateAll ────────────────────────────────────────────────
+        // ============================================================================
+
+        // EnumerateAll
+
+        // ============================================================================
         void EnumerateAll(DeviceList& result) {
             auto& interp = AML::GetInterpreter();
             if (!interp.IsInitialized()) return;
@@ -323,7 +359,11 @@ namespace Hal {
             }
         }
 
-        // ── GetSleepState ───────────────────────────────────────────────
+        // ============================================================================
+
+        // GetSleepState
+
+        // ============================================================================
         SleepState GetSleepState(int state) {
             SleepState result{};
             result.Valid = false;

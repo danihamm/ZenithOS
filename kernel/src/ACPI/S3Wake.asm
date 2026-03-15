@@ -7,7 +7,9 @@
 [bits 64]
 section .text
 
-; ─── AcpiSaveAndSuspend ──────────────────────────────────────────────────
+; ═════════════════════════════════════════════════════════════════════════════
+; AcpiSaveAndSuspend
+; ═════════════════════════════════════════════════════════════════════════════
 ; extern "C" int AcpiSaveAndSuspend(CpuState* stateArea)
 ;   rdi = pointer to CpuState structure
 ;
@@ -77,7 +79,9 @@ AcpiSaveAndSuspend:
     ret
 
 
-; ─── AcpiWakeEntry ───────────────────────────────────────────────────────
+; ═════════════════════════════════════════════════════════════════════════════
+; AcpiWakeEntry
+; ═════════════════════════════════════════════════════════════════════════════
 ; This is the actual waking vector target. Firmware jumps here after S3
 ; resume. It loads the CpuState pointer from a fixed location (set before
 ; suspend) and falls through to AcpiResumeLongMode.
@@ -103,14 +107,18 @@ AcpiWakeEntry:
     jmp AcpiResumeLongMode
 
 
-; ─── Well-known pointer to CpuState (set before suspend) ────────────────
+; ═════════════════════════════════════════════════════════════════════════════
+; Well-known pointer to CpuState (set before suspend)
+; ═════════════════════════════════════════════════════════════════════════════
 ; Placed in .text so AcpiWakeEntry can use RIP-relative addressing
 ; without a cross-section relocation warning.
 ; extern "C" void* g_wakeStatePtr;
 global g_wakeStatePtr
 g_wakeStatePtr: dq 0
 
-; ─── AcpiResumeLongMode ──────────────────────────────────────────────────
+; ═════════════════════════════════════════════════════════════════════════════
+; AcpiResumeLongMode
+; ═════════════════════════════════════════════════════════════════════════════
 ; extern "C" void AcpiResumeLongMode(CpuState* stateArea)
 ;   rdi = pointer to CpuState structure
 ;
@@ -119,6 +127,12 @@ g_wakeStatePtr: dq 0
 ;
 global AcpiResumeLongMode
 AcpiResumeLongMode:
+    ; Progress: reached AcpiResumeLongMode (0xC1)
+    mov al, 0xF2
+    out 0x70, al
+    mov al, 0xC1
+    out 0x71, al
+
     ; At entry: rdi = CpuState*, RSP = trampoline stack (unmapped junk),
     ;           CR3 = kernel PML4 (loaded by trampoline), CS = trampoline selector.
     ;
@@ -140,6 +154,12 @@ AcpiResumeLongMode:
     retfq
 .reload_cs:
 
+    ; Progress: GDT + CS reloaded (0xC2)
+    mov al, 0xF2
+    out 0x70, al
+    mov al, 0xC2
+    out 0x71, al
+
     ; Reload data segment registers with kernel data selector
     mov ax, 0x10
     mov ds, ax
@@ -151,10 +171,27 @@ AcpiResumeLongMode:
     ; Restore IDT
     lidt [rdi + 0xB2]
 
+    ; Restore CR4 before CR3 — PGE, PAE, OSFXSR etc. must be set before
+    ; the page table switch. The trampoline only set minimal bits (PAE).
+    ; Real hardware needs the full saved CR4 (especially PGE for TLB
+    ; correctness and WP in CR0 for write-protect enforcement).
+    mov rax, [rdi + 0xA0]
+    mov cr4, rax
+
+    ; Restore CR0 (WP, NE, etc.)
+    mov rax, [rdi + 0x98]
+    mov cr0, rax
+
     ; Restore saved CR3 (process PML4). The trampoline used the kernel
     ; master PML4 to get here; now switch to the actual saved context.
     mov rax, [rdi + 0x90]
     mov cr3, rax
+
+    ; Progress: IDT + CR4/CR0/CR3 restored (0xC3)
+    mov al, 0xF2
+    out 0x70, al
+    mov al, 0xC3
+    out 0x71, al
 
     ; Restore general-purpose registers (skip RSP — already restored above)
     mov rbx, [rdi + 0x08]
@@ -176,9 +213,17 @@ AcpiResumeLongMode:
     push rax
     popfq
 
+    ; Progress: about to call AcpiResumeEntry (0xC4)
+    mov al, 0xF2
+    out 0x70, al
+    mov al, 0xC4
+    out 0x71, al
+
     ; Restore rdi last
     mov rdi, [rdi + 0x28]
 
-    ; Return 0 = "resumed from S3"
-    xor rax, rax
-    ret
+    ; Instead of returning to Suspend() via ret (which is fragile due to
+    ; compiler stack frame assumptions), jump directly to a dedicated C
+    ; resume function. This is how Linux and other kernels handle S3 resume.
+    extern AcpiResumeEntry
+    jmp AcpiResumeEntry

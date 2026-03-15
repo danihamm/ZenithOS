@@ -66,10 +66,22 @@ struct TextItem {
     TrueTypeFont* font; // embedded font, or nullptr for system font
 };
 
+enum GfxType { GFX_LINE, GFX_RECT_FILL, GFX_RECT_STROKE };
+
+struct GraphicsItem {
+    GfxType type;
+    float x1, y1, x2, y2;  // LINE: endpoints; RECT: x,y,w,h (PDF coords)
+    float line_width;
+    uint8_t r, g, b;
+};
+
 struct PdfPage {
     TextItem* items;
     int item_count;
     int item_cap;
+    GraphicsItem* gfx_items;
+    int gfx_count;
+    int gfx_cap;
     float width, height; // page dimensions in points (from MediaBox)
 };
 
@@ -141,6 +153,7 @@ void px_hline(uint32_t* px, int bw, int bh, int x, int y, int w, Color c);
 void px_vline(uint32_t* px, int bw, int bh, int x, int y, int h, Color c);
 void px_rect(uint32_t* px, int bw, int bh, int x, int y, int w, int h, Color c);
 void px_fill_rounded(uint32_t* px, int bw, int bh, int x, int y, int w, int h, int r, Color c);
+void px_line(uint32_t* px, int bw, int bh, int x0, int y0, int x1, int y1, int thick, Color c);
 int  str_len(const char* s);
 void str_cpy(char* dst, const char* src, int max);
 

@@ -751,6 +751,38 @@ extern "C" void _start() {
     // Load wallpaper from system desktop config
     load_login_wallpaper(ls);
 
+    // Check for setup environment (installation medium / ramdisk boot).
+    // If setup.toml exists with environment.mode = "setup", skip login
+    // entirely and launch the desktop in a passwordless live session.
+    {
+        auto doc = montauk::config::load("setup");
+        const char* mode = doc.get_string("environment.mode", "");
+        if (montauk::streq(mode, "setup")) {
+            const char* user = doc.get_string("session.username", "liveuser");
+            const char* display = doc.get_string("session.display_name", "Live User");
+            const char* role = doc.get_string("session.role", "admin");
+
+            // Create a temporary user entry so the desktop and apps can
+            // query session info normally.
+            montauk::fmkdir("0:/users");
+            montauk::user::create_user(user, display, "", role);
+            montauk::user::set_session(user);
+            doc.destroy();
+
+            // Launch desktop directly -- no login required
+            int pid = montauk::spawn("0:/os/desktop.elf", user);
+            if (pid >= 0) {
+                montauk::waitpid(pid);
+            }
+            // Desktop exited (reboot/shutdown expected in setup mode).
+            // Clear session and fall through to normal login in case
+            // setup.toml was removed during installation.
+            montauk::user::clear_session();
+        } else {
+            doc.destroy();
+        }
+    }
+
     // Check if users.toml exists (first boot detection)
     int fh = montauk::open("0:/config/users.toml");
     if (fh < 0) {

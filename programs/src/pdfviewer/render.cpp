@@ -48,6 +48,38 @@ void render(uint32_t* pixels) {
                 pixels[row * g_win_w + col] = white;
         }
 
+        // Draw graphics items (lines, filled rectangles)
+        for (int i = 0; i < page->gfx_count; i++) {
+            GraphicsItem* gi = &page->gfx_items[i];
+            Color gfx_color = Color::from_rgb(gi->r, gi->g, gi->b);
+
+            if (gi->type == GFX_RECT_FILL) {
+                // gi->x1,y1 = rect origin (PDF coords), gi->x2,y2 = width,height
+                int rx = page_x + (int)(gi->x1 * g_zoom);
+                int ry = page_y + (int)((page->height - gi->y1 - gi->y2) * g_zoom);
+                int rw = (int)(gi->x2 * g_zoom);
+                int rh = (int)(gi->y2 * g_zoom);
+                if (rw < 0) { rx += rw; rw = -rw; }
+                if (rh < 0) { ry += rh; rh = -rh; }
+                // Clip to content area
+                if (ry + rh > clip_y0 && ry < clip_y1)
+                    px_fill(pixels, g_win_w, g_win_h, rx, ry, rw, rh, gfx_color);
+            } else {
+                // GFX_LINE or GFX_RECT_STROKE
+                int lx0 = page_x + (int)(gi->x1 * g_zoom);
+                int ly0 = page_y + (int)((page->height - gi->y1) * g_zoom);
+                int lx1 = page_x + (int)(gi->x2 * g_zoom);
+                int ly1 = page_y + (int)((page->height - gi->y2) * g_zoom);
+                int lw = (int)(gi->line_width * g_zoom + 0.5f);
+                if (lw < 1) lw = 1;
+                // Basic clip check
+                int min_y = ly0 < ly1 ? ly0 : ly1;
+                int max_y = ly0 > ly1 ? ly0 : ly1;
+                if (max_y + lw >= clip_y0 && min_y - lw < clip_y1)
+                    px_line(pixels, g_win_w, g_win_h, lx0, ly0, lx1, ly1, lw, gfx_color);
+            }
+        }
+
         // Draw text items
         for (int i = 0; i < page->item_count; i++) {
             TextItem* item = &page->items[i];
@@ -75,11 +107,18 @@ void render(uint32_t* pixels) {
             if (px_size < 4) px_size = 4;
             if (px_size > 120) px_size = 120;
 
+            // draw_to_buffer treats y as top of text box, but PDF
+            // specifies the baseline.  Subtract ascent so the rendered
+            // baseline lands at the correct position.
+            GlyphCache* gc = font->get_cache(px_size);
+            int baseline_adj = gc ? gc->ascent : (int)(px_size * 0.8f);
+            int ty = sy - baseline_adj;
+
             if (item->font) {
                 // Embedded font: pass raw character codes directly
                 // (subset fonts use codes 0-N that map through the font's cmap)
                 font->draw_to_buffer(pixels, g_win_w, g_win_h,
-                    sx, sy, item->text, TEXT_COLOR, px_size);
+                    sx, ty, item->text, TEXT_COLOR, px_size);
             } else {
                 // System font: filter out non-printable characters
                 char render_text[MAX_TEXT_LEN];
@@ -96,7 +135,7 @@ void render(uint32_t* pixels) {
 
                 if (ri > 0) {
                     font->draw_to_buffer(pixels, g_win_w, g_win_h,
-                        sx, sy, render_text, TEXT_COLOR, px_size);
+                        sx, ty, render_text, TEXT_COLOR, px_size);
                 }
             }
         }

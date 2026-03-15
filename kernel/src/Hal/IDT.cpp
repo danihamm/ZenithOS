@@ -11,6 +11,7 @@
 #include <Platform/Registers.hpp>
 #include <CppLib/Stream.hpp>
 #include <Memory/PageFrameAllocator.hpp>
+#include <Sched/Scheduler.hpp>
 
 namespace Hal {
     constexpr auto InterruptGate = 0x8E;
@@ -53,11 +54,40 @@ namespace Hal {
         "Reserved"
     };
 
+    // Exceptions that push a hardware error code before IP/CS/FLAGS/SP/SS
+    static bool ExceptionHasErrorCode(uint8_t vector) {
+        return vector == 8 || (vector >= 10 && vector <= 14)
+            || vector == 17 || vector == 21 || vector == 29 || vector == 30;
+    }
+
+    // Extract CS from the interrupt frame. For error-code exceptions, the
+    // error code sits at offset 0, shifting IP to +8 and CS to +16.
+    static uint64_t GetExceptionCS(uint8_t vector, System::PanicFrame* frame) {
+        if (ExceptionHasErrorCode(vector)) {
+            return *(uint64_t*)((uint8_t*)frame + 16);
+        }
+        return frame->CS;
+    }
+
     template<size_t i>
     __attribute__((interrupt)) void ExceptionHandler(System::PanicFrame* frame)
     {
-        frame->InterruptVector = i;
-        Panic(ExceptionStrings[i], frame);
+        uint64_t cs = GetExceptionCS(i, frame);
+
+        // If the fault originated in user-mode (ring 3), kill the process
+        // instead of panicking the entire system.
+        if ((cs & 3) == 3 && Sched::GetCurrentPid() >= 0) {
+            auto* proc = Sched::GetCurrentProcessPtr();
+            Kt::KernelLogStream(Kt::ERROR, "Exception")
+                << ExceptionStrings[i] << " in process \""
+                << proc->name << "\" (pid " << proc->pid
+                << ") - process terminated";
+            Sched::ExitProcess();
+            __builtin_unreachable();
+        } else {
+            frame->InterruptVector = i;
+            Panic(ExceptionStrings[i], frame);
+        }
     }
 
     void LoadIDT(IDTRStruct& idtr) {

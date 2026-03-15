@@ -887,6 +887,9 @@ static void add_page(int obj_num) {
     g_doc.pages[g_doc.page_count].items = nullptr;
     g_doc.pages[g_doc.page_count].item_count = 0;
     g_doc.pages[g_doc.page_count].item_cap = 0;
+    g_doc.pages[g_doc.page_count].gfx_items = nullptr;
+    g_doc.pages[g_doc.page_count].gfx_count = 0;
+    g_doc.pages[g_doc.page_count].gfx_cap = 0;
     g_doc.pages[g_doc.page_count].width = 612;
     g_doc.pages[g_doc.page_count].height = 792;
     g_doc.page_count++;
@@ -1457,6 +1460,7 @@ void free_pdf() {
     if (g_doc.pages) {
         for (int i = 0; i < g_doc.page_count; i++) {
             if (g_doc.pages[i].items) montauk::mfree(g_doc.pages[i].items);
+            if (g_doc.pages[i].gfx_items) montauk::mfree(g_doc.pages[i].gfx_items);
         }
         montauk::mfree(g_doc.pages);
         g_doc.pages = nullptr;

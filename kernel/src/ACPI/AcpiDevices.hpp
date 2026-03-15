@@ -11,7 +11,11 @@
 namespace Hal {
     namespace AcpiDevices {
 
-        // ── Device Status Flags (_STA) ──────────────────────────────────
+        // ============================================================================
+
+        // Device Status Flags (_STA)
+
+        // ============================================================================
         static constexpr uint32_t STA_PRESENT     = (1 << 0);
         static constexpr uint32_t STA_ENABLED     = (1 << 1);
         static constexpr uint32_t STA_VISIBLE     = (1 << 2);
@@ -21,7 +25,11 @@ namespace Hal {
         // Default _STA when no _STA method exists: present + enabled + visible + functional
         static constexpr uint32_t STA_DEFAULT     = 0x0F;
 
-        // ── Device Info ─────────────────────────────────────────────────
+        // ============================================================================
+
+        // Device Info
+
+        // ============================================================================
         struct DeviceInfo {
             char     Path[128];       // full namespace path
             char     HardwareId[16];  // _HID value (e.g. "PNP0A03", "ACPI0001")
@@ -47,8 +55,11 @@ namespace Hal {
             const DeviceInfo* FindByPath(const char* path) const;
         };
 
-        // ── Enumeration API ─────────────────────────────────────────────
+        // ============================================================================
 
+        // Enumeration API
+
+        // ============================================================================
         // Enumerate all ACPI devices in the namespace.
         // The interpreter must be initialized first (LoadTable called).
         void EnumerateAll(DeviceList& result);
@@ -69,7 +80,11 @@ namespace Hal {
         // Evaluate _CRS (Current Resource Settings) for a device node.
         bool EvaluateCrs(int32_t deviceNodeIndex, AML::ResourceList& result);
 
-        // ── Well-known HIDs ─────────────────────────────────────────────
+        // ============================================================================
+
+        // Well-known HIDs
+
+        // ============================================================================
         // PCI Host Bridge
         static constexpr const char* HID_PCI_HOST   = "PNP0A03";
         static constexpr const char* HID_PCIE_HOST  = "PNP0A08";
@@ -98,7 +113,11 @@ namespace Hal {
         // ACPI AC Adapter
         static constexpr const char* HID_AC_ADAPTER = "ACPI0003";
 
-        // ── Sleep State Support ─────────────────────────────────────────
+        // ============================================================================
+
+        // Sleep State Support
+
+        // ============================================================================
         // Extract sleep state values from namespace objects (\_S0_ through \_S5_).
         struct SleepState {
             uint16_t SLP_TYPa;

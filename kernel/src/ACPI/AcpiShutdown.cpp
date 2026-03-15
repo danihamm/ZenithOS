@@ -6,6 +6,7 @@
 
 #include "AcpiShutdown.hpp"
 #include "AcpiSleep.hpp"
+#include "AcpiEvents.hpp"
 #include <ACPI/FADT.hpp>
 #include <ACPI/AML/AmlParser.hpp>
 #include <ACPI/AML/AmlInterpreter.hpp>
@@ -67,6 +68,9 @@ namespace Hal {
 
             // Initialize S3 suspend support (reads FACS and \_S3_ from namespace)
             AcpiSleep::Initialize(xsdt);
+
+            // Initialize ACPI event handling (SCI interrupt, power button)
+            AcpiEvents::Initialize(fadt);
         }
 
         bool IsAvailable() {
@@ -77,6 +81,19 @@ namespace Hal {
             if (!g_available) return;
 
             KernelLogStream(INFO, "ACPI") << "Performing ACPI S5 shutdown...";
+
+            // Evaluate _PTS(5) — Prepare To Sleep (S5 = soft-off)
+            auto& interp = AML::GetInterpreter();
+            if (interp.IsInitialized()) {
+                int32_t node = interp.GetNamespace().FindNode("\\_PTS");
+                if (node >= 0) {
+                    AML::Object arg{};
+                    arg.Type = AML::ObjectType::Integer;
+                    arg.Integer = 5;
+                    AML::Object result{};
+                    interp.EvaluateMethod("\\_PTS", &arg, 1, result);
+                }
+            }
 
             asm volatile("cli");
 

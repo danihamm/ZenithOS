@@ -84,6 +84,46 @@ void px_fill_rounded(uint32_t* px, int bw, int bh,
     }
 }
 
+void px_line(uint32_t* px, int bw, int bh,
+             int x0, int y0, int x1, int y1, int thick, Color c) {
+    if (thick < 1) thick = 1;
+    int half = thick / 2;
+
+    // Horizontal line
+    if (y0 == y1) {
+        int lx = x0 < x1 ? x0 : x1;
+        int rx = x0 > x1 ? x0 : x1;
+        px_fill(px, bw, bh, lx, y0 - half, rx - lx + 1, thick, c);
+        return;
+    }
+    // Vertical line
+    if (x0 == x1) {
+        int ty = y0 < y1 ? y0 : y1;
+        int by = y0 > y1 ? y0 : y1;
+        px_fill(px, bw, bh, x0 - half, ty, thick, by - ty + 1, c);
+        return;
+    }
+    // General case: Bresenham with thickness
+    uint32_t v = c.to_pixel();
+    int dx = x1 - x0; int sx = dx > 0 ? 1 : -1; if (dx < 0) dx = -dx;
+    int dy = y1 - y0; int sy = dy > 0 ? 1 : -1; if (dy < 0) dy = -dy;
+    int err = dx - dy;
+    int cx = x0, cy = y0;
+    while (true) {
+        for (int oy = -half; oy <= half; oy++) {
+            for (int ox = -half; ox <= half; ox++) {
+                int px_x = cx + ox, py_y = cy + oy;
+                if (px_x >= 0 && px_x < bw && py_y >= 0 && py_y < bh)
+                    px[py_y * bw + px_x] = v;
+            }
+        }
+        if (cx == x1 && cy == y1) break;
+        int e2 = 2 * err;
+        if (e2 > -dy) { err -= dy; cx += sx; }
+        if (e2 < dx) { err += dx; cy += sy; }
+    }
+}
+
 int str_len(const char* s) {
     int n = 0;
     while (s[n]) n++;
