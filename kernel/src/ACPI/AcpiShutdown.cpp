@@ -69,8 +69,8 @@ namespace Hal {
             // Initialize S3 suspend support (reads FACS and \_S3_ from namespace)
             AcpiSleep::Initialize(xsdt);
 
-            // Initialize ACPI event handling (SCI interrupt, power button)
-            AcpiEvents::Initialize(fadt);
+            // Note: ACPI event handling (SCI, power button) is initialized
+            // from Main.cpp after the APIC subsystem is ready.
         }
 
         bool IsAvailable() {

@@ -1,0 +1,8 @@
+[app]
+name = "Montauk Quest"
+binary = "rpgdemo.elf"
+icon = "icon.svg"
+
+[menu]
+category = "Games"
+visible = true

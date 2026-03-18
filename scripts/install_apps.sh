@@ -29,6 +29,7 @@ APPS=(
     "music|apps/scalable/audio-player.svg"
     "video|apps/scalable/multimedia-video-player.svg"
     "bluetooth|apps/scalable/bluetooth.svg"
+    "rpgdemo|apps/scalable/utilities-terminal.svg"
 )
 
 installed=0

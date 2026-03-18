@@ -79,8 +79,7 @@ namespace Hal {
                 KernelLogStream(INFO, "ACPI") << "Sleep button pressed";
             }
 
-            // Send EOI
-            LocalApic::SendEOI();
+            // Note: EOI is sent by HalIrqDispatch after this handler returns.
         }
 
         // ============================================================================
@@ -88,7 +87,13 @@ namespace Hal {
         // Initialize
 
         // ============================================================================
-        void Initialize(const FADT::ParsedFADT& fadt) {
+        void Initialize(ACPI::CommonSDTHeader* xsdt) {
+            FADT::ParsedFADT fadt{};
+            if (!FADT::Parse(xsdt, fadt) || !fadt.Valid) {
+                KernelLogStream(ERROR, "ACPI") << "Failed to parse FADT - ACPI events unavailable";
+                return;
+            }
+
             g_pm1aEventBlock = fadt.PM1aEventBlock;
             g_pm1bEventBlock = fadt.PM1bEventBlock;
             g_pm1EventLength = fadt.PM1EventLength;

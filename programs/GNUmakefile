@@ -59,7 +59,7 @@ BINDIR := bin
 PROGRAMS := $(notdir $(wildcard src/*))
 
 # Programs with custom Makefiles (built separately).
-CUSTOM_BUILDS := doom fetch wiki wikipedia weather imageviewer fontpreview spreadsheet pdfviewer disks devexplorer installer volume music bluetooth desktop login shell
+CUSTOM_BUILDS := doom fetch wiki wikipedia weather imageviewer fontpreview spreadsheet pdfviewer disks devexplorer installer volume music bluetooth desktop login shell rpgdemo
 SYSTEM_PROGRAMS := $(filter-out $(CUSTOM_BUILDS),$(PROGRAMS))
 
 # Build targets: system programs go to bin/os/, apps go to bin/apps/<name>/.
@@ -81,9 +81,9 @@ CA_CERTS := $(BINDIR)/etc/ca-certificates.crt
 # Common shared assets (wallpapers, etc.)
 COMMONKEEP := $(BINDIR)/common/.keep
 
-.PHONY: all clean doom fetch wiki wikipedia weather imageviewer fontpreview spreadsheet pdfviewer disks devexplorer installer volume music bluetooth login desktop shell icons fonts bearssl libc tls libjpeg install-apps
+.PHONY: all clean doom fetch wiki wikipedia weather imageviewer fontpreview spreadsheet pdfviewer disks devexplorer installer volume music bluetooth login desktop shell rpgdemo icons fonts bearssl libc tls libjpeg install-apps
 
-all: bearssl libc libjpeg tls $(TARGETS) fetch wiki wikipedia weather imageviewer fontpreview spreadsheet pdfviewer disks devexplorer installer volume music bluetooth doom login desktop shell icons fonts install-apps $(MANDST) $(WWWDST) $(CA_CERTS) $(COMMONKEEP)
+all: bearssl libc libjpeg tls $(TARGETS) fetch wiki wikipedia weather imageviewer fontpreview spreadsheet pdfviewer disks devexplorer installer volume music bluetooth doom rpgdemo login desktop shell icons fonts install-apps $(MANDST) $(WWWDST) $(CA_CERTS) $(COMMONKEEP)
 
 # Build BearSSL static library (cross-compiled for freestanding x86_64).
 BEARSSL_INCLUDES := -isystem $(shell cd .. && pwd)/kernel/freestnd-c-hdrs/x86_64/include -isystem $(abspath include/libc)
@@ -184,12 +184,16 @@ icons:
 fonts:
 	../scripts/copy_fonts.sh
 
+# Build RPG demo game via its own Makefile (depends on libc).
+rpgdemo: libc
+	$(MAKE) -C src/rpgdemo
+
 # Build doom via its own Makefile.
 doom:
 	$(MAKE) -C src/doom
 
 # Install app bundles (manifests, icons, data files) into bin/apps/<name>/.
-install-apps: doom spreadsheet weather wikipedia imageviewer fontpreview pdfviewer disks devexplorer installer volume music bluetooth
+install-apps: doom rpgdemo spreadsheet weather wikipedia imageviewer fontpreview pdfviewer disks devexplorer installer volume music bluetooth
 	../scripts/install_apps.sh
 
 # Copy man pages into bin/man/ so mkramdisk.sh picks them up.
@@ -241,3 +245,4 @@ clean:
 	$(MAKE) -C src/volume clean
 	$(MAKE) -C src/music clean
 	$(MAKE) -C src/bluetooth clean
+	$(MAKE) -C src/rpgdemo clean

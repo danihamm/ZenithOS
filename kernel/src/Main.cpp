@@ -21,6 +21,7 @@
 #include <Memory/Paging.hpp>
 #include <ACPI/ACPI.hpp>
 #include <ACPI/AcpiShutdown.hpp>
+#include <ACPI/AcpiEvents.hpp>
 #include <Hal/Apic/ApicInit.hpp>
 #include <Pci/Pci.hpp>
 #include <Timekeeping/ApicTimer.hpp>
@@ -143,6 +144,9 @@ extern "C" void kmain() {
         Hal::AcpiShutdown::Initialize(g_acpi.GetXSDT());
 
         Hal::ApicInitialize(g_acpi.GetXSDT());
+
+        // Initialize ACPI events (SCI, power button) after APIC is ready
+        Hal::AcpiEvents::Initialize(g_acpi.GetXSDT());
 
         Pci::Initialize(g_acpi.GetXSDT());
 

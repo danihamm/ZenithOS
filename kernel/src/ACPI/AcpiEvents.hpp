@@ -13,8 +13,8 @@ namespace Hal {
 
         // Initialize ACPI event handling: route the SCI interrupt,
         // register the handler, and enable fixed events (power button).
-        // Must be called after APIC and FADT initialization.
-        void Initialize(const FADT::ParsedFADT& fadt);
+        // Must be called after APIC initialization.
+        void Initialize(ACPI::CommonSDTHeader* xsdt);
 
         // Re-enable ACPI events after S3 resume.
         void Reinitialize();
