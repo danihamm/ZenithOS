@@ -12,7 +12,9 @@ MontaukOS is a hobbyist operating system written in modern C++. It runs on bare 
 * Support for Intel High Definition (HDA) audio devices
 * Userspace and kernel audio support
 * Support for (some) Intel Bluetooth devices, userspace Bluetooth management app
-* VFS using numbered drive identifiers with ramdisk support
+* Support for the GPT partition table
+* VFS using numbered drive identifiers with support for ext2 and FAT32 filesystems
+* Support for AHCI and NVMe SSD drives
 * Support for UEFI Runtime Services, including power management calls (shutdown/reboot)
 * Customizable desktop environment with 12+ graphical apps, including a terminal emulator, file manager, Wikipedia client, weather app, DOOM, and more
 * Modern icon pack (Flat Remix) used in desktop environment
