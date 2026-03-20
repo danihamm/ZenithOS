@@ -1031,18 +1031,17 @@ extern "C" void _start() {
 
     while (true) {
         Montauk::WinEvent ev;
-        int r = montauk::win_poll(win_id, &ev);
-
-        if (r < 0) break;
-
         bool redraw = false;
+        bool quit = false;
+        int r;
 
-        if (r > 0) {
-            if (ev.type == 3) break; // close
+        // Drain all pending events before rendering
+        while ((r = montauk::win_poll(win_id, &ev)) > 0) {
+            if (ev.type == 3) { quit = true; break; }
 
             // Keyboard
             if (ev.type == 0 && ev.key.pressed) {
-                if (ev.key.scancode == 0x01) break; // Escape
+                if (ev.key.scancode == 0x01) { quit = true; break; }
                 if (ev.key.ascii == ' ') {
                     if (g.play_state == PlayState::Stopped && g.file_count > 0)
                         start_track(g.current_track >= 0 ? g.current_track : 0);
@@ -1064,7 +1063,7 @@ extern "C" void _start() {
                 }
             }
 
-            // Mouse click
+            // Mouse
             if (ev.type == 1) {
                 bool clicked = (ev.mouse.buttons & 1) && !(ev.mouse.prev_buttons & 1);
                 bool released = !(ev.mouse.buttons & 1) && (ev.mouse.prev_buttons & 1);
@@ -1135,6 +1134,8 @@ extern "C" void _start() {
                 redraw = true;
             }
         }
+
+        if (quit || r < 0) break;
 
         // Feed audio data to the device
         feed_audio();
