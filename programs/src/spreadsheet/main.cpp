@@ -60,6 +60,25 @@ UndoEntry* g_undo[UNDO_MAX + 1];
 int g_undo_count = 0;
 int g_undo_pos = 0;
 
+// Formula autocomplete
+bool g_ac_open = false;
+int  g_ac_sel = 0;
+int  g_ac_count = 0;
+char g_ac_matches[AC_MAX_MATCHES][16];
+char g_ac_hints[AC_MAX_MATCHES][32];
+
+// Fill handle
+bool g_fill_dragging = false;
+int  g_fill_target_row = 0;
+
+// Mouse drag selection
+bool g_mouse_selecting = false;
+
+// Double-click detection
+uint64_t g_last_click_ms = 0;
+int  g_last_click_col = -1;
+int  g_last_click_row = -1;
+
 // ============================================================================
 // Hit testing
 // ============================================================================
@@ -87,6 +106,28 @@ bool hit_cell(int mx, int my, int* out_col, int* out_row) {
 
     *out_col = MAX_COLS - 1;
     return true;
+}
+
+bool hit_fill_handle(int mx, int my) {
+    if (g_editing) return false;
+
+    int c0, r0, c1, r1;
+    sel_range(&c0, &r0, &c1, &r1);
+
+    int pbh = g_pathbar_open ? PATHBAR_H : 0;
+    int grid_y = TOOLBAR_H + pbh + FORMULA_BAR_H + COL_HEADER_H;
+
+    int sx = col_x(c0) - g_scroll_x;
+    int sw = 0;
+    for (int c = c0; c <= c1; c++) sw += g_col_widths[c];
+    int sy = grid_y + r0 * ROW_H - g_scroll_y;
+    int sh = (r1 - r0 + 1) * ROW_H;
+
+    int fhx = sx + sw - FILL_HANDLE_SIZE / 2;
+    int fhy = sy + sh - FILL_HANDLE_SIZE / 2;
+
+    return mx >= fhx - 3 && mx <= fhx + FILL_HANDLE_SIZE + 3 &&
+           my >= fhy - 3 && my <= fhy + FILL_HANDLE_SIZE + 3;
 }
 
 bool handle_toolbar_click(int mx, int my) {
@@ -202,8 +243,7 @@ extern "C" void _start() {
     char args[512] = {};
     int arglen = montauk::getargs(args, sizeof(args));
     if (arglen > 0 && args[0]) {
-        str_cpy(g_filepath, args, 256);
-        load_file(g_filepath);
+        load_file(args);
     }
 
     // Build window title
@@ -295,21 +335,56 @@ extern "C" void _start() {
                 goto done_keys;
             }
 
+            // Autocomplete interaction (when editing with autocomplete open)
+            if (g_ac_open && g_editing) {
+                if (key.scancode == 0x48) { // Up
+                    g_ac_sel = (g_ac_sel - 1 + g_ac_count) % g_ac_count;
+                    redraw = true;
+                    goto done_keys;
+                }
+                if (key.scancode == 0x50) { // Down
+                    g_ac_sel = (g_ac_sel + 1) % g_ac_count;
+                    redraw = true;
+                    goto done_keys;
+                }
+                if (key.ascii == '\t') { // Tab: accept autocomplete
+                    accept_autocomplete();
+                    update_autocomplete();
+                    redraw = true;
+                    goto done_keys;
+                }
+                if (key.ascii == '\n' || key.ascii == '\r') {
+                    // Enter: accept autocomplete then commit
+                    accept_autocomplete();
+                    g_ac_open = false;
+                    commit_edit();
+                    if (g_sel_row < MAX_ROWS - 1) g_sel_row++;
+                    ensure_sel_visible();
+                    redraw = true;
+                    goto done_keys;
+                }
+                if (key.scancode == 0x01) { // Escape: close autocomplete only
+                    g_ac_open = false;
+                    redraw = true;
+                    goto done_keys;
+                }
+            }
+
             // Escape: cancel edit or quit
             if (key.scancode == 0x01) {
-                if (g_editing) { cancel_edit(); redraw = true; }
+                if (g_editing) { cancel_edit(); g_ac_open = false; redraw = true; }
                 else break;
             }
             // Enter: commit edit and move down
             else if (key.ascii == '\n' || key.ascii == '\r') {
-                if (g_editing) commit_edit();
+                if (g_editing) { commit_edit(); g_ac_open = false; }
                 if (g_sel_row < MAX_ROWS - 1) g_sel_row++;
                 ensure_sel_visible();
                 redraw = true;
             }
-            // Tab: commit and move right
+            // Tab: commit and move right (or accept autocomplete above)
             else if (key.ascii == '\t') {
-                if (g_editing) commit_edit();
+                if (g_editing) { commit_edit(); g_ac_open = false; }
                 if (key.shift) {
                     if (g_sel_col > 0) g_sel_col--;
                 } else {
@@ -372,6 +447,7 @@ extern "C" void _start() {
                         g_edit_len--;
                         g_edit_cursor--;
                         g_edit_buf[g_edit_len] = '\0';
+                        update_autocomplete();
                     }
                     redraw = true;
                 } else {
@@ -394,6 +470,7 @@ extern "C" void _start() {
                             g_edit_buf[i] = g_edit_buf[i + 1];
                         g_edit_len--;
                         g_edit_buf[g_edit_len] = '\0';
+                        update_autocomplete();
                     }
                     redraw = true;
                 } else {
@@ -411,10 +488,40 @@ extern "C" void _start() {
             // Edit mode arrow keys (cursor movement within formula bar)
             else if (key.scancode == 0x4B && g_editing) {
                 if (g_edit_cursor > 0) g_edit_cursor--;
+                update_autocomplete();
                 redraw = true;
             }
             else if (key.scancode == 0x4D && g_editing) {
                 if (g_edit_cursor < g_edit_len) g_edit_cursor++;
+                update_autocomplete();
+                redraw = true;
+            }
+            // Home key
+            else if (key.scancode == 0x47) {
+                if (g_editing) {
+                    g_edit_cursor = 0;
+                    update_autocomplete();
+                } else {
+                    g_sel_col = 0;
+                    clear_selection();
+                    ensure_sel_visible();
+                }
+                redraw = true;
+            }
+            // End key
+            else if (key.scancode == 0x4F) {
+                if (g_editing) {
+                    g_edit_cursor = g_edit_len;
+                    update_autocomplete();
+                } else {
+                    // Jump to last non-empty column in current row
+                    int last = 0;
+                    for (int c = 0; c < MAX_COLS; c++)
+                        if (g_cells[g_sel_row][c].input[0]) last = c;
+                    g_sel_col = last;
+                    clear_selection();
+                    ensure_sel_visible();
+                }
                 redraw = true;
             }
             // Ctrl+B: bold toggle
@@ -487,6 +594,7 @@ extern "C" void _start() {
                     g_edit_cursor++;
                     g_edit_buf[g_edit_len] = '\0';
                 }
+                update_autocomplete();
                 redraw = true;
             }
             // F2: edit current cell content (append mode)
@@ -510,11 +618,15 @@ extern "C" void _start() {
             int pbh = g_pathbar_open ? PATHBAR_H : 0;
             int header_y = TOOLBAR_H + pbh + FORMULA_BAR_H;
 
-            // Update cursor style: resize_h when hovering near column border in header
+            // Update cursor style
             {
                 int cursor = 0; // arrow
                 if (g_col_resizing) {
                     cursor = 1; // resize_h while dragging
+                } else if (g_fill_dragging) {
+                    cursor = 2; // crosshair during fill
+                } else if (hit_fill_handle(mx, my)) {
+                    cursor = 2; // crosshair on fill handle
                 } else if (my >= header_y && my < header_y + COL_HEADER_H) {
                     for (int c = 0; c < MAX_COLS; c++) {
                         int cx = col_x(c) - g_scroll_x + g_col_widths[c] - 1;
@@ -525,6 +637,33 @@ extern "C" void _start() {
                     }
                 }
                 montauk::win_setcursor(win_id, cursor);
+            }
+
+            // Fill handle: drag in progress
+            if (g_fill_dragging) {
+                if (left_held) {
+                    int col, row;
+                    if (hit_cell(mx, my, &col, &row)) {
+                        int c0, r0, c1, r1;
+                        sel_range(&c0, &r0, &c1, &r1);
+                        if (row > r1 && row != g_fill_target_row) {
+                            g_fill_target_row = row;
+                            redraw = true;
+                        }
+                    }
+                }
+                if (left_released) {
+                    int c0, r0, c1, r1;
+                    sel_range(&c0, &r0, &c1, &r1);
+                    if (g_fill_target_row > r1) {
+                        fill_down(r0, c0, r1, c1, g_fill_target_row);
+                        g_sel_row = g_fill_target_row;
+                        g_has_selection = true;
+                    }
+                    g_fill_dragging = false;
+                    redraw = true;
+                }
+                goto done_mouse;
             }
 
             // Column resize: drag in progress
@@ -543,11 +682,39 @@ extern "C" void _start() {
                 goto done_mouse;
             }
 
-            // Column resize: start drag (click near right edge of column header)
+            // Mouse drag selection: extend while dragging
+            if (g_mouse_selecting && left_held && !clicked) {
+                int col, row;
+                if (hit_cell(mx, my, &col, &row)) {
+                    if (col != g_sel_col || row != g_sel_row) {
+                        g_sel_col = col;
+                        g_sel_row = row;
+                        g_has_selection = (col != g_anchor_col || row != g_anchor_row);
+                        redraw = true;
+                    }
+                }
+            }
+            if (left_released) {
+                g_mouse_selecting = false;
+            }
+
+            // Column resize or auto-fit: click/double-click near column header border
             if (clicked && my >= header_y && my < header_y + COL_HEADER_H) {
                 for (int c = 0; c < MAX_COLS; c++) {
                     int cx = col_x(c) - g_scroll_x + g_col_widths[c] - 1;
                     if (mx >= cx - COL_RESIZE_GRAB && mx <= cx + COL_RESIZE_GRAB) {
+                        // Double-click: auto-fit column width
+                        uint64_t now = montauk::get_milliseconds();
+                        if (g_last_click_col == c && (now - g_last_click_ms) < DBLCLICK_MS) {
+                            auto_fit_column(c);
+                            clamp_scroll();
+                            g_last_click_ms = 0;
+                            redraw = true;
+                            goto done_mouse;
+                        }
+                        g_last_click_ms = now;
+                        g_last_click_col = c;
+
                         g_col_resizing = true;
                         g_col_resize_idx = c;
                         g_col_resize_start_x = mx;
@@ -565,12 +732,41 @@ extern "C" void _start() {
                     redraw = true;
                 }
                 else {
+                    // Check fill handle first
+                    if (hit_fill_handle(mx, my)) {
+                        int c0, r0, c1, r1;
+                        sel_range(&c0, &r0, &c1, &r1);
+                        g_fill_dragging = true;
+                        g_fill_target_row = r1;
+                        goto done_mouse;
+                    }
+
                     int col, row;
                     if (hit_cell(mx, my, &col, &row)) {
-                        if (g_editing) commit_edit();
+                        if (g_editing) { commit_edit(); g_ac_open = false; }
+
+                        // Double-click cell: start editing
+                        uint64_t now = montauk::get_milliseconds();
+                        if (col == g_last_click_col && row == g_last_click_row &&
+                            (now - g_last_click_ms) < DBLCLICK_MS) {
+                            g_sel_col = col;
+                            g_sel_row = row;
+                            clear_selection();
+                            start_editing();
+                            g_last_click_ms = 0;
+                            redraw = true;
+                            goto done_mouse;
+                        }
+                        g_last_click_ms = now;
+                        g_last_click_col = col;
+                        g_last_click_row = row;
+
                         g_sel_col = col;
                         g_sel_row = row;
-                        clear_selection();
+                        g_anchor_col = col;
+                        g_anchor_row = row;
+                        g_has_selection = false;
+                        g_mouse_selecting = true;
                         g_fmt_dropdown_open = false;
                         redraw = true;
                     }

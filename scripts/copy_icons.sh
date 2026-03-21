@@ -82,6 +82,19 @@ ICONS=(
     "apps/scalable/utilities-system-monitor.svg" # system monitor
     "apps/scalable/drive-harddisk.svg"
     "actions/16/trash-empty.svg"
+    "places/scalable/folder-blue-home.svg"
+    "places/scalable/folder-blue-development.svg"
+    "places/scalable/folder-blue-documents.svg"
+    "places/scalable/folder-blue-desktop.svg"
+    "places/scalable/folder-blue-music.svg"
+    "places/scalable/folder-blue-videos.svg"
+    "places/scalable/folder-blue-pictures.svg"
+    "places/scalable/folder-blue-downloads.svg"
+    "actions/16/edit-copy.svg"
+    "actions/16/edit-cut.svg"
+    "actions/16/edit-paste.svg"
+    "actions/16/edit-rename.svg"
+    "actions/16/folder-new.svg"
     "apps/scalable/pavucontrol.svg" # for volume control app
     "actions/16/media-pause.svg"
     "actions/16/media-play.svg"
@@ -95,6 +108,7 @@ ICONS=(
     "apps/scalable/gnome-logout.svg"
     "apps/scalable/lock.svg"
     "apps/scalable/sleep.svg"
+    "apps/scalable/kolourpaint.svg" # paint app
 )
 
 copied=0

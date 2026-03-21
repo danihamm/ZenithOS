@@ -95,6 +95,20 @@ struct DesktopState {
     SvgIcon icon_drive;
     SvgIcon icon_drive_lg;
     SvgIcon icon_delete;
+    SvgIcon icon_copy;
+    SvgIcon icon_cut;
+    SvgIcon icon_paste;
+    SvgIcon icon_rename;
+    SvgIcon icon_folder_new;
+    SvgIcon icon_home_folder;
+    SvgIcon icon_home_folder_lg;
+    SvgIcon icon_apps;
+    SvgIcon icon_apps_lg;
+
+    // Special user folder icons (16x16 and 48x48)
+    static constexpr int SPECIAL_FOLDER_COUNT = 6;
+    SvgIcon icon_special_folder[SPECIAL_FOLDER_COUNT];
+    SvgIcon icon_special_folder_lg[SPECIAL_FOLDER_COUNT];
 
     SvgIcon icon_settings;
     SvgIcon icon_reboot;

@@ -59,7 +59,7 @@ BINDIR := bin
 PROGRAMS := $(notdir $(wildcard src/*))
 
 # Programs with custom Makefiles (built separately).
-CUSTOM_BUILDS := doom fetch wiki wikipedia weather imageviewer fontpreview spreadsheet pdfviewer disks devexplorer installer volume music bluetooth desktop login shell rpgdemo
+CUSTOM_BUILDS := doom fetch wiki wikipedia weather imageviewer fontpreview spreadsheet pdfviewer disks devexplorer installer volume music bluetooth desktop login shell rpgdemo paint tcc
 SYSTEM_PROGRAMS := $(filter-out $(CUSTOM_BUILDS),$(PROGRAMS))
 
 # Build targets: system programs go to bin/os/, apps go to bin/apps/<name>/.
@@ -81,9 +81,9 @@ CA_CERTS := $(BINDIR)/etc/ca-certificates.crt
 # Common shared assets (wallpapers, etc.)
 COMMONKEEP := $(BINDIR)/common/.keep
 
-.PHONY: all clean doom fetch wiki wikipedia weather imageviewer fontpreview spreadsheet pdfviewer disks devexplorer installer volume music bluetooth login desktop shell rpgdemo icons fonts bearssl libc tls libjpeg install-apps
+.PHONY: all clean doom fetch wiki wikipedia weather imageviewer fontpreview spreadsheet pdfviewer disks devexplorer installer volume music bluetooth login desktop shell rpgdemo paint tcc icons fonts bearssl libc tls libjpeg install-apps
 
-all: bearssl libc libjpeg tls $(TARGETS) fetch wiki wikipedia weather imageviewer fontpreview spreadsheet pdfviewer disks devexplorer installer volume music bluetooth doom rpgdemo login desktop shell icons fonts install-apps $(MANDST) $(WWWDST) $(CA_CERTS) $(COMMONKEEP)
+all: bearssl libc libjpeg tls $(TARGETS) fetch wiki wikipedia weather imageviewer fontpreview spreadsheet pdfviewer disks devexplorer installer volume music bluetooth doom rpgdemo paint tcc login desktop shell icons fonts install-apps $(MANDST) $(WWWDST) $(CA_CERTS) $(COMMONKEEP)
 
 # Build BearSSL static library (cross-compiled for freestanding x86_64).
 BEARSSL_INCLUDES := -isystem $(shell cd .. && pwd)/kernel/freestnd-c-hdrs/x86_64/include -isystem $(abspath include/libc)
@@ -184,6 +184,10 @@ icons:
 fonts:
 	../scripts/copy_fonts.sh
 
+# Build paint standalone GUI tool (depends on libc).
+paint: libc
+	$(MAKE) -C src/paint
+
 # Build RPG demo game via its own Makefile (depends on libc).
 rpgdemo: libc
 	$(MAKE) -C src/rpgdemo
@@ -192,8 +196,17 @@ rpgdemo: libc
 doom:
 	$(MAKE) -C src/doom
 
+# Build TCC (Tiny C Compiler) via its own Makefile (depends on libc).
+tcc: libc
+	$(MAKE) -C src/tcc
+	mkdir -p $(BINDIR)/lib/tcc/include
+	cp -r src/tcc/tcc_include/* $(BINDIR)/lib/tcc/include/
+	cp include/libc/*.h $(BINDIR)/lib/tcc/include/
+	mkdir -p $(BINDIR)/lib/tcc/include/sys
+	cp include/libc/sys/*.h $(BINDIR)/lib/tcc/include/sys/
+
 # Install app bundles (manifests, icons, data files) into bin/apps/<name>/.
-install-apps: doom rpgdemo spreadsheet weather wikipedia imageviewer fontpreview pdfviewer disks devexplorer installer volume music bluetooth
+install-apps: doom rpgdemo paint spreadsheet weather wikipedia imageviewer fontpreview pdfviewer disks devexplorer installer volume music bluetooth
 	../scripts/install_apps.sh
 
 # Copy man pages into bin/man/ so mkramdisk.sh picks them up.
@@ -245,4 +258,6 @@ clean:
 	$(MAKE) -C src/volume clean
 	$(MAKE) -C src/music clean
 	$(MAKE) -C src/bluetooth clean
+	$(MAKE) -C src/paint clean
 	$(MAKE) -C src/rpgdemo clean
+	$(MAKE) -C src/tcc clean

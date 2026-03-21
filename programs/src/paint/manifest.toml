@@ -1,0 +1,8 @@
+[app]
+name = "Paint"
+binary = "paint.elf"
+icon = "paint.svg"
+
+[menu]
+category = "Applications"
+visible = true

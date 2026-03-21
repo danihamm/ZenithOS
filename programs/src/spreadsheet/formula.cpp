@@ -7,6 +7,34 @@
 #include "spreadsheet.h"
 
 // ============================================================================
+// Formula name list (for autocomplete and parsing)
+// ============================================================================
+
+struct FormulaInfo {
+    const char* name;
+    const char* hint;
+};
+
+static const FormulaInfo g_formula_list[] = {
+    {"SUM",   "SUM(range)"},
+    {"AVG",   "AVG(range)"},
+    {"MIN",   "MIN(range)"},
+    {"MAX",   "MAX(range)"},
+    {"COUNT", "COUNT(range)"},
+    {"ABS",   "ABS(value)"},
+    {"SQRT",  "SQRT(value)"},
+    {"ROUND", "ROUND(val,n)"},
+    {"INT",   "INT(value)"},
+    {"FLOOR", "FLOOR(value)"},
+    {"CEIL",  "CEIL(value)"},
+    {"POW",   "POW(base,exp)"},
+    {"MOD",   "MOD(a,b)"},
+    {"PI",    "PI()"},
+    {"IF",    "IF(cond,t,f)"},
+};
+static constexpr int FORMULA_COUNT = sizeof(g_formula_list) / sizeof(g_formula_list[0]);
+
+// ============================================================================
 // Cell reference parsing
 // ============================================================================
 
@@ -124,6 +152,7 @@ static double eval_primary(const char* s, int* pos, bool* ok) {
         }
         fname[fi] = '\0';
 
+        // Range functions: SUM, AVG, MIN, MAX, COUNT
         if (s[*pos] == '(' && (strcmp(fname, "SUM") == 0 ||
                                 strcmp(fname, "AVG") == 0 ||
                                 strcmp(fname, "MIN") == 0 ||
@@ -132,6 +161,77 @@ static double eval_primary(const char* s, int* pos, bool* ok) {
             return eval_range_func(fname, s, pos, ok);
         }
 
+        // No-arg: PI()
+        if (s[*pos] == '(' && strcmp(fname, "PI") == 0) {
+            (*pos)++;
+            skip_spaces(s, pos);
+            if (s[*pos] == ')') (*pos)++;
+            return 3.14159265358979;
+        }
+
+        // Single-arg functions
+        if (s[*pos] == '(' && (strcmp(fname, "ABS") == 0 ||
+                                strcmp(fname, "SQRT") == 0 ||
+                                strcmp(fname, "INT") == 0 ||
+                                strcmp(fname, "FLOOR") == 0 ||
+                                strcmp(fname, "CEIL") == 0)) {
+            (*pos)++;
+            double arg = eval_expr(s, pos, ok);
+            skip_spaces(s, pos);
+            if (s[*pos] == ')') (*pos)++;
+            if (!*ok) return 0;
+            if (strcmp(fname, "ABS") == 0)   return stb_fabs(arg);
+            if (strcmp(fname, "SQRT") == 0)  return stb_sqrt(arg);
+            if (strcmp(fname, "INT") == 0)   return (double)(long long)arg;
+            if (strcmp(fname, "FLOOR") == 0) return stb_floor(arg);
+            if (strcmp(fname, "CEIL") == 0)  return stb_ceil(arg);
+            return 0;
+        }
+
+        // Two-arg functions: ROUND, POW, MOD
+        if (s[*pos] == '(' && (strcmp(fname, "ROUND") == 0 ||
+                                strcmp(fname, "POW") == 0 ||
+                                strcmp(fname, "MOD") == 0)) {
+            (*pos)++;
+            double a = eval_expr(s, pos, ok);
+            skip_spaces(s, pos);
+            if (s[*pos] != ',') { *ok = false; return 0; }
+            (*pos)++;
+            double b = eval_expr(s, pos, ok);
+            skip_spaces(s, pos);
+            if (s[*pos] == ')') (*pos)++;
+            if (!*ok) return 0;
+            if (strcmp(fname, "POW") == 0) return stb_pow(a, b);
+            if (strcmp(fname, "MOD") == 0) {
+                if (b == 0) { *ok = false; return 0; }
+                return stb_fmod(a, b);
+            }
+            if (strcmp(fname, "ROUND") == 0) {
+                double factor = stb_pow(10.0, b);
+                return stb_floor(a * factor + 0.5) / factor;
+            }
+            return 0;
+        }
+
+        // IF(condition, true_value, false_value)
+        if (s[*pos] == '(' && strcmp(fname, "IF") == 0) {
+            (*pos)++;
+            double cond = eval_expr(s, pos, ok);
+            skip_spaces(s, pos);
+            if (s[*pos] != ',') { *ok = false; return 0; }
+            (*pos)++;
+            double tv = eval_expr(s, pos, ok);
+            skip_spaces(s, pos);
+            if (s[*pos] != ',') { *ok = false; return 0; }
+            (*pos)++;
+            double fv = eval_expr(s, pos, ok);
+            skip_spaces(s, pos);
+            if (s[*pos] == ')') (*pos)++;
+            if (!*ok) return 0;
+            return (cond != 0.0) ? tv : fv;
+        }
+
+        // Fall back to cell reference
         *pos = save_pos;
         int col, row, consumed;
         if (parse_cell_ref(s + *pos, &col, &row, &consumed)) {
@@ -305,4 +405,143 @@ void cell_name(char* buf, int col, int row) {
     if (r >= 100) { buf[1] = '0' + r / 100; buf[2] = '0' + (r / 10) % 10; buf[3] = '0' + r % 10; buf[4] = '\0'; }
     else if (r >= 10) { buf[1] = '0' + r / 10; buf[2] = '0' + r % 10; buf[3] = '\0'; }
     else { buf[1] = '0' + r; buf[2] = '\0'; }
+}
+
+// ============================================================================
+// Formula autocomplete
+// ============================================================================
+
+void update_autocomplete() {
+    g_ac_open = false;
+    g_ac_count = 0;
+
+    if (!g_editing || g_edit_buf[0] != '=') return;
+
+    // Find start of current alphabetic word at cursor
+    int word_start = g_edit_cursor;
+    while (word_start > 0 && is_alpha(g_edit_buf[word_start - 1]))
+        word_start--;
+
+    int word_len = g_edit_cursor - word_start;
+    if (word_len == 0 || word_len > 7) return;
+
+    // Don't autocomplete if cursor is right before more alpha chars (mid-word)
+    if (g_edit_cursor < g_edit_len && is_alpha(g_edit_buf[g_edit_cursor])) return;
+
+    // Don't show if next char is '(' -- user already completed the name
+    if (g_edit_cursor < g_edit_len && g_edit_buf[g_edit_cursor] == '(') return;
+
+    char partial[8];
+    for (int i = 0; i < word_len; i++)
+        partial[i] = to_upper(g_edit_buf[word_start + i]);
+    partial[word_len] = '\0';
+
+    for (int i = 0; i < FORMULA_COUNT && g_ac_count < AC_MAX_MATCHES; i++) {
+        const char* name = g_formula_list[i].name;
+        bool match = true;
+        for (int j = 0; j < word_len; j++) {
+            if (name[j] == '\0' || to_upper(name[j]) != partial[j]) {
+                match = false;
+                break;
+            }
+        }
+        // Don't show exact matches (already fully typed)
+        if (match && name[word_len] != '\0') {
+            str_cpy(g_ac_matches[g_ac_count], name, 16);
+            str_cpy(g_ac_hints[g_ac_count], g_formula_list[i].hint, 32);
+            g_ac_count++;
+        }
+    }
+
+    if (g_ac_count > 0) {
+        g_ac_open = true;
+        g_ac_sel = 0;
+    }
+}
+
+void accept_autocomplete() {
+    if (!g_ac_open || g_ac_sel < 0 || g_ac_sel >= g_ac_count) return;
+
+    // Find word start
+    int word_start = g_edit_cursor;
+    while (word_start > 0 && is_alpha(g_edit_buf[word_start - 1]))
+        word_start--;
+
+    const char* name = g_ac_matches[g_ac_sel];
+    int name_len = str_len(name);
+
+    int old_len = g_edit_cursor - word_start;
+    int new_len = name_len + 1; // +1 for '('
+    int delta = new_len - old_len;
+
+    // Check buffer space
+    if (g_edit_len + delta >= CELL_TEXT_MAX - 1) { g_ac_open = false; return; }
+
+    // Shift rest of buffer
+    if (delta > 0) {
+        for (int i = g_edit_len; i >= g_edit_cursor; i--)
+            g_edit_buf[i + delta] = g_edit_buf[i];
+    } else if (delta < 0) {
+        for (int i = g_edit_cursor; i <= g_edit_len; i++)
+            g_edit_buf[i + delta] = g_edit_buf[i];
+    }
+
+    // Write function name + opening paren
+    for (int i = 0; i < name_len; i++)
+        g_edit_buf[word_start + i] = name[i];
+    g_edit_buf[word_start + name_len] = '(';
+
+    g_edit_len += delta;
+    g_edit_cursor = word_start + new_len;
+    g_edit_buf[g_edit_len] = '\0';
+
+    g_ac_open = false;
+}
+
+// ============================================================================
+// Formula reference adjustment (for fill handle)
+// ============================================================================
+
+void adjust_formula_refs(const char* src, char* dst, int max, int dcol, int drow) {
+    int si = 0, di = 0;
+    while (src[si] && di < max - 1) {
+        if (is_alpha(src[si])) {
+            // Try to parse a cell reference
+            int col, row, consumed;
+            if (parse_cell_ref(src + si, &col, &row, &consumed)) {
+                // Check this is actually a cell ref and not part of a function name
+                // by looking backward: if the previous char is also alpha, it's a
+                // function name, not a cell ref
+                bool is_func_part = (si > 0 && is_alpha(src[si - 1]));
+                if (is_func_part) {
+                    dst[di++] = src[si++];
+                    continue;
+                }
+                int nc = col + dcol;
+                int nr = row + drow;
+                if (nc < 0) nc = 0;
+                if (nc >= MAX_COLS) nc = MAX_COLS - 1;
+                if (nr < 0) nr = 0;
+                if (nr >= MAX_ROWS) nr = MAX_ROWS - 1;
+                dst[di++] = 'A' + nc;
+                int rv = nr + 1;
+                if (rv >= 100 && di < max - 3) {
+                    dst[di++] = '0' + rv / 100;
+                    dst[di++] = '0' + (rv / 10) % 10;
+                    dst[di++] = '0' + rv % 10;
+                } else if (rv >= 10 && di < max - 2) {
+                    dst[di++] = '0' + rv / 10;
+                    dst[di++] = '0' + rv % 10;
+                } else {
+                    dst[di++] = '0' + rv;
+                }
+                si += consumed;
+            } else {
+                dst[di++] = src[si++];
+            }
+        } else {
+            dst[di++] = src[si++];
+        }
+    }
+    dst[di] = '\0';
 }

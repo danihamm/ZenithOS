@@ -736,6 +736,18 @@ void do_update() {
         flush_ui(); st.step = STEP_ERROR; return;
     }
 
+    // Step 4: Update lib/ — compiler runtime, headers, libc
+    add_log("Updating lib/...");
+    flush_ui();
+
+    snprintf(path_buf, sizeof(path_buf), "%d:/lib", drive_num);
+    montauk::fmkdir(path_buf);
+
+    if (!copy_recursive("0:/lib", path_buf)) {
+        add_log("ERROR: Failed to update lib/");
+        flush_ui(); st.step = STEP_ERROR; return;
+    }
+
     char copy_msg[64];
     snprintf(copy_msg, sizeof(copy_msg), "  %d files, %d directories updated",
              g_files_copied, g_dirs_created);

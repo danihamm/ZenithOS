@@ -107,15 +107,36 @@ namespace Drivers::Graphics::IntelGPU {
                 << " at PCI " << (uint64_t)found->Bus << ":"
                 << (uint64_t)found->Device << "." << (uint64_t)found->Function;
         } else {
-            // Unknown device ID - accept generically but warn
-            g_gpuInfo.gen  = 7; // Assume gen 7 as a safe default
+            // Unknown device ID - infer generation from device ID range.
+            // Getting this wrong is catastrophic (32-bit vs 64-bit GTT PTEs),
+            // so use known Intel device ID patterns.
+            uint16_t did = found->DeviceId;
+            uint8_t inferredGen;
+            if (did >= 0xA700 || (did >= 0x4600 && did < 0x4700) ||
+                (did >= 0x5600 && did < 0x5700) || (did >= 0x7D00 && did < 0x7E00)) {
+                inferredGen = 12; // Raptor Lake, Alder Lake, DG2, Meteor Lake range
+            } else if ((did >= 0x8A00 && did < 0x8B00) ||
+                       (did >= 0x9A00 && did < 0x9B00)) {
+                inferredGen = 12; // Ice Lake / Tiger Lake range
+            } else if ((did >= 0x3E00 && did < 0x3F00) ||
+                       (did >= 0x5900 && did < 0x5A00) ||
+                       (did >= 0x9B00 && did < 0x9C00) ||
+                       (did >= 0x1900 && did < 0x1A00)) {
+                inferredGen = 9;  // Skylake / Kaby Lake / Coffee Lake / Comet Lake
+            } else if (did >= 0x1600 && did < 0x1700) {
+                inferredGen = 8;  // Broadwell
+            } else {
+                inferredGen = 7;  // Older (Haswell and below)
+            }
+            g_gpuInfo.gen  = inferredGen;
             g_gpuInfo.name = "Intel GPU";
 
             KernelLogStream(WARNING, "IntelGPU") << "Unknown Intel display controller "
                 << "(device " << base::hex << (uint64_t)found->DeviceId << ")"
                 << " at PCI " << (uint64_t)found->Bus << ":"
                 << (uint64_t)found->Device << "." << (uint64_t)found->Function
-                << " - attempting generic initialization";
+                << " - inferred gen " << base::dec << (uint64_t)inferredGen
+                << ", attempting generic initialization";
         }
 
         g_gpuGen = g_gpuInfo.gen;
@@ -494,13 +515,32 @@ namespace Drivers::Graphics::IntelGPU {
                 << " at PCI " << (uint64_t)dev.Bus << ":"
                 << (uint64_t)dev.Device << "." << (uint64_t)dev.Function;
         } else {
-            g_gpuInfo.gen  = 7;
+            uint16_t did = dev.DeviceId;
+            uint8_t inferredGen;
+            if (did >= 0xA700 || (did >= 0x4600 && did < 0x4700) ||
+                (did >= 0x5600 && did < 0x5700) || (did >= 0x7D00 && did < 0x7E00)) {
+                inferredGen = 12;
+            } else if ((did >= 0x8A00 && did < 0x8B00) ||
+                       (did >= 0x9A00 && did < 0x9B00)) {
+                inferredGen = 12;
+            } else if ((did >= 0x3E00 && did < 0x3F00) ||
+                       (did >= 0x5900 && did < 0x5A00) ||
+                       (did >= 0x9B00 && did < 0x9C00) ||
+                       (did >= 0x1900 && did < 0x1A00)) {
+                inferredGen = 9;
+            } else if (did >= 0x1600 && did < 0x1700) {
+                inferredGen = 8;
+            } else {
+                inferredGen = 7;
+            }
+            g_gpuInfo.gen  = inferredGen;
             g_gpuInfo.name = "Intel GPU";
             KernelLogStream(WARNING, "IntelGPU") << "Unknown Intel display controller "
                 << "(device " << base::hex << (uint64_t)dev.DeviceId << ")"
                 << " at PCI " << (uint64_t)dev.Bus << ":"
                 << (uint64_t)dev.Device << "." << (uint64_t)dev.Function
-                << " - attempting generic initialization";
+                << " - inferred gen " << base::dec << (uint64_t)inferredGen
+                << ", attempting generic initialization";
         }
 
         g_gpuGen = g_gpuInfo.gen;
@@ -643,14 +683,35 @@ namespace Drivers::Graphics::IntelGPU {
     void Reinitialize() {
         if (!g_initialized || !g_mmioBase) return;
 
-        KernelLogStream(INFO, "IntelGPU") << "Reinitializing display after S3 resume";
+        KernelLogStream(INFO, "IntelGPU") << "Reinitializing display after S3 resume"
+            << " (gen " << base::dec << (uint64_t)g_gpuGen << ")";
 
         // 1. Re-enable PCI memory space and bus mastering. S3 resets the PCI
         //    command register, so MMIO writes to the GPU are silently dropped
         //    until we re-enable these bits.
         Pci::EnableBusMaster(g_gpuInfo.pciBus, g_gpuInfo.pciDevice, g_gpuInfo.pciFunction);
 
-        KernelLogStream(DEBUG, "IntelGPU") << "PCI memory space and bus mastering re-enabled";
+        // Verify PCI memory space is accessible by reading back command register
+        uint16_t pciCmd = Pci::LegacyRead16(g_gpuInfo.pciBus, g_gpuInfo.pciDevice,
+            g_gpuInfo.pciFunction, (uint8_t)Pci::PCI_REG_COMMAND);
+        if (!(pciCmd & Pci::PCI_CMD_MEM_SPACE)) {
+            KernelLogStream(ERROR, "IntelGPU")
+                << "PCI memory space not enabled after restore (cmd="
+                << base::hex << (uint64_t)pciCmd << ")";
+            return;
+        }
+
+        // Sanity-check MMIO access: read a register and verify we don't get 0xFFFFFFFF
+        // (which indicates the device is not responding on the PCI bus)
+        uint32_t testRead = ReadReg(PIPEACONF);
+        if (testRead == 0xFFFFFFFF) {
+            KernelLogStream(ERROR, "IntelGPU")
+                << "MMIO reads return 0xFFFFFFFF - GPU not responding";
+            return;
+        }
+
+        KernelLogStream(DEBUG, "IntelGPU") << "PCI memory space verified (cmd="
+            << base::hex << (uint64_t)pciCmd << ")";
 
         // 2. Disable VGA plane (firmware may have re-enabled it during POST)
         DisableVga();
@@ -673,6 +734,9 @@ namespace Drivers::Graphics::IntelGPU {
             (void)gtt32[pageCount - 1];
         }
 
+        KernelLogStream(DEBUG, "IntelGPU") << "GTT reprogrammed: " << base::dec << pageCount
+            << " pages (" << (g_gpuGen >= 8 ? "64-bit" : "32-bit") << " PTEs)";
+
         // 4. Re-enable the display pipe. After S3, the pipe may be off even
         //    though the firmware lit the backlight. Wait for it to become
         //    active before programming the display plane.
@@ -685,6 +749,11 @@ namespace Drivers::Graphics::IntelGPU {
                 if (ReadReg(PIPEACONF) & PIPECONF_STATE)
                     break;
                 asm volatile("pause");
+            }
+
+            if (!(ReadReg(PIPEACONF) & PIPECONF_STATE)) {
+                KernelLogStream(WARNING, "IntelGPU")
+                    << "Pipe A did not become active after enable";
             }
         }
 

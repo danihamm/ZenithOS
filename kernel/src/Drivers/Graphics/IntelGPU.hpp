@@ -111,6 +111,22 @@ namespace Drivers::Graphics::IntelGPU {
         {0x4680, 12, "Alder Lake-S GT1"},
         {0x4692, 12, "Alder Lake-S GT1"},
         {0x46A6, 12, "Alder Lake-P GT2"},
+
+        // Gen 12 - Raptor Lake-P
+        {0xA7A0, 12, "Raptor Lake-P GT2"},
+        {0xA7A1, 12, "Raptor Lake-P GT2"},
+        {0xA720, 12, "Raptor Lake-P GT2"},
+        {0xA721, 12, "Raptor Lake-P GT2"},
+        {0xA7A8, 12, "Raptor Lake-P GT2"},
+        {0xA7A9, 12, "Raptor Lake-P GT2"},
+
+        // Gen 12 - Raptor Lake-S
+        {0xA780, 12, "Raptor Lake-S GT1"},
+        {0xA781, 12, "Raptor Lake-S GT1"},
+        {0xA782, 12, "Raptor Lake-S GT2"},
+        {0xA783, 12, "Raptor Lake-S GT2"},
+        {0xA788, 12, "Raptor Lake-S GT1"},
+        {0xA789, 12, "Raptor Lake-S GT1"},
     };
 
     static constexpr int SupportedDeviceCount = sizeof(SupportedDevices) / sizeof(SupportedDevices[0]);

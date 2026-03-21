@@ -1028,6 +1028,42 @@ inline bool svg_element_has_filter(const char* elem, int elemLen) {
 }
 
 // ---------------------------------------------------------------------------
+// Parse transform="scale(x)" or transform="scale(x,y)" or translate(x,y)
+// Returns true if a scale was found; sx/sy are fixed-point scale factors.
+// ---------------------------------------------------------------------------
+inline bool svg_get_element_scale(const char* elem, int elemLen,
+                                  fixed_t* sx, fixed_t* sy) {
+    char buf[64];
+    if (svg_get_attr(elem, elemLen, " transform", buf, sizeof(buf)) <= 0) {
+        *sx = int_to_fixed(1);
+        *sy = int_to_fixed(1);
+        return false;
+    }
+    // Look for "scale("
+    const char* sp = buf;
+    while (*sp) {
+        if (sp[0]=='s' && sp[1]=='c' && sp[2]=='a' && sp[3]=='l' && sp[4]=='e' && sp[5]=='(') {
+            sp += 6;
+            svg_parse_fixed(sp, sx);
+            // Skip to comma or closing paren
+            while (*sp && *sp != ',' && *sp != ')') ++sp;
+            if (*sp == ',') {
+                ++sp;
+                while (*sp == ' ') ++sp;
+                svg_parse_fixed(sp, sy);
+            } else {
+                *sy = *sx; // uniform scale
+            }
+            return true;
+        }
+        ++sp;
+    }
+    *sx = int_to_fixed(1);
+    *sy = int_to_fixed(1);
+    return false;
+}
+
+// ---------------------------------------------------------------------------
 // Scanline rasterizer with alpha blending (for multi-color SVGs)
 // ---------------------------------------------------------------------------
 inline void svg_rasterize_blend(const SvgEdgeList& el, uint32_t* pixels, int w, int h,
@@ -1314,11 +1350,17 @@ inline SvgIcon svg_render(const char* svg_data, int svg_len, int target_w, int t
 
             int alpha = svg_get_element_opacity(elem_start, elem_len);
 
+            // Per-element transform (scale)
+            fixed_t elem_sx, elem_sy;
+            svg_get_element_scale(elem_start, elem_len, &elem_sx, &elem_sy);
+            fixed_t eff_sx = fixed_mul(scale_x, elem_sx);
+            fixed_t eff_sy = fixed_mul(scale_y, elem_sy);
+
             // Extract and rasterize path
             int d_len = svg_get_attr(elem_start, elem_len, " d", d_buf, SVG_MAX_PATH_LEN);
             if (d_len > 0) {
                 el.clear();
-                svg_path_to_edges(el, d_buf, d_len, scale_x, scale_y, vb_x, vb_y);
+                svg_path_to_edges(el, d_buf, d_len, eff_sx, eff_sy, vb_x, vb_y);
                 if (el.count > 0)
                     svg_rasterize_blend(el, icon.pixels, target_w, target_h, elem_color.to_pixel(), alpha);
             }
@@ -1349,6 +1391,11 @@ inline SvgIcon svg_render(const char* svg_data, int svg_len, int target_w, int t
 
             int alpha = svg_get_element_opacity(elem_start, elem_len);
 
+            fixed_t elem_sx, elem_sy;
+            svg_get_element_scale(elem_start, elem_len, &elem_sx, &elem_sy);
+            fixed_t eff_sx = fixed_mul(scale_x, elem_sx);
+            fixed_t eff_sy = fixed_mul(scale_y, elem_sy);
+
             char attr_buf[32];
             fixed_t cx = 0, cy = 0, r = 0;
             if (svg_get_attr(elem_start, elem_len, " cx", attr_buf, sizeof(attr_buf)) > 0)
@@ -1358,10 +1405,10 @@ inline SvgIcon svg_render(const char* svg_data, int svg_len, int target_w, int t
             if (svg_get_attr(elem_start, elem_len, " r", attr_buf, sizeof(attr_buf)) > 0)
                 svg_parse_fixed(attr_buf, &r);
 
-            fixed_t scx = fixed_mul(cx - vb_x, scale_x);
-            fixed_t scy = fixed_mul(cy - vb_y, scale_y);
-            fixed_t srx = fixed_mul(r, scale_x);
-            fixed_t sry = fixed_mul(r, scale_y);
+            fixed_t scx = fixed_mul(cx - vb_x, eff_sx);
+            fixed_t scy = fixed_mul(cy - vb_y, eff_sy);
+            fixed_t srx = fixed_mul(r, eff_sx);
+            fixed_t sry = fixed_mul(r, eff_sy);
             fixed_t sr = (srx + sry) >> 1;
 
             el.clear();
@@ -1395,6 +1442,11 @@ inline SvgIcon svg_render(const char* svg_data, int svg_len, int target_w, int t
 
             int alpha = svg_get_element_opacity(elem_start, elem_len);
 
+            fixed_t elem_sx, elem_sy;
+            svg_get_element_scale(elem_start, elem_len, &elem_sx, &elem_sy);
+            fixed_t eff_sx = fixed_mul(scale_x, elem_sx);
+            fixed_t eff_sy = fixed_mul(scale_y, elem_sy);
+
             char attr_buf[32];
             fixed_t rx_val = 0, ry_val = 0, rw = 0, rh = 0, rrx = 0, rry = 0;
 
@@ -1411,12 +1463,12 @@ inline SvgIcon svg_render(const char* svg_data, int svg_len, int target_w, int t
             if (svg_get_attr(elem_start, elem_len, " ry", attr_buf, sizeof(attr_buf)) > 0)
                 svg_parse_fixed(attr_buf, &rry);
 
-            fixed_t sx = fixed_mul(rx_val - vb_x, scale_x);
-            fixed_t sy = fixed_mul(ry_val - vb_y, scale_y);
-            fixed_t sw = fixed_mul(rw, scale_x);
-            fixed_t sh = fixed_mul(rh, scale_y);
-            fixed_t srx = fixed_mul(rrx, scale_x);
-            fixed_t sry = fixed_mul(rry, scale_y);
+            fixed_t sx = fixed_mul(rx_val - vb_x, eff_sx);
+            fixed_t sy = fixed_mul(ry_val - vb_y, eff_sy);
+            fixed_t sw = fixed_mul(rw, eff_sx);
+            fixed_t sh = fixed_mul(rh, eff_sy);
+            fixed_t srx = fixed_mul(rrx, eff_sx);
+            fixed_t sry = fixed_mul(rry, eff_sy);
 
             el.clear();
             svg_rect_edges(el, sx, sy, sw, sh, srx, sry);

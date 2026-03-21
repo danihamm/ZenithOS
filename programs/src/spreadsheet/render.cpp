@@ -270,7 +270,7 @@ void render(uint32_t* pixels) {
         px_hline(pixels, g_win_w, g_win_h, ROW_HEADER_W, y + ROW_H - 1, g_win_w - ROW_HEADER_W, GRID_COLOR);
     }
 
-    // ---- Selection border ----
+    // ---- Selection border + fill handle ----
     {
         int c0, r0, c1, r1;
         sel_range(&c0, &r0, &c1, &r1);
@@ -281,8 +281,27 @@ void render(uint32_t* pixels) {
         for (int c = c0; c <= c1; c++) sw += g_col_widths[c];
         int sh = (r1 - r0 + 1) * ROW_H;
 
+        // Fill drag preview
+        if (g_fill_dragging && g_fill_target_row > r1) {
+            int fill_sh = (g_fill_target_row - r0 + 1) * ROW_H;
+            // Dashed border for fill preview area
+            for (int dx = 0; dx < sw; dx += 6) {
+                int seg = dx + 3 < sw ? 3 : sw - dx;
+                px_hline(pixels, g_win_w, g_win_h, sx + dx, sy_sel + fill_sh - 1, seg, SELECT_BORDER);
+            }
+            px_vline(pixels, g_win_w, g_win_h, sx, sy_sel + sh, fill_sh - sh, SELECT_BORDER);
+            px_vline(pixels, g_win_w, g_win_h, sx + sw - 1, sy_sel + sh, fill_sh - sh, SELECT_BORDER);
+        }
+
         px_rect(pixels, g_win_w, g_win_h, sx, sy_sel, sw, sh, SELECT_BORDER);
         px_rect(pixels, g_win_w, g_win_h, sx + 1, sy_sel + 1, sw - 2, sh - 2, SELECT_BORDER);
+
+        // Fill handle (small blue square at bottom-right corner)
+        if (!g_editing) {
+            int fhx = sx + sw - FILL_HANDLE_SIZE / 2;
+            int fhy = sy_sel + sh - FILL_HANDLE_SIZE / 2;
+            px_fill(pixels, g_win_w, g_win_h, fhx, fhy, FILL_HANDLE_SIZE, FILL_HANDLE_SIZE, SELECT_BORDER);
+        }
     }
 
     // ---- Status bar ----
@@ -302,15 +321,35 @@ void render(uint32_t* pixels) {
         int sty = sy + (STATUS_BAR_H - HEADER_FONT) / 2;
         g_font->draw_to_buffer(pixels, g_win_w, g_win_h, 6, sty, status, STATUS_TEXT, HEADER_FONT);
 
-        char right[64];
+        char right[128];
         if (g_has_selection) {
             int c0, r0, c1, r1;
             sel_range(&c0, &r0, &c1, &r1);
-            char n0[8], n1[8];
-            cell_name(n0, c0, r0);
-            cell_name(n1, c1, r1);
-            int ncells = (c1 - c0 + 1) * (r1 - r0 + 1);
-            snprintf(right, 64, "%s:%s (%d cells) ", n0, n1, ncells);
+
+            // Calculate aggregates for numeric cells
+            double sum = 0;
+            int num_count = 0;
+            for (int r = r0; r <= r1; r++) {
+                for (int c = c0; c <= c1; c++) {
+                    if (g_cells[r][c].type == CT_NUMBER || g_cells[r][c].type == CT_FORMULA) {
+                        sum += g_cells[r][c].value;
+                        num_count++;
+                    }
+                }
+            }
+
+            if (num_count > 0) {
+                char sbuf[24], abuf[24];
+                double_to_str(sbuf, 24, sum);
+                double_to_str(abuf, 24, sum / num_count);
+                snprintf(right, 128, "SUM=%s  AVG=%s  COUNT=%d ", sbuf, abuf, num_count);
+            } else {
+                char n0[8], n1[8];
+                cell_name(n0, c0, r0);
+                cell_name(n1, c1, r1);
+                int ncells = (c1 - c0 + 1) * (r1 - r0 + 1);
+                snprintf(right, 128, "%s:%s (%d cells) ", n0, n1, ncells);
+            }
         } else {
             Cell* sel = &g_cells[g_sel_row][g_sel_col];
             char cname[8];
@@ -318,9 +357,9 @@ void render(uint32_t* pixels) {
             if (sel->type == CT_FORMULA || sel->type == CT_NUMBER) {
                 char vbuf[32];
                 double_to_str(vbuf, 32, sel->value);
-                snprintf(right, 64, "%s = %s ", cname, vbuf);
+                snprintf(right, 128, "%s = %s ", cname, vbuf);
             } else {
-                snprintf(right, 64, "%s ", cname);
+                snprintf(right, 128, "%s ", cname);
             }
         }
         int rw = g_font->measure_text(right, HEADER_FONT);
@@ -346,6 +385,50 @@ void render(uint32_t* pixels) {
                 px_fill(pixels, g_win_w, g_win_h, dx + 2, iy, dw - 4, item_h - 2, SELECT_FILL);
             g_font->draw_to_buffer(pixels, g_win_w, g_win_h,
                 dx + 8, iy + (item_h - HEADER_FONT) / 2, items[i], CELL_TEXT, HEADER_FONT);
+        }
+    }
+
+    // ---- Autocomplete dropdown overlay ----
+    if (g_ac_open && g_editing && g_font) {
+        int fbar_y_ac = TOOLBAR_H + pathbar_h;
+        int fx = sep_x + 10;
+
+        // Measure text up to the start of the current word
+        int ws = g_edit_cursor;
+        while (ws > 0 && is_alpha(g_edit_buf[ws - 1])) ws--;
+        char word_prefix[CELL_TEXT_MAX];
+        int wpi = 0;
+        for (int i = 0; i < ws && wpi < CELL_TEXT_MAX - 1; i++)
+            word_prefix[wpi++] = g_edit_buf[i];
+        word_prefix[wpi] = '\0';
+
+        int ac_x = fx + g_font->measure_text(word_prefix, FONT_SIZE);
+        int ac_y = fbar_y_ac + FORMULA_BAR_H;
+        int ac_item_h = 24;
+        int ac_w = 160;
+        int ac_h = g_ac_count * ac_item_h + 4;
+
+        // Shadow
+        px_fill(pixels, g_win_w, g_win_h, ac_x + 2, ac_y + 2, ac_w, ac_h,
+                Color::from_rgb(0xAA, 0xAA, 0xAA));
+        // Background
+        px_fill(pixels, g_win_w, g_win_h, ac_x, ac_y, ac_w, ac_h, BG_COLOR);
+        px_rect(pixels, g_win_w, g_win_h, ac_x, ac_y, ac_w, ac_h, GRID_COLOR);
+
+        for (int i = 0; i < g_ac_count; i++) {
+            int iy = ac_y + 2 + i * ac_item_h;
+            if (i == g_ac_sel)
+                px_fill(pixels, g_win_w, g_win_h, ac_x + 2, iy, ac_w - 4, ac_item_h - 2, SELECT_FILL);
+
+            TrueTypeFont* bf = g_font_bold ? g_font_bold : g_font;
+            bf->draw_to_buffer(pixels, g_win_w, g_win_h,
+                ac_x + 6, iy + (ac_item_h - HEADER_FONT) / 2,
+                g_ac_matches[i], CELL_TEXT, HEADER_FONT);
+
+            int nw = bf->measure_text(g_ac_matches[i], HEADER_FONT);
+            g_font->draw_to_buffer(pixels, g_win_w, g_win_h,
+                ac_x + 12 + nw, iy + (ac_item_h - HEADER_FONT) / 2,
+                g_ac_hints[i], HEADER_TEXT, HEADER_FONT);
         }
     }
 }

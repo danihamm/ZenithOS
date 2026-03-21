@@ -9,6 +9,10 @@
 #include <stdint.h>
 #include <stdarg.h>
 #include <limits.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <fcntl.h>
+#include <sys/stat.h>
 
 /* ========================================================================
    Raw syscall wrappers (C versions matching kernel ABI)
@@ -32,6 +36,31 @@ static inline long _zos_syscall1(long nr, long a1) {
     return ret;
 }
 
+static inline long _zos_syscall2(long nr, long a1, long a2) {
+    long ret;
+    __asm__ volatile(
+        "mov %[a1], %%rdi\n\t"
+        "mov %[a2], %%rsi\n\t"
+        "syscall"
+        : "=a"(ret)
+        : "a"(nr), [a1] "r"(a1), [a2] "r"(a2)
+        : "rcx", "r11", "rdi", "rsi", "rdx", "r8", "r9", "r10", "memory");
+    return ret;
+}
+
+static inline long _zos_syscall3(long nr, long a1, long a2, long a3) {
+    long ret;
+    __asm__ volatile(
+        "mov %[a1], %%rdi\n\t"
+        "mov %[a2], %%rsi\n\t"
+        "mov %[a3], %%rdx\n\t"
+        "syscall"
+        : "=a"(ret)
+        : "a"(nr), [a1] "r"(a1), [a2] "r"(a2), [a3] "r"(a3)
+        : "rcx", "r11", "rdi", "rsi", "rdx", "r8", "r9", "r10", "memory");
+    return ret;
+}
+
 static inline long _zos_syscall4(long nr, long a1, long a2, long a3, long a4) {
     long ret;
     __asm__ volatile(
@@ -50,8 +79,21 @@ static inline long _zos_syscall4(long nr, long a1, long a2, long a3, long a4) {
 #define SYS_EXIT    0
 #define SYS_PRINT   4
 #define SYS_PUTCHAR 5
+#define SYS_OPEN    6
+#define SYS_READ    7
+#define SYS_GETSIZE 8
+#define SYS_CLOSE   9
+#define SYS_READDIR 10
 #define SYS_ALLOC   11
 #define SYS_FREE    12
+#define SYS_GETCHAR 18
+#define SYS_SPAWN   20
+#define SYS_WAITPID 23
+#define SYS_GETARGS 25
+#define SYS_FWRITE  41
+#define SYS_FCREATE 42
+#define SYS_FDELETE 77
+#define SYS_FMKDIR  78
 
 /* ========================================================================
    errno
@@ -596,8 +638,11 @@ void abort(void) {
 }
 
 int system(const char *command) {
-    (void)command;
-    return -1;
+    if (command == NULL) return -1;
+    int pid = (int)_zos_syscall2(SYS_SPAWN, (long)command, 0L);
+    if (pid < 0) return -1;
+    _zos_syscall1(SYS_WAITPID, (long)pid);
+    return 0;
 }
 
 /* ========================================================================
@@ -858,4 +903,620 @@ void __assert_fail(const char *expr, const char *file, int line, const char *fun
     _zos_syscall1(SYS_PRINT, (long)"\n");
     (void)line; (void)func;
     abort();
+}
+
+/* ========================================================================
+   stdio.h FILE-based I/O
+   ======================================================================== */
+
+/* Static FILE objects for standard streams */
+static FILE _stdin_file  = { .handle = -1, .pos = 0, .size = 0, .eof = 0,
+                             .error = 0, .is_std = 1, .ungetc_buf = -1 };
+static FILE _stdout_file = { .handle = -1, .pos = 0, .size = 0, .eof = 0,
+                             .error = 0, .is_std = 2, .ungetc_buf = -1 };
+static FILE _stderr_file = { .handle = -1, .pos = 0, .size = 0, .eof = 0,
+                             .error = 0, .is_std = 3, .ungetc_buf = -1 };
+
+FILE *stdin  = &_stdin_file;
+FILE *stdout = &_stdout_file;
+FILE *stderr = &_stderr_file;
+
+FILE *fopen(const char *path, const char *mode) {
+    if (path == NULL || mode == NULL) return NULL;
+
+    int handle = -1;
+    int want_read  = 0;
+    int want_write = 0;
+    int want_append = 0;
+
+    if (mode[0] == 'r') {
+        want_read = 1;
+        if (mode[1] == '+') want_write = 1;
+    } else if (mode[0] == 'w') {
+        want_write = 1;
+        if (mode[1] == '+') want_read = 1;
+        /* Truncate: delete then create */
+        _zos_syscall1(SYS_FDELETE, (long)path);
+        handle = (int)_zos_syscall1(SYS_FCREATE, (long)path);
+        if (handle < 0) return NULL;
+    } else if (mode[0] == 'a') {
+        want_write = 1;
+        want_append = 1;
+        if (mode[1] == '+') want_read = 1;
+        /* Try open existing, create if not found */
+        handle = (int)_zos_syscall1(SYS_OPEN, (long)path);
+        if (handle < 0) {
+            handle = (int)_zos_syscall1(SYS_FCREATE, (long)path);
+            if (handle < 0) return NULL;
+        }
+    } else {
+        return NULL;
+    }
+
+    /* For read and read+ modes, just open existing */
+    if (mode[0] == 'r') {
+        handle = (int)_zos_syscall1(SYS_OPEN, (long)path);
+        if (handle < 0) return NULL;
+    }
+
+    unsigned long fileSize = (unsigned long)_zos_syscall1(SYS_GETSIZE, (long)handle);
+
+    FILE *f = (FILE *)malloc(sizeof(FILE));
+    if (f == NULL) {
+        _zos_syscall1(SYS_CLOSE, (long)handle);
+        return NULL;
+    }
+
+    f->handle = handle;
+    f->size = fileSize;
+    f->pos = want_append ? fileSize : 0;
+    f->eof = 0;
+    f->error = 0;
+    f->is_std = 0;
+    f->ungetc_buf = -1;
+
+    (void)want_read;
+    (void)want_write;
+
+    return f;
+}
+
+int fclose(FILE *stream) {
+    if (stream == NULL) return EOF;
+    if (stream->is_std) return 0;
+
+    _zos_syscall1(SYS_CLOSE, (long)stream->handle);
+    free(stream);
+    return 0;
+}
+
+size_t fread(void *ptr, size_t size, size_t nmemb, FILE *stream) {
+    if (stream == NULL || ptr == NULL || size == 0 || nmemb == 0) return 0;
+
+    if (stream->is_std == 1) {
+        /* stdin: read characters via SYS_GETCHAR */
+        size_t total = size * nmemb;
+        char *dst = (char *)ptr;
+        size_t i;
+        for (i = 0; i < total; i++) {
+            int c = (int)_zos_syscall0(SYS_GETCHAR);
+            if (c <= 0) { stream->eof = 1; break; }
+            dst[i] = (char)c;
+        }
+        return i / size;
+    }
+
+    size_t total = size * nmemb;
+    size_t remaining = (stream->pos < stream->size) ? stream->size - stream->pos : 0;
+    if (total > remaining) {
+        total = remaining;
+        stream->eof = 1;
+    }
+    if (total == 0) return 0;
+
+    int ret = (int)_zos_syscall4(SYS_READ, (long)stream->handle,
+                                  (long)ptr, (long)stream->pos, (long)total);
+    if (ret < 0) {
+        stream->error = 1;
+        return 0;
+    }
+
+    stream->pos += (unsigned long)ret;
+    return (size_t)ret / size;
+}
+
+size_t fwrite(const void *ptr, size_t size, size_t nmemb, FILE *stream) {
+    if (stream == NULL || ptr == NULL || size == 0 || nmemb == 0) return 0;
+
+    if (stream->is_std) {
+        /* stdout/stderr: print via SYS_PRINT/SYS_PUTCHAR */
+        size_t total = size * nmemb;
+        const char *src = (const char *)ptr;
+        for (size_t i = 0; i < total; i++)
+            _zos_syscall1(SYS_PUTCHAR, (long)(unsigned char)src[i]);
+        return nmemb;
+    }
+
+    size_t total = size * nmemb;
+    int ret = (int)_zos_syscall4(SYS_FWRITE, (long)stream->handle,
+                                  (long)ptr, (long)stream->pos, (long)total);
+    if (ret < 0) {
+        stream->error = 1;
+        return 0;
+    }
+
+    stream->pos += (unsigned long)ret;
+    /* Update size if we wrote past the old end */
+    if (stream->pos > stream->size)
+        stream->size = stream->pos;
+    return (size_t)ret / size;
+}
+
+int fseek(FILE *stream, long offset, int whence) {
+    if (stream == NULL || stream->is_std) return -1;
+
+    unsigned long newpos;
+    switch (whence) {
+    case SEEK_SET: newpos = (unsigned long)offset; break;
+    case SEEK_CUR: newpos = stream->pos + (unsigned long)offset; break;
+    case SEEK_END: newpos = stream->size + (unsigned long)offset; break;
+    default: return -1;
+    }
+
+    stream->pos = newpos;
+    stream->eof = 0;
+    return 0;
+}
+
+long ftell(FILE *stream) {
+    if (stream == NULL) return -1;
+    return (long)stream->pos;
+}
+
+int fflush(FILE *stream) {
+    /* No buffering in this implementation */
+    (void)stream;
+    return 0;
+}
+
+int feof(FILE *stream) {
+    if (stream == NULL) return 0;
+    return stream->eof;
+}
+
+int ferror(FILE *stream) {
+    if (stream == NULL) return 0;
+    return stream->error;
+}
+
+void clearerr(FILE *stream) {
+    if (stream == NULL) return;
+    stream->eof = 0;
+    stream->error = 0;
+}
+
+int fgetc(FILE *stream) {
+    if (stream == NULL) return EOF;
+
+    /* Check ungetc buffer first */
+    if (stream->ungetc_buf >= 0) {
+        int c = stream->ungetc_buf;
+        stream->ungetc_buf = -1;
+        return c;
+    }
+
+    if (stream->is_std == 1) {
+        int c = (int)_zos_syscall0(SYS_GETCHAR);
+        if (c <= 0) { stream->eof = 1; return EOF; }
+        return c;
+    }
+
+    if (stream->pos >= stream->size) {
+        stream->eof = 1;
+        return EOF;
+    }
+
+    unsigned char c;
+    int ret = (int)_zos_syscall4(SYS_READ, (long)stream->handle,
+                                  (long)&c, (long)stream->pos, 1L);
+    if (ret <= 0) {
+        stream->eof = 1;
+        return EOF;
+    }
+
+    stream->pos++;
+    return (int)c;
+}
+
+int getc(FILE *stream) {
+    return fgetc(stream);
+}
+
+int ungetc(int c, FILE *stream) {
+    if (stream == NULL || c == EOF) return EOF;
+    stream->ungetc_buf = c;
+    stream->eof = 0;
+    return c;
+}
+
+char *fgets(char *s, int size, FILE *stream) {
+    if (s == NULL || size <= 0 || stream == NULL) return NULL;
+
+    int i = 0;
+    while (i < size - 1) {
+        int c = fgetc(stream);
+        if (c == EOF) {
+            if (i == 0) return NULL;
+            break;
+        }
+        s[i++] = (char)c;
+        if (c == '\n') break;
+    }
+    s[i] = '\0';
+    return s;
+}
+
+int fputs(const char *s, FILE *stream) {
+    if (s == NULL || stream == NULL) return EOF;
+
+    size_t len = strlen(s);
+    size_t written = fwrite(s, 1, len, stream);
+    return (written == len) ? 0 : EOF;
+}
+
+int fprintf(FILE *stream, const char *fmt, ...) {
+    char buf[4096];
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+
+    if (stream == NULL || stream->is_std) {
+        _zos_syscall1(SYS_PRINT, (long)buf);
+    } else {
+        fwrite(buf, 1, (size_t)(n > 0 ? n : 0), stream);
+    }
+    return n;
+}
+
+int vfprintf(FILE *stream, const char *fmt, va_list ap) {
+    char buf[4096];
+    int n = vsnprintf(buf, sizeof(buf), fmt, ap);
+
+    if (stream == NULL || stream->is_std) {
+        _zos_syscall1(SYS_PRINT, (long)buf);
+    } else {
+        fwrite(buf, 1, (size_t)(n > 0 ? n : 0), stream);
+    }
+    return n;
+}
+
+int vprintf(const char *fmt, va_list ap) {
+    return vfprintf(stdout, fmt, ap);
+}
+
+int vsprintf(char *str, const char *fmt, va_list ap) {
+    return vsnprintf(str, (size_t)-1, fmt, ap);
+}
+
+int remove(const char *path) {
+    if (path == NULL) return -1;
+    return (int)_zos_syscall1(SYS_FDELETE, (long)path);
+}
+
+int rename(const char *oldpath, const char *newpath) {
+    /* No atomic rename syscall -- copy + delete */
+    if (oldpath == NULL || newpath == NULL) return -1;
+
+    int src = (int)_zos_syscall1(SYS_OPEN, (long)oldpath);
+    if (src < 0) return -1;
+
+    unsigned long sz = (unsigned long)_zos_syscall1(SYS_GETSIZE, (long)src);
+
+    /* Create destination */
+    _zos_syscall1(SYS_FDELETE, (long)newpath);
+    int dst = (int)_zos_syscall1(SYS_FCREATE, (long)newpath);
+    if (dst < 0) {
+        _zos_syscall1(SYS_CLOSE, (long)src);
+        return -1;
+    }
+
+    /* Copy in chunks */
+    char copybuf[4096];
+    unsigned long off = 0;
+    while (off < sz) {
+        unsigned long chunk = sz - off;
+        if (chunk > sizeof(copybuf)) chunk = sizeof(copybuf);
+        int r = (int)_zos_syscall4(SYS_READ, (long)src,
+                                    (long)copybuf, (long)off, (long)chunk);
+        if (r <= 0) break;
+        _zos_syscall4(SYS_FWRITE, (long)dst,
+                       (long)copybuf, (long)off, (long)r);
+        off += (unsigned long)r;
+    }
+
+    _zos_syscall1(SYS_CLOSE, (long)src);
+    _zos_syscall1(SYS_CLOSE, (long)dst);
+    _zos_syscall1(SYS_FDELETE, (long)oldpath);
+    return 0;
+}
+
+void perror(const char *s) {
+    if (s != NULL && s[0] != '\0') {
+        _zos_syscall1(SYS_PRINT, (long)s);
+        _zos_syscall1(SYS_PRINT, (long)": ");
+    }
+    _zos_syscall1(SYS_PRINT, (long)"error\n");
+}
+
+FILE *tmpfile(void) {
+    return NULL;
+}
+
+char *tmpnam(char *s) {
+    (void)s;
+    return NULL;
+}
+
+/* ========================================================================
+   sscanf (minimal: %d, %x, %s, %c, %u, %ld, %lu)
+   ======================================================================== */
+
+int sscanf(const char *str, const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    int matched = 0;
+    const char *s = str;
+
+    while (*fmt) {
+        if (*fmt == '%') {
+            fmt++;
+            int is_long = 0;
+            if (*fmt == 'l') { is_long = 1; fmt++; }
+
+            if (*fmt == 'd' || *fmt == 'i') {
+                while (isspace((unsigned char)*s)) s++;
+                int neg = 0;
+                if (*s == '-') { neg = 1; s++; }
+                else if (*s == '+') s++;
+                if (!isdigit((unsigned char)*s)) goto done;
+                long val = 0;
+                while (isdigit((unsigned char)*s))
+                    val = val * 10 + (*s++ - '0');
+                if (neg) val = -val;
+                if (is_long) *va_arg(ap, long *) = val;
+                else *va_arg(ap, int *) = (int)val;
+                matched++;
+            } else if (*fmt == 'u') {
+                while (isspace((unsigned char)*s)) s++;
+                if (!isdigit((unsigned char)*s)) goto done;
+                unsigned long val = 0;
+                while (isdigit((unsigned char)*s))
+                    val = val * 10 + (unsigned long)(*s++ - '0');
+                if (is_long) *va_arg(ap, unsigned long *) = val;
+                else *va_arg(ap, unsigned int *) = (unsigned int)val;
+                matched++;
+            } else if (*fmt == 'x' || *fmt == 'X') {
+                while (isspace((unsigned char)*s)) s++;
+                if (s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) s += 2;
+                if (!isxdigit((unsigned char)*s)) goto done;
+                unsigned long val = 0;
+                while (isxdigit((unsigned char)*s)) {
+                    int d;
+                    if (*s >= '0' && *s <= '9') d = *s - '0';
+                    else if (*s >= 'a' && *s <= 'f') d = *s - 'a' + 10;
+                    else d = *s - 'A' + 10;
+                    val = val * 16 + (unsigned long)d;
+                    s++;
+                }
+                if (is_long) *va_arg(ap, unsigned long *) = val;
+                else *va_arg(ap, unsigned int *) = (unsigned int)val;
+                matched++;
+            } else if (*fmt == 's') {
+                while (isspace((unsigned char)*s)) s++;
+                char *dst = va_arg(ap, char *);
+                if (*s == '\0') goto done;
+                while (*s && !isspace((unsigned char)*s))
+                    *dst++ = *s++;
+                *dst = '\0';
+                matched++;
+            } else if (*fmt == 'c') {
+                if (*s == '\0') goto done;
+                *va_arg(ap, char *) = *s++;
+                matched++;
+            } else if (*fmt == '%') {
+                if (*s != '%') goto done;
+                s++;
+            }
+            fmt++;
+        } else if (isspace((unsigned char)*fmt)) {
+            while (isspace((unsigned char)*s)) s++;
+            fmt++;
+        } else {
+            if (*s != *fmt) goto done;
+            s++;
+            fmt++;
+        }
+    }
+
+done:
+    va_end(ap);
+    return matched;
+}
+
+/* ========================================================================
+   fcntl.h / unistd.h POSIX-style file I/O
+   ======================================================================== */
+
+/* fd position tracking for POSIX read/write (MontaukOS uses explicit offsets) */
+#define _FD_POS_MAX 64
+static unsigned long _fd_pos[_FD_POS_MAX];
+
+int open(const char *path, int flags, ...) {
+    if (path == NULL) return -1;
+    int h;
+
+    if (flags & 0x40 /* O_CREAT */) {
+        _zos_syscall1(SYS_FDELETE, (long)path);
+        h = (int)_zos_syscall1(SYS_FCREATE, (long)path);
+    } else {
+        h = (int)_zos_syscall1(SYS_OPEN, (long)path);
+    }
+
+    if (h >= 0 && h < _FD_POS_MAX)
+        _fd_pos[h] = 0;
+    return h;
+}
+
+int read(int fd, void *buf, size_t count) {
+    if (buf == NULL) return -1;
+    unsigned long pos = (fd >= 0 && fd < _FD_POS_MAX) ? _fd_pos[fd] : 0;
+    int ret = (int)_zos_syscall4(SYS_READ, (long)fd, (long)buf, (long)pos, (long)count);
+    if (ret > 0 && fd >= 0 && fd < _FD_POS_MAX)
+        _fd_pos[fd] += (unsigned long)ret;
+    return ret;
+}
+
+int write(int fd, const void *buf, size_t count) {
+    if (buf == NULL) return -1;
+    unsigned long pos = (fd >= 0 && fd < _FD_POS_MAX) ? _fd_pos[fd] : 0;
+    int ret = (int)_zos_syscall4(SYS_FWRITE, (long)fd, (long)buf, (long)pos, (long)count);
+    if (ret > 0 && fd >= 0 && fd < _FD_POS_MAX)
+        _fd_pos[fd] += (unsigned long)ret;
+    return ret;
+}
+
+int close(int fd) {
+    if (fd >= 0 && fd < _FD_POS_MAX)
+        _fd_pos[fd] = 0;
+    _zos_syscall1(SYS_CLOSE, (long)fd);
+    return 0;
+}
+
+long lseek(int fd, long offset, int whence) {
+    unsigned long pos = (fd >= 0 && fd < _FD_POS_MAX) ? _fd_pos[fd] : 0;
+    unsigned long newpos;
+    switch (whence) {
+    case 0: /* SEEK_SET */
+        newpos = (unsigned long)offset;
+        break;
+    case 1: /* SEEK_CUR */
+        newpos = pos + (unsigned long)offset;
+        break;
+    case 2: /* SEEK_END */
+        newpos = (unsigned long)_zos_syscall1(SYS_GETSIZE, (long)fd) + (unsigned long)offset;
+        break;
+    default:
+        return -1;
+    }
+    if (fd >= 0 && fd < _FD_POS_MAX)
+        _fd_pos[fd] = newpos;
+    return (long)newpos;
+}
+
+/* ========================================================================
+   sys/stat.h functions
+   ======================================================================== */
+
+int mkdir(const char *path, unsigned int mode) {
+    (void)mode;
+    if (path == NULL) return -1;
+    return (int)_zos_syscall1(SYS_FMKDIR, (long)path);
+}
+
+int stat(const char *path, struct stat *buf) {
+    if (path == NULL || buf == NULL) return -1;
+    int h = (int)_zos_syscall1(SYS_OPEN, (long)path);
+    if (h < 0) return -1;
+    buf->st_size = (unsigned long)_zos_syscall1(SYS_GETSIZE, (long)h);
+    _zos_syscall1(SYS_CLOSE, (long)h);
+    return 0;
+}
+
+int fstat(int fd, struct stat *buf) {
+    if (buf == NULL) return -1;
+    buf->st_size = (unsigned long)_zos_syscall1(SYS_GETSIZE, (long)fd);
+    return 0;
+}
+
+/* ========================================================================
+   stdlib.h: system() and atexit()
+   ======================================================================== */
+
+static void (*_atexit_funcs[32])(void);
+static int _atexit_count = 0;
+
+int atexit(void (*func)(void)) {
+    if (_atexit_count >= 32 || func == NULL) return -1;
+    _atexit_funcs[_atexit_count++] = func;
+    return 0;
+}
+
+/* ========================================================================
+   stdlib.h: qsort
+   ======================================================================== */
+
+void qsort(void *base, size_t nmemb, size_t size,
+           int (*compar)(const void *, const void *)) {
+    if (nmemb < 2 || base == NULL || compar == NULL) return;
+
+    /* Simple insertion sort for small arrays, good enough for libc */
+    unsigned char *b = (unsigned char *)base;
+    unsigned char tmp[256];
+    int use_heap = (size > sizeof(tmp));
+    unsigned char *t = use_heap ? (unsigned char *)malloc(size) : tmp;
+    if (t == NULL) return;
+
+    for (size_t i = 1; i < nmemb; i++) {
+        unsigned char *cur = b + i * size;
+        size_t j = i;
+        while (j > 0) {
+            unsigned char *prev = b + (j - 1) * size;
+            if (compar(prev, cur) <= 0) break;
+            j--;
+            cur = prev;
+        }
+        if (j != i) {
+            unsigned char *dst = b + j * size;
+            unsigned char *src = b + i * size;
+            memcpy(t, src, size);
+            memmove(dst + size, dst, (i - j) * size);
+            memcpy(dst, t, size);
+        }
+    }
+
+    if (use_heap) free(t);
+}
+
+/* ========================================================================
+   stdlib.h: rand / srand
+   ======================================================================== */
+
+static unsigned int _rand_seed = 1;
+
+int rand(void) {
+    _rand_seed = _rand_seed * 1103515245 + 12345;
+    return (int)((_rand_seed >> 16) & 0x7fff);
+}
+
+void srand(unsigned int seed) {
+    _rand_seed = seed;
+}
+
+div_t div(int numer, int denom) {
+    div_t r;
+    r.quot = numer / denom;
+    r.rem  = numer % denom;
+    return r;
+}
+
+ldiv_t ldiv(long numer, long denom) {
+    ldiv_t r;
+    r.quot = numer / denom;
+    r.rem  = numer % denom;
+    return r;
+}
+
+long atol(const char *s) {
+    return strtol(s, NULL, 10);
 }

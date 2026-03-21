@@ -5,6 +5,7 @@
 */
 
 #include "apps_common.hpp"
+#include <montauk/toml.h>
 
 // ============================================================================
 // File Manager state
@@ -18,7 +19,7 @@ struct FileManagerState {
     int history_pos;
     int history_count;
     char entry_names[64][64];
-    int entry_types[64];   // 0=file, 1=directory, 2=executable, 3=drive
+    int entry_types[64];   // 0=file, 1=dir, 2=exec, 3=drive, 4=home, 5=apps, 6=app, 7=special_dir
     int entry_sizes[64];
     int entry_count;
     int selected;
@@ -31,6 +32,39 @@ struct FileManagerState {
     bool grid_view;
     bool at_drives_root;
     int drive_indices[FM_MAX_DRIVES]; // which drive number each entry maps to
+
+    // Clipboard
+    char clipboard_path[256];
+    bool clipboard_has_data;
+    bool clipboard_is_cut;
+
+    // Context menu
+    bool ctx_open;
+    int ctx_x, ctx_y;
+    int ctx_target_idx; // -1 = background
+    int ctx_items[8];
+    int ctx_item_count;
+    int ctx_hover;
+
+    // Rename
+    bool rename_active;
+    int rename_idx;
+    char rename_buf[64];
+    int rename_cursor;
+    int rename_len;
+
+    // Path bar editing
+    bool pathbar_editing;
+    char pathbar_buf[256];
+    int pathbar_cursor;
+    int pathbar_len;
+
+    // Apps view
+    bool at_apps_view;
+    int app_map[16];           // entry index -> external_apps[] index
+    SvgIcon app_icons_lg[16];  // 48x48 icons for grid view
+    SvgIcon app_icons_sm[16];  // 16x16 icons for list view
+    int app_icon_count;
 };
 
 static constexpr int FM_TOOLBAR_H = 32;
@@ -42,6 +76,50 @@ static constexpr int FM_GRID_CELL_W = 80;
 static constexpr int FM_GRID_CELL_H = 80;
 static constexpr int FM_GRID_ICON   = 48;
 static constexpr int FM_GRID_PAD    = 4;
+
+// Special user folders: name, icon filename, index into DesktopState arrays
+static constexpr int SF_COUNT = 6;
+static const char* sf_names[SF_COUNT] = {
+    "Documents", "Desktop", "Music", "Videos", "Pictures", "Downloads"
+};
+static const char* sf_icons[SF_COUNT] = {
+    "folder-blue-documents.svg", "folder-blue-desktop.svg",
+    "folder-blue-music.svg", "folder-blue-videos.svg",
+    "folder-blue-pictures.svg", "folder-blue-downloads.svg"
+};
+
+// Return special folder index (0-5) or -1 if not a special folder name
+static int special_folder_index(const char* name) {
+    for (int i = 0; i < SF_COUNT; i++) {
+        if (montauk::streq(name, sf_names[i])) return i;
+    }
+    return -1;
+}
+
+// Context menu action codes
+static constexpr int CTX_OPEN       = 0;
+static constexpr int CTX_COPY       = 1;
+static constexpr int CTX_CUT        = 2;
+static constexpr int CTX_PASTE      = 3;
+static constexpr int CTX_RENAME     = 4;
+static constexpr int CTX_DELETE     = 5;
+static constexpr int CTX_NEW_FOLDER = 6;
+
+static constexpr int CTX_MENU_W    = 140;
+static constexpr int CTX_ITEM_H    = 24;
+
+static const char* ctx_label(int action) {
+    switch (action) {
+    case CTX_OPEN:       return "Open";
+    case CTX_COPY:       return "Copy";
+    case CTX_CUT:        return "Cut";
+    case CTX_PASTE:      return "Paste";
+    case CTX_RENAME:     return "Rename";
+    case CTX_DELETE:     return "Delete";
+    case CTX_NEW_FOLDER: return "New Folder";
+    default:             return "?";
+    }
+}
 
 // ============================================================================
 // File type detection
@@ -91,6 +169,30 @@ static int detect_file_type(const char* name, bool is_dir) {
     return 0;
 }
 
+// Forward declarations
+static void filemanager_free_app_icons(FileManagerState* fm);
+
+// ============================================================================
+// Path helpers
+// ============================================================================
+
+static void filemanager_build_fullpath(char* out, int out_max,
+                                       const char* dir, const char* name) {
+    montauk::strcpy(out, dir);
+    int plen = montauk::slen(out);
+    if (plen > 0 && out[plen - 1] != '/') str_append(out, "/", out_max);
+    str_append(out, name, out_max);
+}
+
+// Extract basename from a path (pointer into the path string)
+static const char* path_basename(const char* path) {
+    const char* last = path;
+    for (const char* p = path; *p; p++) {
+        if (*p == '/' && *(p + 1)) last = p + 1;
+    }
+    return last;
+}
+
 // ============================================================================
 // Directory reading with sorting and file sizes
 // ============================================================================
@@ -100,6 +202,55 @@ static void filemanager_read_drives(FileManagerState* fm) {
     fm->at_drives_root = true;
     fm->current_path[0] = '\0';
 
+    // Home folder entry (if we have a valid home directory)
+    DesktopState* ds = fm->desktop;
+    if (ds && ds->home_dir[0] != '\0') {
+        int i = fm->entry_count;
+        montauk::strncpy(fm->entry_names[i], "Home", 63);
+        fm->entry_types[i] = 4; // home
+        fm->entry_sizes[i] = 0;
+        fm->is_dir[i] = true;
+        fm->drive_indices[i] = -1;
+        fm->entry_count++;
+    }
+
+    // Apps entry
+    {
+        int i = fm->entry_count;
+        montauk::strncpy(fm->entry_names[i], "Apps", 63);
+        fm->entry_types[i] = 5; // apps
+        fm->entry_sizes[i] = 0;
+        fm->is_dir[i] = true;
+        fm->drive_indices[i] = -1;
+        fm->entry_count++;
+    }
+
+    // Special user folders (Documents, Desktop, Music, etc.) - only if they exist
+    if (ds && ds->home_dir[0] != '\0') {
+        for (int sf = 0; sf < SF_COUNT && fm->entry_count < 64; sf++) {
+            char probe_path[256];
+            montauk::strcpy(probe_path, ds->home_dir);
+            int plen = montauk::slen(probe_path);
+            if (plen > 0 && probe_path[plen - 1] != '/')
+                str_append(probe_path, "/", 256);
+            str_append(probe_path, sf_names[sf], 256);
+
+            // Probe: try open to check if the directory exists
+            int probe_fd = montauk::open(probe_path);
+            if (probe_fd >= 0) {
+                montauk::close(probe_fd);
+                int i = fm->entry_count;
+                montauk::strncpy(fm->entry_names[i], sf_names[sf], 63);
+                fm->entry_types[i] = 7; // special_dir
+                fm->entry_sizes[i] = 0;
+                fm->is_dir[i] = true;
+                fm->drive_indices[i] = sf; // special folder index
+                fm->entry_count++;
+            }
+        }
+    }
+
+    // Drive entries
     int drives[FM_MAX_DRIVES];
     int driveCount = montauk::drivelist(drives, FM_MAX_DRIVES);
 
@@ -140,6 +291,10 @@ static void filemanager_read_drives(FileManagerState* fm) {
 
 static void filemanager_read_dir(FileManagerState* fm) {
     fm->at_drives_root = false;
+    if (fm->at_apps_view) {
+        fm->at_apps_view = false;
+        filemanager_free_app_icons(fm);
+    }
     const char* names[64];
     fm->entry_count = montauk::readdir(fm->current_path, names, 64);
     if (fm->entry_count < 0) fm->entry_count = 0;
@@ -245,6 +400,113 @@ static void filemanager_read_dir(FileManagerState* fm) {
 }
 
 // ============================================================================
+// Apps view population
+// ============================================================================
+
+static void filemanager_free_app_icons(FileManagerState* fm) {
+    for (int i = 0; i < fm->app_icon_count; i++) {
+        if (fm->app_icons_lg[i].pixels) {
+            montauk::mfree(fm->app_icons_lg[i].pixels);
+            fm->app_icons_lg[i].pixels = nullptr;
+        }
+        if (fm->app_icons_sm[i].pixels) {
+            montauk::mfree(fm->app_icons_sm[i].pixels);
+            fm->app_icons_sm[i].pixels = nullptr;
+        }
+    }
+    fm->app_icon_count = 0;
+}
+
+static void filemanager_read_apps(FileManagerState* fm) {
+    filemanager_free_app_icons(fm);
+
+    fm->at_drives_root = false;
+    fm->at_apps_view = true;
+    fm->entry_count = 0;
+
+    DesktopState* ds = fm->desktop;
+    if (!ds) return;
+
+    // Scan manifests directly (like desktop_scan_apps but load icons at FM sizes)
+    montauk::fmkdir("0:/apps");
+    const char* entries[32];
+    int count = montauk::readdir("0:/apps", entries, 32);
+
+    // Extract basenames from readdir results (strip "apps/" prefix)
+    for (int i = 0; i < count && fm->entry_count < 16; i++) {
+        const char* raw = entries[i];
+        // Strip "apps/" prefix
+        if (raw[0] == 'a' && raw[1] == 'p' && raw[2] == 'p' && raw[3] == 's' && raw[4] == '/')
+            raw += 5;
+        char dirname[64];
+        montauk::strncpy(dirname, raw, 63);
+        int dlen = montauk::slen(dirname);
+        if (dlen > 0 && dirname[dlen - 1] == '/') dirname[dlen - 1] = '\0';
+        if (dirname[0] == '\0') continue;
+
+        // Open manifest
+        char manifest_path[128];
+        snprintf(manifest_path, 128, "0:/apps/%s/manifest.toml", dirname);
+        int fh = montauk::open(manifest_path);
+        if (fh < 0) continue;
+
+        uint64_t sz = montauk::getsize(fh);
+        if (sz == 0 || sz > 4096) { montauk::close(fh); continue; }
+
+        char* text = (char*)montauk::malloc(sz + 1);
+        montauk::read(fh, (uint8_t*)text, 0, sz);
+        montauk::close(fh);
+        text[sz] = '\0';
+
+        auto doc = montauk::toml::parse(text);
+        montauk::mfree(text);
+
+        const char* name = doc.get_string("app.name", "Unknown");
+        const char* binary = doc.get_string("app.binary", "");
+        const char* icon_file = doc.get_string("app.icon", "");
+
+        int idx = fm->entry_count;
+        montauk::strncpy(fm->entry_names[idx], name, 63);
+        fm->entry_types[idx] = 6; // app entry
+        fm->entry_sizes[idx] = 0;
+        fm->is_dir[idx] = false;
+
+        // Store binary path in drive_indices as an app_map index
+        fm->app_map[idx] = -1;
+        // Find matching external_app by binary path
+        char bin_path[128];
+        snprintf(bin_path, 128, "0:/apps/%s/%s", dirname, binary);
+        for (int x = 0; x < ds->external_app_count; x++) {
+            if (montauk::streq(ds->external_apps[x].binary_path, bin_path)) {
+                fm->app_map[idx] = x;
+                break;
+            }
+        }
+
+        // Load icons at file manager sizes
+        fm->app_icons_lg[idx] = {};
+        fm->app_icons_sm[idx] = {};
+        if (icon_file[0]) {
+            char icon_path[128];
+            snprintf(icon_path, 128, "0:/apps/%s/%s", dirname, icon_file);
+            Color defColor = colors::ICON_COLOR;
+            fm->app_icons_lg[idx] = svg_load(icon_path, 48, 48, defColor);
+            fm->app_icons_sm[idx] = svg_load(icon_path, 16, 16, defColor);
+        }
+
+        doc.destroy();
+        fm->entry_count++;
+        fm->app_icon_count = fm->entry_count;
+    }
+
+    fm->selected = -1;
+    fm->scroll_offset = 0;
+    fm->scrollbar.scroll_offset = 0;
+    fm->last_click_item = -1;
+    fm->last_click_time = 0;
+}
+
+// ============================================================================
 // Recursive directory deletion
 // ============================================================================
 
@@ -252,7 +514,7 @@ static bool filemanager_delete_recursive(const char* path) {
     // Try deleting as a file (or empty directory) first
     if (montauk::fdelete(path) == 0) return true;
 
-    // If that failed, it may be a non-empty directory — enumerate and delete children
+    // If that failed, it may be a non-empty directory -- enumerate and delete children
     const char* names[64];
     int count = montauk::readdir(path, names, 64);
     if (count < 0) return false;
@@ -300,8 +562,296 @@ static bool filemanager_delete_recursive(const char* path) {
         filemanager_delete_recursive(child);
     }
 
-    // Now the directory should be empty — delete it
+    // Now the directory should be empty -- delete it
     return montauk::fdelete(path) == 0;
+}
+
+// ============================================================================
+// File copy helper (single file)
+// ============================================================================
+
+static bool filemanager_copy_file(const char* src, const char* dst) {
+    int sfd = montauk::open(src);
+    if (sfd < 0) return false;
+    int size = (int)montauk::getsize(sfd);
+
+    // Create destination
+    int dfd = montauk::fcreate(dst);
+    if (dfd < 0) {
+        montauk::close(sfd);
+        return false;
+    }
+
+    if (size > 0) {
+        // Cap at 4 MB to avoid exhausting memory
+        if (size > 4 * 1024 * 1024) {
+            montauk::close(sfd);
+            montauk::close(dfd);
+            montauk::fdelete(dst);
+            return false;
+        }
+        uint8_t* buf = (uint8_t*)montauk::malloc(size);
+        if (!buf) {
+            montauk::close(sfd);
+            montauk::close(dfd);
+            montauk::fdelete(dst);
+            return false;
+        }
+        montauk::read(sfd, buf, 0, size);
+        montauk::fwrite(dfd, buf, 0, size);
+        montauk::mfree(buf);
+    }
+
+    montauk::close(sfd);
+    montauk::close(dfd);
+    return true;
+}
+
+// Recursive directory copy
+static bool filemanager_copy_dir_recursive(const char* src, const char* dst) {
+    montauk::fmkdir(dst);
+
+    const char* names[64];
+    int count = montauk::readdir(src, names, 64);
+    if (count < 0) return false;
+
+    // Compute prefix to strip
+    const char* after_drive = src;
+    for (int k = 0; after_drive[k]; k++) {
+        if (after_drive[k] == ':' && after_drive[k + 1] == '/') {
+            after_drive += k + 2;
+            break;
+        }
+    }
+    char prefix[256] = {0};
+    int prefix_len = 0;
+    if (after_drive[0] != '\0') {
+        montauk::strcpy(prefix, after_drive);
+        prefix_len = montauk::slen(prefix);
+        if (prefix_len > 0 && prefix[prefix_len - 1] != '/') {
+            prefix[prefix_len++] = '/';
+            prefix[prefix_len] = '\0';
+        }
+    }
+
+    for (int i = 0; i < count; i++) {
+        const char* raw = names[i];
+        if (prefix_len > 0) {
+            bool match = true;
+            for (int k = 0; k < prefix_len; k++) {
+                if (raw[k] != prefix[k]) { match = false; break; }
+            }
+            if (match) raw += prefix_len;
+        }
+
+        bool child_is_dir = false;
+        char basename[64];
+        montauk::strncpy(basename, raw, 63);
+        int blen = montauk::slen(basename);
+        if (blen > 0 && basename[blen - 1] == '/') {
+            child_is_dir = true;
+            basename[blen - 1] = '\0';
+        }
+
+        char src_child[512], dst_child[512];
+        filemanager_build_fullpath(src_child, 512, src, basename);
+        filemanager_build_fullpath(dst_child, 512, dst, basename);
+
+        if (child_is_dir)
+            filemanager_copy_dir_recursive(src_child, dst_child);
+        else
+            filemanager_copy_file(src_child, dst_child);
+    }
+
+    return true;
+}
+
+// ============================================================================
+// Clipboard operations
+// ============================================================================
+
+static void filemanager_do_copy(FileManagerState* fm) {
+    if (fm->selected < 0 || fm->selected >= fm->entry_count) return;
+    if (fm->at_drives_root || fm->entry_types[fm->selected] == 3) return;
+
+    filemanager_build_fullpath(fm->clipboard_path, 256,
+                               fm->current_path, fm->entry_names[fm->selected]);
+    fm->clipboard_has_data = true;
+    fm->clipboard_is_cut = false;
+}
+
+static void filemanager_do_cut(FileManagerState* fm) {
+    if (fm->selected < 0 || fm->selected >= fm->entry_count) return;
+    if (fm->at_drives_root || fm->entry_types[fm->selected] == 3) return;
+
+    filemanager_build_fullpath(fm->clipboard_path, 256,
+                               fm->current_path, fm->entry_names[fm->selected]);
+    fm->clipboard_has_data = true;
+    fm->clipboard_is_cut = true;
+}
+
+static void filemanager_do_paste(FileManagerState* fm) {
+    if (!fm->clipboard_has_data || fm->at_drives_root) return;
+
+    const char* basename = path_basename(fm->clipboard_path);
+    char dst[512];
+    filemanager_build_fullpath(dst, 512, fm->current_path, basename);
+
+    // Check if source is a directory by trying to readdir it
+    const char* probe[1];
+    int probe_count = montauk::readdir(fm->clipboard_path, probe, 1);
+    bool src_is_dir = (probe_count >= 0);
+
+    bool ok;
+    if (src_is_dir)
+        ok = filemanager_copy_dir_recursive(fm->clipboard_path, dst);
+    else
+        ok = filemanager_copy_file(fm->clipboard_path, dst);
+
+    if (ok && fm->clipboard_is_cut) {
+        if (src_is_dir)
+            filemanager_delete_recursive(fm->clipboard_path);
+        else
+            montauk::fdelete(fm->clipboard_path);
+        fm->clipboard_has_data = false;
+    }
+
+    filemanager_read_dir(fm);
+}
+
+// ============================================================================
+// Rename operations
+// ============================================================================
+
+static void filemanager_start_rename(FileManagerState* fm) {
+    if (fm->selected < 0 || fm->selected >= fm->entry_count) return;
+    if (fm->at_drives_root || fm->entry_types[fm->selected] == 3) return;
+
+    fm->rename_active = true;
+    fm->rename_idx = fm->selected;
+    montauk::strcpy(fm->rename_buf, fm->entry_names[fm->selected]);
+    fm->rename_len = montauk::slen(fm->rename_buf);
+    fm->rename_cursor = fm->rename_len;
+}
+
+static void filemanager_finish_rename(FileManagerState* fm) {
+    if (!fm->rename_active) return;
+    fm->rename_active = false;
+
+    // If name unchanged, skip
+    if (montauk::streq(fm->rename_buf, fm->entry_names[fm->rename_idx])) return;
+    if (fm->rename_len == 0) return;
+
+    char old_path[512], new_path[512];
+    filemanager_build_fullpath(old_path, 512,
+                               fm->current_path, fm->entry_names[fm->rename_idx]);
+    filemanager_build_fullpath(new_path, 512,
+                               fm->current_path, fm->rename_buf);
+
+    if (fm->is_dir[fm->rename_idx]) {
+        // Directory rename: copy recursively then delete old
+        if (filemanager_copy_dir_recursive(old_path, new_path))
+            filemanager_delete_recursive(old_path);
+    } else {
+        // File rename: copy then delete old
+        if (filemanager_copy_file(old_path, new_path))
+            montauk::fdelete(old_path);
+    }
+
+    filemanager_read_dir(fm);
+}
+
+static void filemanager_cancel_rename(FileManagerState* fm) {
+    fm->rename_active = false;
+}
+
+// ============================================================================
+// New folder
+// ============================================================================
+
+static void filemanager_new_folder(FileManagerState* fm) {
+    if (fm->at_drives_root) return;
+
+    // Find a unique name
+    char name[64] = "New Folder";
+    char path[512];
+    filemanager_build_fullpath(path, 512, fm->current_path, name);
+    int attempt = 1;
+    // Try creating; if it fails, append a number
+    if (montauk::fmkdir(path) != 0) {
+        for (attempt = 2; attempt <= 99; attempt++) {
+            snprintf(name, 64, "New Folder %d", attempt);
+            filemanager_build_fullpath(path, 512, fm->current_path, name);
+            if (montauk::fmkdir(path) == 0) break;
+        }
+    }
+
+    filemanager_read_dir(fm);
+
+    // Select the new folder and start rename
+    for (int i = 0; i < fm->entry_count; i++) {
+        if (montauk::streq(fm->entry_names[i], name)) {
+            fm->selected = i;
+            filemanager_start_rename(fm);
+            break;
+        }
+    }
+}
+
+// ============================================================================
+// Delete selected entry
+// ============================================================================
+
+static void filemanager_delete_selected(FileManagerState* fm) {
+    if (fm->selected < 0 || fm->selected >= fm->entry_count) return;
+    if (fm->at_drives_root || fm->entry_types[fm->selected] == 3) return;
+
+    char fullpath[512];
+    filemanager_build_fullpath(fullpath, 512,
+                               fm->current_path, fm->entry_names[fm->selected]);
+    if (fm->is_dir[fm->selected])
+        filemanager_delete_recursive(fullpath);
+    else
+        montauk::fdelete(fullpath);
+    filemanager_read_dir(fm);
+}
+
+// ============================================================================
+// Context menu
+// ============================================================================
+
+static void filemanager_open_ctx_menu(FileManagerState* fm, int local_x, int local_y,
+                                       int target_idx) {
+    fm->ctx_open = true;
+    fm->ctx_x = local_x;
+    fm->ctx_y = local_y;
+    fm->ctx_target_idx = target_idx;
+    fm->ctx_hover = -1;
+    fm->ctx_item_count = 0;
+
+    if (target_idx >= 0 && target_idx < fm->entry_count) {
+        int tt = fm->entry_types[target_idx];
+        if ((fm->at_drives_root && (tt == 3 || tt == 4 || tt == 5 || tt == 7)) ||
+            (fm->at_apps_view && tt == 6)) {
+            // Drive, Home, Apps shortcut, or app entry: only Open
+            fm->ctx_items[fm->ctx_item_count++] = CTX_OPEN;
+        } else {
+            fm->ctx_items[fm->ctx_item_count++] = CTX_OPEN;
+            fm->ctx_items[fm->ctx_item_count++] = CTX_COPY;
+            fm->ctx_items[fm->ctx_item_count++] = CTX_CUT;
+            fm->ctx_items[fm->ctx_item_count++] = CTX_RENAME;
+            fm->ctx_items[fm->ctx_item_count++] = CTX_DELETE;
+        }
+    } else {
+        // Background click
+        if (fm->clipboard_has_data)
+            fm->ctx_items[fm->ctx_item_count++] = CTX_PASTE;
+        fm->ctx_items[fm->ctx_item_count++] = CTX_NEW_FOLDER;
+    }
+}
+
+static void filemanager_close_ctx_menu(FileManagerState* fm) {
+    fm->ctx_open = false;
 }
 
 // ============================================================================
@@ -332,9 +882,18 @@ static void filemanager_navigate(FileManagerState* fm, const char* name) {
 static void filemanager_go_up(FileManagerState* fm) {
     if (fm->at_drives_root) return;
 
+    // From apps view, go back to Computer
+    if (fm->at_apps_view) {
+        fm->at_apps_view = false;
+        filemanager_free_app_icons(fm);
+        filemanager_read_drives(fm);
+        filemanager_push_history(fm);
+        return;
+    }
+
     int len = montauk::slen(fm->current_path);
 
-    // At drive root (e.g. "0:/" or "10:/") — go to drives view
+    // At drive root (e.g. "0:/" or "10:/") -- go to drives view
     bool is_drive_root = false;
     if (len >= 3 && fm->current_path[len - 1] == '/') {
         // Check if path is just "N:/" or "NN:/"
@@ -393,8 +952,133 @@ static void filemanager_go_forward(FileManagerState* fm) {
 }
 
 static void filemanager_go_home(FileManagerState* fm) {
+    if (fm->at_apps_view) {
+        fm->at_apps_view = false;
+        filemanager_free_app_icons(fm);
+    }
     filemanager_read_drives(fm);
     filemanager_push_history(fm);
+}
+
+// ============================================================================
+// Path bar editing
+// ============================================================================
+
+static void filemanager_start_pathbar(FileManagerState* fm) {
+    fm->pathbar_editing = true;
+    if (fm->at_drives_root) {
+        fm->pathbar_buf[0] = '\0';
+        fm->pathbar_len = 0;
+    } else {
+        montauk::strcpy(fm->pathbar_buf, fm->current_path);
+        fm->pathbar_len = montauk::slen(fm->pathbar_buf);
+    }
+    fm->pathbar_cursor = fm->pathbar_len;
+}
+
+static void filemanager_cancel_pathbar(FileManagerState* fm) {
+    fm->pathbar_editing = false;
+}
+
+static void filemanager_commit_pathbar(FileManagerState* fm) {
+    fm->pathbar_editing = false;
+    if (fm->pathbar_len == 0) {
+        filemanager_read_drives(fm);
+        filemanager_push_history(fm);
+        return;
+    }
+    montauk::strcpy(fm->current_path, fm->pathbar_buf);
+    filemanager_push_history(fm);
+    filemanager_read_dir(fm);
+}
+
+// ============================================================================
+// Open file/directory/drive
+// ============================================================================
+
+static void filemanager_open_entry(FileManagerState* fm, int idx) {
+    if (idx < 0 || idx >= fm->entry_count) return;
+
+    // Special user folder in Computer view
+    if (fm->at_drives_root && fm->entry_types[idx] == 7) {
+        DesktopState* ds = fm->desktop;
+        if (ds && ds->home_dir[0] != '\0') {
+            montauk::strcpy(fm->current_path, ds->home_dir);
+            int plen = montauk::slen(fm->current_path);
+            if (plen > 0 && fm->current_path[plen - 1] != '/')
+                str_append(fm->current_path, "/", 256);
+            str_append(fm->current_path, fm->entry_names[idx], 256);
+            filemanager_push_history(fm);
+            filemanager_read_dir(fm);
+        }
+        return;
+    }
+
+    // Apps shortcut in Computer view
+    if (fm->at_drives_root && fm->entry_types[idx] == 5) {
+        filemanager_read_apps(fm);
+        return;
+    }
+
+    // App entry in apps view - launch it
+    if (fm->at_apps_view && fm->entry_types[idx] == 6) {
+        DesktopState* ds = fm->desktop;
+        if (ds && fm->app_map[idx] >= 0 && fm->app_map[idx] < ds->external_app_count) {
+            montauk::spawn(ds->external_apps[fm->app_map[idx]].binary_path, ds->home_dir);
+        }
+        return;
+    }
+
+    if (fm->at_drives_root && fm->entry_types[idx] == 4) {
+        // Home folder
+        DesktopState* ds = fm->desktop;
+        if (ds && ds->home_dir[0] != '\0') {
+            montauk::strcpy(fm->current_path, ds->home_dir);
+            filemanager_push_history(fm);
+            filemanager_read_dir(fm);
+        }
+        return;
+    }
+
+    if (fm->at_drives_root && fm->entry_types[idx] == 3) {
+        int d = fm->drive_indices[idx];
+        char dpath[8];
+        if (d < 10) {
+            dpath[0] = '0' + d; dpath[1] = ':'; dpath[2] = '/'; dpath[3] = '\0';
+        } else {
+            dpath[0] = '1'; dpath[1] = '0' + (d - 10); dpath[2] = ':'; dpath[3] = '/'; dpath[4] = '\0';
+        }
+        montauk::strcpy(fm->current_path, dpath);
+        filemanager_push_history(fm);
+        filemanager_read_dir(fm);
+        return;
+    }
+
+    if (fm->is_dir[idx]) {
+        filemanager_navigate(fm, fm->entry_names[idx]);
+        return;
+    }
+
+    // Open file with appropriate app
+    char fullpath[512];
+    filemanager_build_fullpath(fullpath, 512, fm->current_path, fm->entry_names[idx]);
+    if (is_image_file(fm->entry_names[idx])) {
+        montauk::spawn("0:/apps/imageviewer/imageviewer.elf", fullpath);
+    } else if (is_font_file(fm->entry_names[idx])) {
+        montauk::spawn("0:/apps/fontpreview/fontpreview.elf", fullpath);
+    } else if (is_pdf_file(fm->entry_names[idx])) {
+        montauk::spawn("0:/apps/pdfviewer/pdfviewer.elf", fullpath);
+    } else if (is_spreadsheet_file(fm->entry_names[idx])) {
+        montauk::spawn("0:/apps/spreadsheet/spreadsheet.elf", fullpath);
+    } else if (is_video_file(fm->entry_names[idx])) {
+        montauk::spawn("0:/apps/video/video.elf", fullpath);
+    } else if (is_audio_file(fm->entry_names[idx])) {
+        montauk::spawn("0:/apps/music/music.elf", fullpath);
+    } else if (str_ends_with(fm->entry_names[idx], ".elf")) {
+        montauk::spawn(fullpath);
+    } else if (fm->desktop) {
+        open_texteditor_with_file(fm->desktop, fullpath);
+    }
 }
 
 // ============================================================================
@@ -408,8 +1092,9 @@ static void filemanager_draw_header(Canvas& c, FileManagerState* fm,
     // ---- Toolbar (32px) ----
     c.fill_rect(0, 0, c.w, FM_TOOLBAR_H, toolbar_color);
 
+    // Navigation buttons: Back, Forward, Up, Home
     struct ToolBtn { int x; SvgIcon* icon; };
-    ToolBtn btns[4] = {
+    ToolBtn nav_btns[4] = {
         {  4, ds ? &ds->icon_go_back    : nullptr },
         { 32, ds ? &ds->icon_go_forward : nullptr },
         { 60, ds ? &ds->icon_go_up      : nullptr },
@@ -417,18 +1102,17 @@ static void filemanager_draw_header(Canvas& c, FileManagerState* fm,
     };
 
     for (int i = 0; i < 4; i++) {
-        int bx = btns[i].x;
+        int bx = nav_btns[i].x;
         int by = 4;
         c.fill_rect(bx, by, 24, 24, btn_bg);
-
-        if (btns[i].icon) {
-            int ix = bx + (24 - btns[i].icon->width) / 2;
-            int iy = by + (24 - btns[i].icon->height) / 2;
-            c.icon(ix, iy, *btns[i].icon);
+        if (nav_btns[i].icon) {
+            int ix = bx + (24 - nav_btns[i].icon->width) / 2;
+            int iy = by + (24 - nav_btns[i].icon->height) / 2;
+            c.icon(ix, iy, *nav_btns[i].icon);
         }
     }
 
-    // Toggle view button (5th toolbar button)
+    // View toggle button
     {
         int bx = 120, by = 4;
         c.fill_rect(bx, by, 24, 24, btn_bg);
@@ -442,18 +1126,35 @@ static void filemanager_draw_header(Canvas& c, FileManagerState* fm,
         }
     }
 
-    // Delete button (6th toolbar button) — active when a file or directory is selected
-    {
-        int bx = 148, by = 4;
-        bool has_sel = fm->selected >= 0 && fm->selected < fm->entry_count
-                       && !fm->at_drives_root
-                       && fm->entry_types[fm->selected] != 3;
-        Color del_bg = has_sel ? btn_bg : Color::from_rgb(0xF0, 0xF0, 0xF0);
-        c.fill_rect(bx, by, 24, 24, del_bg);
-        if (ds && ds->icon_delete.pixels) {
-            int ix = bx + (24 - ds->icon_delete.width) / 2;
-            int iy = by + (24 - ds->icon_delete.height) / 2;
-            c.icon(ix, iy, ds->icon_delete);
+    // Separator line between nav group and action group
+    c.vline(152, 6, 20, colors::BORDER);
+
+    // Action buttons: Copy, Cut, Paste, Rename, New Folder, Delete
+    bool has_sel = fm->selected >= 0 && fm->selected < fm->entry_count
+                   && !fm->at_drives_root && !fm->at_apps_view
+                   && fm->entry_types[fm->selected] != 3;
+    bool has_clip = fm->clipboard_has_data && !fm->at_drives_root && !fm->at_apps_view;
+    Color dim_bg = Color::from_rgb(0xF0, 0xF0, 0xF0);
+
+    // Icon toolbar buttons: Copy, Cut, Paste, Rename, New Folder, Delete
+    struct ActionBtn { int x; SvgIcon* icon; bool enabled; };
+    ActionBtn action_btns[] = {
+        { 160, ds ? &ds->icon_copy       : nullptr, has_sel },
+        { 188, ds ? &ds->icon_cut        : nullptr, has_sel },
+        { 216, ds ? &ds->icon_paste      : nullptr, has_clip },
+        { 244, ds ? &ds->icon_rename     : nullptr, has_sel },
+        { 272, ds ? &ds->icon_folder_new : nullptr, !fm->at_drives_root && !fm->at_apps_view },
+        { 300, ds ? &ds->icon_delete     : nullptr, has_sel },
+    };
+
+    for (int i = 0; i < 6; i++) {
+        int bx = action_btns[i].x;
+        int by = 4;
+        c.fill_rect(bx, by, 24, 24, action_btns[i].enabled ? btn_bg : dim_bg);
+        if (action_btns[i].icon && action_btns[i].icon->pixels) {
+            int ix = bx + (24 - action_btns[i].icon->width) / 2;
+            int iy = by + (24 - action_btns[i].icon->height) / 2;
+            c.icon(ix, iy, *action_btns[i].icon);
         }
     }
 
@@ -462,8 +1163,28 @@ static void filemanager_draw_header(Canvas& c, FileManagerState* fm,
 
     // ---- Path bar ----
     int pathbar_y = FM_TOOLBAR_H;
-    c.fill_rect(0, pathbar_y, c.w, FM_PATHBAR_H, Color::from_rgb(0xF0, 0xF0, 0xF0));
-    c.text(8, pathbar_y + 4, fm->at_drives_root ? "Drives" : fm->current_path, colors::TEXT_COLOR);
+    if (fm->pathbar_editing) {
+        // Editable text input
+        c.fill_rect(0, pathbar_y, c.w, FM_PATHBAR_H, colors::WHITE);
+        c.rect(0, pathbar_y, c.w, FM_PATHBAR_H, colors::ACCENT);
+        int fh = system_font_height();
+        int ty = pathbar_y + (FM_PATHBAR_H - fh) / 2;
+        c.text(8, ty, fm->pathbar_buf, colors::TEXT_COLOR);
+        // Cursor
+        char prefix[256];
+        int cpos = fm->pathbar_cursor;
+        if (cpos > 255) cpos = 255;
+        for (int k = 0; k < cpos; k++) prefix[k] = fm->pathbar_buf[k];
+        prefix[cpos] = '\0';
+        int cx = 8 + text_width(prefix);
+        c.vline(cx, ty, fh, colors::ACCENT);
+    } else {
+        c.fill_rect(0, pathbar_y, c.w, FM_PATHBAR_H, Color::from_rgb(0xF0, 0xF0, 0xF0));
+        const char* pathbar_text = fm->current_path;
+        if (fm->at_drives_root) pathbar_text = "Computer";
+        else if (fm->at_apps_view) pathbar_text = "Apps";
+        c.text(8, pathbar_y + 4, pathbar_text, colors::TEXT_COLOR);
+    }
 
     // Path bar separator
     c.hline(0, pathbar_y + FM_PATHBAR_H - 1, c.w, colors::BORDER);
@@ -519,7 +1240,20 @@ static void filemanager_on_draw(Window* win, Framebuffer& fb) {
             // Large icon centered horizontally
             int icon_x = cell_x + (FM_GRID_CELL_W - FM_GRID_ICON) / 2;
             int icon_y = cell_y + FM_GRID_PAD;
-            if (ds && fm->entry_types[i] == 3 && ds->icon_drive_lg.pixels) {
+            // Check for special folder icon (type 7 in Computer, or type 1 dir with matching name)
+            int sfi = -1;
+            if (fm->entry_types[i] == 7) sfi = fm->drive_indices[i];
+            else if (ds && fm->entry_types[i] == 1) sfi = special_folder_index(fm->entry_names[i]);
+
+            if (sfi >= 0 && ds && ds->icon_special_folder_lg[sfi].pixels) {
+                c.icon(icon_x, icon_y, ds->icon_special_folder_lg[sfi]);
+            } else if (fm->entry_types[i] == 6 && i < fm->app_icon_count && fm->app_icons_lg[i].pixels) {
+                c.icon(icon_x, icon_y, fm->app_icons_lg[i]);
+            } else if (ds && fm->entry_types[i] == 5 && ds->icon_apps_lg.pixels) {
+                c.icon(icon_x, icon_y, ds->icon_apps_lg);
+            } else if (ds && fm->entry_types[i] == 4 && ds->icon_home_folder_lg.pixels) {
+                c.icon(icon_x, icon_y, ds->icon_home_folder_lg);
+            } else if (ds && fm->entry_types[i] == 3 && ds->icon_drive_lg.pixels) {
                 c.icon(icon_x, icon_y, ds->icon_drive_lg);
             } else if (ds && fm->entry_types[i] == 1 && ds->icon_folder_lg.pixels) {
                 c.icon(icon_x, icon_y, ds->icon_folder_lg);
@@ -538,22 +1272,46 @@ static void filemanager_on_draw(Window* win, Framebuffer& fb) {
             }
 
             // Filename centered below icon, truncated if needed
-            char label[16];
-            int nlen = montauk::slen(fm->entry_names[i]);
-            if (nlen > 9) {
-                for (int k = 0; k < 9; k++) label[k] = fm->entry_names[i][k];
-                label[9] = '.';
-                label[10] = '.';
-                label[11] = '\0';
+            // If renaming this entry, draw the rename textbox instead
+            if (fm->rename_active && fm->rename_idx == i) {
+                int ty = icon_y + FM_GRID_ICON + 2;
+                int tw = FM_GRID_CELL_W - 4;
+                if (ty >= list_y && ty + system_font_height() + 4 <= c.h) {
+                    c.fill_rect(cell_x + 2, ty - 1, tw, system_font_height() + 2, colors::WHITE);
+                    c.rect(cell_x + 2, ty - 1, tw, system_font_height() + 2, colors::ACCENT);
+                    // Draw rename text (truncated to cell width)
+                    char display[16];
+                    int rlen = fm->rename_len;
+                    if (rlen > 10) rlen = 10;
+                    for (int k = 0; k < rlen; k++) display[k] = fm->rename_buf[k];
+                    display[rlen] = '\0';
+                    c.text(cell_x + 4, ty, display, colors::TEXT_COLOR);
+                    // Cursor
+                    char prefix[64];
+                    int cpos = fm->rename_cursor < rlen ? fm->rename_cursor : rlen;
+                    for (int k = 0; k < cpos; k++) prefix[k] = fm->rename_buf[k];
+                    prefix[cpos] = '\0';
+                    int cx = cell_x + 4 + text_width(prefix);
+                    c.vline(cx, ty, system_font_height(), colors::ACCENT);
+                }
             } else {
-                montauk::strncpy(label, fm->entry_names[i], 15);
+                char label[16];
+                int nlen = montauk::slen(fm->entry_names[i]);
+                if (nlen > 9) {
+                    for (int k = 0; k < 9; k++) label[k] = fm->entry_names[i][k];
+                    label[9] = '.';
+                    label[10] = '.';
+                    label[11] = '\0';
+                } else {
+                    montauk::strncpy(label, fm->entry_names[i], 15);
+                }
+                int tw = text_width(label);
+                int tx = cell_x + (FM_GRID_CELL_W - tw) / 2;
+                if (tx < cell_x) tx = cell_x;
+                int ty = icon_y + FM_GRID_ICON + 2;
+                if (ty >= list_y && ty + system_font_height() <= c.h)
+                    c.text(tx, ty, label, colors::TEXT_COLOR);
             }
-            int tw = text_width(label);
-            int tx = cell_x + (FM_GRID_CELL_W - tw) / 2;
-            if (tx < cell_x) tx = cell_x;
-            int ty = icon_y + FM_GRID_ICON + 2;
-            if (ty >= list_y && ty + system_font_height() <= c.h)
-                c.text(tx, ty, label, colors::TEXT_COLOR);
         }
     } else {
         // ---- List View ----
@@ -605,10 +1363,24 @@ static void filemanager_on_draw(Window* win, Framebuffer& fb) {
                     c.fill_rect(0, sy, c.w - FM_SCROLLBAR_W, sh, colors::MENU_HOVER);
             }
 
-            // Icon
+            // Icon (skip if it would bleed above the list area)
             int ico_x = 8;
             int ico_y = iy + (FM_ITEM_H - 16) / 2;
-            if (ds && fm->entry_types[i] == 3 && ds->icon_drive.pixels) {
+            // Check for special folder icon
+            int sfi_sm = -1;
+            if (fm->entry_types[i] == 7) sfi_sm = fm->drive_indices[i];
+            else if (ds && fm->entry_types[i] == 1) sfi_sm = special_folder_index(fm->entry_names[i]);
+
+            if (ico_y < list_y) { /* clipped by header repaint */ }
+            else if (sfi_sm >= 0 && ds && ds->icon_special_folder[sfi_sm].pixels) {
+                c.icon(ico_x, ico_y, ds->icon_special_folder[sfi_sm]);
+            } else if (fm->entry_types[i] == 6 && i < fm->app_icon_count && fm->app_icons_sm[i].pixels) {
+                c.icon(ico_x, ico_y, fm->app_icons_sm[i]);
+            } else if (ds && fm->entry_types[i] == 5 && ds->icon_apps.pixels) {
+                c.icon(ico_x, ico_y, ds->icon_apps);
+            } else if (ds && fm->entry_types[i] == 4 && ds->icon_home_folder.pixels) {
+                c.icon(ico_x, ico_y, ds->icon_home_folder);
+            } else if (ds && fm->entry_types[i] == 3 && ds->icon_drive.pixels) {
                 c.icon(ico_x, ico_y, ds->icon_drive);
             } else if (ds && fm->entry_types[i] == 1 && ds->icon_folder.pixels) {
                 c.icon(ico_x, ico_y, ds->icon_folder);
@@ -626,12 +1398,29 @@ static void filemanager_on_draw(Window* win, Framebuffer& fb) {
                     c.fill_rect(ico_x, iy_clip, 16, ih_clip, icon_c);
             }
 
-            // Name
+            // Name (or rename textbox)
             int tx = 30;
             int fm_sfh = system_font_height();
             int ty = iy + (FM_ITEM_H - fm_sfh) / 2;
-            if (ty >= list_y && ty + fm_sfh <= c.h)
-                c.text(tx, ty, fm->entry_names[i], colors::TEXT_COLOR);
+
+            if (fm->rename_active && fm->rename_idx == i && ty >= list_y && ty + fm_sfh <= c.h) {
+                // Rename textbox inline
+                int rw = (size_col_x > 100 ? size_col_x - 8 : c.w - FM_SCROLLBAR_W - 8) - tx;
+                c.fill_rect(tx - 2, ty - 1, rw, fm_sfh + 2, colors::WHITE);
+                c.rect(tx - 2, ty - 1, rw, fm_sfh + 2, colors::ACCENT);
+                c.text(tx, ty, fm->rename_buf, colors::TEXT_COLOR);
+                // Cursor
+                char prefix[64];
+                int cpos = fm->rename_cursor;
+                if (cpos > 63) cpos = 63;
+                for (int k = 0; k < cpos; k++) prefix[k] = fm->rename_buf[k];
+                prefix[cpos] = '\0';
+                int cx = tx + text_width(prefix);
+                c.vline(cx, ty, fm_sfh, colors::ACCENT);
+            } else {
+                if (ty >= list_y && ty + fm_sfh <= c.h)
+                    c.text(tx, ty, fm->entry_names[i], colors::TEXT_COLOR);
+            }
 
             // Size
             if (size_col_x > 100 && !fm->is_dir[i] && ty >= list_y && ty + fm_sfh <= c.h) {
@@ -643,7 +1432,10 @@ static void filemanager_on_draw(Window* win, Framebuffer& fb) {
             // Type
             if (type_col_x > 160 && ty >= list_y && ty + fm_sfh <= c.h) {
                 const char* type_str = "File";
-                if (fm->entry_types[i] == 3) type_str = "Drive";
+                if (fm->entry_types[i] == 6) type_str = "App";
+                else if (fm->entry_types[i] == 5) type_str = "Apps";
+                else if (fm->entry_types[i] == 4) type_str = "Home";
+                else if (fm->entry_types[i] == 3) type_str = "Drive";
                 else if (fm->entry_types[i] == 1) type_str = "Dir";
                 else if (fm->entry_types[i] == 2) type_str = "Exec";
                 c.text(type_col_x, ty, type_str, dim);
@@ -671,6 +1463,37 @@ static void filemanager_on_draw(Window* win, Framebuffer& fb) {
     // Repaint header on top of content to clip scrolled icon overflow
     if (fm->scrollbar.scroll_offset > 0)
         filemanager_draw_header(c, fm, toolbar_color, btn_bg);
+
+    // ---- Context menu overlay ----
+    if (fm->ctx_open && fm->ctx_item_count > 0) {
+        int cmx = fm->ctx_x;
+        int cmy = fm->ctx_y;
+        int cmh = fm->ctx_item_count * CTX_ITEM_H + 8;
+
+        // Clamp to window bounds
+        if (cmx + CTX_MENU_W > c.w) cmx = c.w - CTX_MENU_W;
+        if (cmy + cmh > c.h) cmy = c.h - cmh;
+        if (cmx < 0) cmx = 0;
+        if (cmy < 0) cmy = 0;
+
+        // Shadow
+        c.fill_rect(cmx + 2, cmy + 2, CTX_MENU_W, cmh, Color::from_rgb(0x80, 0x80, 0x80));
+        // Background
+        c.fill_rounded_rect(cmx, cmy, CTX_MENU_W, cmh, 4, colors::WHITE);
+        c.rect(cmx, cmy, CTX_MENU_W, cmh, colors::BORDER);
+
+        for (int i = 0; i < fm->ctx_item_count; i++) {
+            int iy = cmy + 4 + i * CTX_ITEM_H;
+
+            // Hover highlight
+            if (i == fm->ctx_hover)
+                c.fill_rect(cmx + 2, iy, CTX_MENU_W - 4, CTX_ITEM_H, colors::MENU_HOVER);
+
+            int fh = system_font_height();
+            int ty = iy + (CTX_ITEM_H - fh) / 2;
+            c.text(cmx + 12, ty, ctx_label(fm->ctx_items[i]), colors::TEXT_COLOR);
+        }
+    }
 }
 
 // ============================================================================
@@ -692,34 +1515,91 @@ static void filemanager_on_mouse(Window* win, MouseEvent& ev) {
     local_ev.y = local_y;
     fm->scrollbar.handle_mouse(local_ev);
 
+    // ---- Context menu interaction ----
+    if (fm->ctx_open) {
+        int cmx = fm->ctx_x;
+        int cmy = fm->ctx_y;
+        int cmh = fm->ctx_item_count * CTX_ITEM_H + 8;
+        if (cmx + CTX_MENU_W > cw) cmx = cw - CTX_MENU_W;
+        if (cmy + cmh > win->content_h) cmy = win->content_h - cmh;
+        if (cmx < 0) cmx = 0;
+        if (cmy < 0) cmy = 0;
+
+        // Update hover
+        if (local_x >= cmx && local_x < cmx + CTX_MENU_W &&
+            local_y >= cmy + 4 && local_y < cmy + 4 + fm->ctx_item_count * CTX_ITEM_H) {
+            fm->ctx_hover = (local_y - cmy - 4) / CTX_ITEM_H;
+        } else {
+            fm->ctx_hover = -1;
+        }
+
+        if (ev.left_pressed()) {
+            if (fm->ctx_hover >= 0 && fm->ctx_hover < fm->ctx_item_count) {
+                int action = fm->ctx_items[fm->ctx_hover];
+                int target = fm->ctx_target_idx;
+                filemanager_close_ctx_menu(fm);
+
+                // Select target if needed
+                if (target >= 0 && target < fm->entry_count)
+                    fm->selected = target;
+
+                switch (action) {
+                case CTX_OPEN:       filemanager_open_entry(fm, target); break;
+                case CTX_COPY:       filemanager_do_copy(fm); break;
+                case CTX_CUT:        filemanager_do_cut(fm); break;
+                case CTX_PASTE:      filemanager_do_paste(fm); break;
+                case CTX_RENAME:     filemanager_start_rename(fm); break;
+                case CTX_DELETE:     filemanager_delete_selected(fm); break;
+                case CTX_NEW_FOLDER: filemanager_new_folder(fm); break;
+                }
+            } else {
+                filemanager_close_ctx_menu(fm);
+            }
+            return;
+        }
+        if (ev.right_pressed()) {
+            filemanager_close_ctx_menu(fm);
+            return;
+        }
+        return;
+    }
+
+    // ---- Cancel rename on click outside rename area ----
+    if (fm->rename_active && ev.left_pressed()) {
+        filemanager_finish_rename(fm);
+    }
+
     if (ev.left_pressed()) {
+        // Click on path bar area
+        if (local_y >= FM_TOOLBAR_H && local_y < FM_TOOLBAR_H + FM_PATHBAR_H) {
+            if (!fm->pathbar_editing)
+                filemanager_start_pathbar(fm);
+            return;
+        }
+
+        // Clicking anywhere else while pathbar is editing commits the path
+        if (fm->pathbar_editing) {
+            filemanager_commit_pathbar(fm);
+        }
+
         // Toolbar button clicks
         if (local_y < FM_TOOLBAR_H) {
-            if (local_x >= 4 && local_x < 28)  filemanager_go_back(fm);
-            else if (local_x >= 32 && local_x < 56) filemanager_go_forward(fm);
-            else if (local_x >= 60 && local_x < 84) filemanager_go_up(fm);
-            else if (local_x >= 88 && local_x < 112) filemanager_go_home(fm);
+            // Navigation buttons
+            if (local_x >= 4 && local_x < 28)       filemanager_go_back(fm);
+            else if (local_x >= 32 && local_x < 56)  filemanager_go_forward(fm);
+            else if (local_x >= 60 && local_x < 84)  filemanager_go_up(fm);
+            else if (local_x >= 88 && local_x < 112)  filemanager_go_home(fm);
             else if (local_x >= 120 && local_x < 144) {
                 fm->grid_view = !fm->grid_view;
                 fm->scrollbar.scroll_offset = 0;
             }
-            else if (local_x >= 148 && local_x < 172) {
-                // Delete selected file or directory
-                if (fm->selected >= 0 && fm->selected < fm->entry_count
-                    && !fm->at_drives_root && fm->entry_types[fm->selected] != 3) {
-                    char fullpath[512];
-                    montauk::strcpy(fullpath, fm->current_path);
-                    int plen = montauk::slen(fullpath);
-                    if (plen > 0 && fullpath[plen - 1] != '/')
-                        str_append(fullpath, "/", 512);
-                    str_append(fullpath, fm->entry_names[fm->selected], 512);
-                    if (fm->is_dir[fm->selected])
-                        filemanager_delete_recursive(fullpath);
-                    else
-                        montauk::fdelete(fullpath);
-                    filemanager_read_dir(fm);
-                }
-            }
+            // Action buttons
+            else if (local_x >= 160 && local_x < 184) filemanager_do_copy(fm);
+            else if (local_x >= 188 && local_x < 212) filemanager_do_cut(fm);
+            else if (local_x >= 216 && local_x < 240) filemanager_do_paste(fm);
+            else if (local_x >= 244 && local_x < 268) filemanager_start_rename(fm);
+            else if (local_x >= 272 && local_x < 296) filemanager_new_folder(fm);
+            else if (local_x >= 300 && local_x < 324) filemanager_delete_selected(fm);
             return;
         }
 
@@ -738,46 +1618,7 @@ static void filemanager_on_mouse(Window* win, MouseEvent& ev) {
 
                     if (fm->last_click_item == clicked_idx &&
                         (now - fm->last_click_time) < 400) {
-                        if (fm->at_drives_root && fm->entry_types[clicked_idx] == 3) {
-                            // Navigate into drive
-                            int d = fm->drive_indices[clicked_idx];
-                            char dpath[8];
-                            if (d < 10) {
-                                dpath[0] = '0' + d; dpath[1] = ':'; dpath[2] = '/'; dpath[3] = '\0';
-                            } else {
-                                dpath[0] = '1'; dpath[1] = '0' + (d - 10); dpath[2] = ':'; dpath[3] = '/'; dpath[4] = '\0';
-                            }
-                            montauk::strcpy(fm->current_path, dpath);
-                            filemanager_push_history(fm);
-                            filemanager_read_dir(fm);
-                        } else if (fm->is_dir[clicked_idx]) {
-                            filemanager_navigate(fm, fm->entry_names[clicked_idx]);
-                        } else {
-                            char fullpath[512];
-                            montauk::strcpy(fullpath, fm->current_path);
-                            int plen = montauk::slen(fullpath);
-                            if (plen > 0 && fullpath[plen - 1] != '/') {
-                                str_append(fullpath, "/", 512);
-                            }
-                            str_append(fullpath, fm->entry_names[clicked_idx], 512);
-                            if (is_image_file(fm->entry_names[clicked_idx])) {
-                                montauk::spawn("0:/apps/imageviewer/imageviewer.elf", fullpath);
-                            } else if (is_font_file(fm->entry_names[clicked_idx])) {
-                                montauk::spawn("0:/apps/fontpreview/fontpreview.elf", fullpath);
-                            } else if (is_pdf_file(fm->entry_names[clicked_idx])) {
-                                montauk::spawn("0:/apps/pdfviewer/pdfviewer.elf", fullpath);
-                            } else if (is_spreadsheet_file(fm->entry_names[clicked_idx])) {
-                                montauk::spawn("0:/apps/spreadsheet/spreadsheet.elf", fullpath);
-                            } else if (is_video_file(fm->entry_names[clicked_idx])) {
-                                montauk::spawn("0:/apps/video/video.elf", fullpath);
-                            } else if (is_audio_file(fm->entry_names[clicked_idx])) {
-                                montauk::spawn("0:/apps/music/music.elf", fullpath);
-                            } else if (str_ends_with(fm->entry_names[clicked_idx], ".elf")) {
-                                montauk::spawn(fullpath);
-                            } else if (fm->desktop) {
-                                open_texteditor_with_file(fm->desktop, fullpath);
-                            }
-                        }
+                        filemanager_open_entry(fm, clicked_idx);
                         fm->last_click_item = -1;
                         fm->last_click_time = 0;
                     } else {
@@ -785,6 +1626,8 @@ static void filemanager_on_mouse(Window* win, MouseEvent& ev) {
                         fm->last_click_item = clicked_idx;
                         fm->last_click_time = now;
                     }
+                } else {
+                    fm->selected = -1;
                 }
             }
         } else {
@@ -800,46 +1643,7 @@ static void filemanager_on_mouse(Window* win, MouseEvent& ev) {
                     // Double-click detection
                     if (fm->last_click_item == clicked_idx &&
                         (now - fm->last_click_time) < 400) {
-                        if (fm->at_drives_root && fm->entry_types[clicked_idx] == 3) {
-                            int d = fm->drive_indices[clicked_idx];
-                            char dpath[8];
-                            if (d < 10) {
-                                dpath[0] = '0' + d; dpath[1] = ':'; dpath[2] = '/'; dpath[3] = '\0';
-                            } else {
-                                dpath[0] = '1'; dpath[1] = '0' + (d - 10); dpath[2] = ':'; dpath[3] = '/'; dpath[4] = '\0';
-                            }
-                            montauk::strcpy(fm->current_path, dpath);
-                            filemanager_push_history(fm);
-                            filemanager_read_dir(fm);
-                        } else if (fm->is_dir[clicked_idx]) {
-                            filemanager_navigate(fm, fm->entry_names[clicked_idx]);
-                        } else {
-                            // Open file in appropriate viewer
-                            char fullpath[512];
-                            montauk::strcpy(fullpath, fm->current_path);
-                            int plen = montauk::slen(fullpath);
-                            if (plen > 0 && fullpath[plen - 1] != '/') {
-                                str_append(fullpath, "/", 512);
-                            }
-                            str_append(fullpath, fm->entry_names[clicked_idx], 512);
-                            if (is_image_file(fm->entry_names[clicked_idx])) {
-                                montauk::spawn("0:/apps/imageviewer/imageviewer.elf", fullpath);
-                            } else if (is_font_file(fm->entry_names[clicked_idx])) {
-                                montauk::spawn("0:/apps/fontpreview/fontpreview.elf", fullpath);
-                            } else if (is_pdf_file(fm->entry_names[clicked_idx])) {
-                                montauk::spawn("0:/apps/pdfviewer/pdfviewer.elf", fullpath);
-                            } else if (is_spreadsheet_file(fm->entry_names[clicked_idx])) {
-                                montauk::spawn("0:/apps/spreadsheet/spreadsheet.elf", fullpath);
-                            } else if (is_video_file(fm->entry_names[clicked_idx])) {
-                                montauk::spawn("0:/apps/video/video.elf", fullpath);
-                            } else if (is_audio_file(fm->entry_names[clicked_idx])) {
-                                montauk::spawn("0:/apps/music/music.elf", fullpath);
-                            } else if (str_ends_with(fm->entry_names[clicked_idx], ".elf")) {
-                                montauk::spawn(fullpath);
-                            } else if (fm->desktop) {
-                                open_texteditor_with_file(fm->desktop, fullpath);
-                            }
-                        }
+                        filemanager_open_entry(fm, clicked_idx);
                         fm->last_click_item = -1;
                         fm->last_click_time = 0;
                     } else {
@@ -847,9 +1651,48 @@ static void filemanager_on_mouse(Window* win, MouseEvent& ev) {
                         fm->last_click_item = clicked_idx;
                         fm->last_click_time = now;
                     }
+                } else {
+                    fm->selected = -1;
                 }
             }
         }
+    }
+
+    // ---- Right-click: open context menu ----
+    if (ev.right_pressed()) {
+        filemanager_cancel_rename(fm);
+
+        // Determine what was right-clicked
+        int target_idx = -1;
+
+        if (local_y >= FM_TOOLBAR_H + FM_PATHBAR_H) {
+            if (fm->grid_view) {
+                int list_y = FM_TOOLBAR_H + FM_PATHBAR_H;
+                if (local_x < cw - FM_SCROLLBAR_W) {
+                    int cols = (cw - FM_SCROLLBAR_W) / FM_GRID_CELL_W;
+                    if (cols < 1) cols = 1;
+                    int col = local_x / FM_GRID_CELL_W;
+                    int row = (local_y - list_y + fm->scrollbar.scroll_offset) / FM_GRID_CELL_H;
+                    int idx = row * cols + col;
+                    if (idx >= 0 && idx < fm->entry_count && col < cols) {
+                        target_idx = idx;
+                        fm->selected = idx;
+                    }
+                }
+            } else {
+                int list_y = FM_TOOLBAR_H + FM_PATHBAR_H + FM_HEADER_H;
+                if (local_y >= list_y && local_x < cw - FM_SCROLLBAR_W) {
+                    int rel_y = local_y - list_y + fm->scrollbar.scroll_offset;
+                    int idx = rel_y / FM_ITEM_H;
+                    if (idx >= 0 && idx < fm->entry_count) {
+                        target_idx = idx;
+                        fm->selected = idx;
+                    }
+                }
+            }
+        }
+
+        filemanager_open_ctx_menu(fm, local_x, local_y, target_idx);
     }
 
     // Scroll handling
@@ -875,13 +1718,131 @@ static void filemanager_on_key(Window* win, const Montauk::KeyEvent& key) {
     FileManagerState* fm = (FileManagerState*)win->app_data;
     if (!fm || !key.pressed) return;
 
+    // ---- Path bar editing key handling ----
+    if (fm->pathbar_editing) {
+        if (key.ascii == '\n' || key.ascii == '\r') {
+            filemanager_commit_pathbar(fm);
+        } else if (key.scancode == 0x01) {
+            filemanager_cancel_pathbar(fm);
+        } else if (key.ascii == '\b' || key.scancode == 0x0E) {
+            if (fm->pathbar_cursor > 0) {
+                for (int i = fm->pathbar_cursor - 1; i < fm->pathbar_len - 1; i++)
+                    fm->pathbar_buf[i] = fm->pathbar_buf[i + 1];
+                fm->pathbar_len--;
+                fm->pathbar_cursor--;
+                fm->pathbar_buf[fm->pathbar_len] = '\0';
+            }
+        } else if (key.scancode == 0x53) {
+            if (fm->pathbar_cursor < fm->pathbar_len) {
+                for (int i = fm->pathbar_cursor; i < fm->pathbar_len - 1; i++)
+                    fm->pathbar_buf[i] = fm->pathbar_buf[i + 1];
+                fm->pathbar_len--;
+                fm->pathbar_buf[fm->pathbar_len] = '\0';
+            }
+        } else if (key.scancode == 0x4B) {
+            if (fm->pathbar_cursor > 0) fm->pathbar_cursor--;
+        } else if (key.scancode == 0x4D) {
+            if (fm->pathbar_cursor < fm->pathbar_len) fm->pathbar_cursor++;
+        } else if (key.scancode == 0x47) {
+            fm->pathbar_cursor = 0;
+        } else if (key.scancode == 0x4F) {
+            fm->pathbar_cursor = fm->pathbar_len;
+        } else if (key.ascii >= 32 && key.ascii < 127 && fm->pathbar_len < 254) {
+            for (int i = fm->pathbar_len; i > fm->pathbar_cursor; i--)
+                fm->pathbar_buf[i] = fm->pathbar_buf[i - 1];
+            fm->pathbar_buf[fm->pathbar_cursor] = key.ascii;
+            fm->pathbar_cursor++;
+            fm->pathbar_len++;
+            fm->pathbar_buf[fm->pathbar_len] = '\0';
+        }
+        return;
+    }
+
+    // ---- Rename mode key handling ----
+    if (fm->rename_active) {
+        if (key.ascii == '\n' || key.ascii == '\r') {
+            filemanager_finish_rename(fm);
+        } else if (key.scancode == 0x01) {
+            // Escape
+            filemanager_cancel_rename(fm);
+        } else if (key.ascii == '\b' || key.scancode == 0x0E) {
+            // Backspace
+            if (fm->rename_cursor > 0) {
+                for (int i = fm->rename_cursor - 1; i < fm->rename_len - 1; i++)
+                    fm->rename_buf[i] = fm->rename_buf[i + 1];
+                fm->rename_len--;
+                fm->rename_cursor--;
+                fm->rename_buf[fm->rename_len] = '\0';
+            }
+        } else if (key.scancode == 0x53) {
+            // Delete key
+            if (fm->rename_cursor < fm->rename_len) {
+                for (int i = fm->rename_cursor; i < fm->rename_len - 1; i++)
+                    fm->rename_buf[i] = fm->rename_buf[i + 1];
+                fm->rename_len--;
+                fm->rename_buf[fm->rename_len] = '\0';
+            }
+        } else if (key.scancode == 0x4B) {
+            // Left arrow
+            if (fm->rename_cursor > 0) fm->rename_cursor--;
+        } else if (key.scancode == 0x4D) {
+            // Right arrow
+            if (fm->rename_cursor < fm->rename_len) fm->rename_cursor++;
+        } else if (key.scancode == 0x47) {
+            // Home
+            fm->rename_cursor = 0;
+        } else if (key.scancode == 0x4F) {
+            // End
+            fm->rename_cursor = fm->rename_len;
+        } else if (key.ascii >= 32 && key.ascii < 127) {
+            // Printable character (reject / and other FS-unsafe chars)
+            if (key.ascii != '/' && key.ascii != '\\' && fm->rename_len < 62) {
+                for (int i = fm->rename_len; i > fm->rename_cursor; i--)
+                    fm->rename_buf[i] = fm->rename_buf[i - 1];
+                fm->rename_buf[fm->rename_cursor] = key.ascii;
+                fm->rename_cursor++;
+                fm->rename_len++;
+                fm->rename_buf[fm->rename_len] = '\0';
+            }
+        }
+        return;
+    }
+
+    // ---- Context menu: Escape to close ----
+    if (fm->ctx_open && key.scancode == 0x01) {
+        filemanager_close_ctx_menu(fm);
+        return;
+    }
+
+    // ---- Keyboard shortcuts ----
+    if (key.ctrl) {
+        if (key.ascii == 'c' || key.ascii == 'C') {
+            filemanager_do_copy(fm);
+            return;
+        }
+        if (key.ascii == 'x' || key.ascii == 'X') {
+            filemanager_do_cut(fm);
+            return;
+        }
+        if (key.ascii == 'v' || key.ascii == 'V') {
+            filemanager_do_paste(fm);
+            return;
+        }
+    }
+
+    // F2 = rename
+    if (key.scancode == 0x3C) {
+        filemanager_start_rename(fm);
+        return;
+    }
+
     if (key.ascii == '\b' || key.scancode == 0x0E) {
         filemanager_go_up(fm);
     } else if (key.scancode == 0x48) {
         // Up arrow
         if (fm->grid_view) {
-            Rect cr = win->content_rect();
-            int cols = (cr.w - FM_SCROLLBAR_W) / FM_GRID_CELL_W;
+            Rect cr_r = win->content_rect();
+            int cols = (cr_r.w - FM_SCROLLBAR_W) / FM_GRID_CELL_W;
             if (cols < 1) cols = 1;
             if (fm->selected >= cols) fm->selected -= cols;
         } else {
@@ -890,8 +1851,8 @@ static void filemanager_on_key(Window* win, const Montauk::KeyEvent& key) {
     } else if (key.scancode == 0x50) {
         // Down arrow
         if (fm->grid_view) {
-            Rect cr = win->content_rect();
-            int cols = (cr.w - FM_SCROLLBAR_W) / FM_GRID_CELL_W;
+            Rect cr_r = win->content_rect();
+            int cols = (cr_r.w - FM_SCROLLBAR_W) / FM_GRID_CELL_W;
             if (cols < 1) cols = 1;
             if (fm->selected + cols < fm->entry_count) fm->selected += cols;
         } else {
@@ -904,38 +1865,11 @@ static void filemanager_on_key(Window* win, const Montauk::KeyEvent& key) {
         // Right arrow (grid view only)
         if (fm->selected < fm->entry_count - 1) fm->selected++;
     } else if (key.ascii == '\n' || key.ascii == '\r') {
-        if (fm->selected >= 0 && fm->selected < fm->entry_count) {
-            if (fm->at_drives_root && fm->entry_types[fm->selected] == 3) {
-                int d = fm->drive_indices[fm->selected];
-                char dpath[8];
-                if (d < 10) {
-                    dpath[0] = '0' + d; dpath[1] = ':'; dpath[2] = '/'; dpath[3] = '\0';
-                } else {
-                    dpath[0] = '1'; dpath[1] = '0' + (d - 10); dpath[2] = ':'; dpath[3] = '/'; dpath[4] = '\0';
-                }
-                montauk::strcpy(fm->current_path, dpath);
-                filemanager_push_history(fm);
-                filemanager_read_dir(fm);
-            } else if (fm->is_dir[fm->selected]) {
-                filemanager_navigate(fm, fm->entry_names[fm->selected]);
-            }
-        }
+        if (fm->selected >= 0 && fm->selected < fm->entry_count)
+            filemanager_open_entry(fm, fm->selected);
     } else if (key.scancode == 0x53) {
         // Delete key
-        if (fm->selected >= 0 && fm->selected < fm->entry_count
-            && !fm->at_drives_root && fm->entry_types[fm->selected] != 3) {
-            char fullpath[512];
-            montauk::strcpy(fullpath, fm->current_path);
-            int plen = montauk::slen(fullpath);
-            if (plen > 0 && fullpath[plen - 1] != '/')
-                str_append(fullpath, "/", 512);
-            str_append(fullpath, fm->entry_names[fm->selected], 512);
-            if (fm->is_dir[fm->selected])
-                filemanager_delete_recursive(fullpath);
-            else
-                montauk::fdelete(fullpath);
-            filemanager_read_dir(fm);
-        }
+        filemanager_delete_selected(fm);
     } else if (key.alt && key.scancode == 0x4B) {
         // Alt+Left: go back
         filemanager_go_back(fm);
@@ -947,6 +1881,8 @@ static void filemanager_on_key(Window* win, const Montauk::KeyEvent& key) {
 
 static void filemanager_on_close(Window* win) {
     if (win->app_data) {
+        FileManagerState* fm = (FileManagerState*)win->app_data;
+        filemanager_free_app_icons(fm);
         montauk::mfree(win->app_data);
         win->app_data = nullptr;
     }
@@ -975,9 +1911,26 @@ void open_filemanager(DesktopState* ds) {
     // Lazy-load file manager icons on first open
     if (ds && !ds->icon_drive.pixels) {
         Color defColor = colors::ICON_COLOR;
-        ds->icon_drive    = svg_load("0:/icons/drive-harddisk.svg", 16, 16, defColor);
-        ds->icon_drive_lg = svg_load("0:/icons/drive-harddisk.svg", 48, 48, defColor);
-        ds->icon_delete   = svg_load("0:/icons/trash-empty.svg", 16, 16, defColor);
+        ds->icon_drive          = svg_load("0:/icons/drive-harddisk.svg", 16, 16, defColor);
+        ds->icon_drive_lg       = svg_load("0:/icons/drive-harddisk.svg", 48, 48, defColor);
+        ds->icon_home_folder    = svg_load("0:/icons/folder-blue-home.svg", 16, 16, defColor);
+        ds->icon_home_folder_lg = svg_load("0:/icons/folder-blue-home.svg", 48, 48, defColor);
+        ds->icon_apps           = svg_load("0:/icons/folder-blue-development.svg", 16, 16, defColor);
+        ds->icon_apps_lg        = svg_load("0:/icons/folder-blue-development.svg", 48, 48, defColor);
+
+        // Special user folder icons
+        for (int sf = 0; sf < SF_COUNT; sf++) {
+            char icon_path[128];
+            snprintf(icon_path, 128, "0:/icons/%s", sf_icons[sf]);
+            ds->icon_special_folder[sf]    = svg_load(icon_path, 16, 16, defColor);
+            ds->icon_special_folder_lg[sf] = svg_load(icon_path, 48, 48, defColor);
+        }
+        ds->icon_delete     = svg_load("0:/icons/trash-empty.svg", 16, 16, defColor);
+        ds->icon_copy       = svg_load("0:/icons/edit-copy.svg", 16, 16, defColor);
+        ds->icon_cut        = svg_load("0:/icons/edit-cut.svg", 16, 16, defColor);
+        ds->icon_paste      = svg_load("0:/icons/edit-paste.svg", 16, 16, defColor);
+        ds->icon_rename     = svg_load("0:/icons/edit-rename.svg", 16, 16, defColor);
+        ds->icon_folder_new = svg_load("0:/icons/folder-new.svg", 16, 16, defColor);
     }
 
     filemanager_read_drives(fm);

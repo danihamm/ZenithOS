@@ -213,6 +213,62 @@ void apply_format(NumFormat f) {
 // Scroll clamping
 // ============================================================================
 
+// ============================================================================
+// Fill down (fill handle)
+// ============================================================================
+
+void fill_down(int src_r0, int src_c0, int src_r1, int src_c1, int dst_r1) {
+    if (dst_r1 <= src_r1) return;
+    if (dst_r1 >= MAX_ROWS) dst_r1 = MAX_ROWS - 1;
+
+    undo_push();
+
+    int src_rows = src_r1 - src_r0 + 1;
+
+    for (int r = src_r1 + 1; r <= dst_r1; r++) {
+        int src_r = src_r0 + ((r - src_r0) % src_rows);
+        int drow = r - src_r;
+        for (int c = src_c0; c <= src_c1; c++) {
+            Cell* src = &g_cells[src_r][c];
+            Cell* dst = &g_cells[r][c];
+            dst->align = src->align;
+            dst->fmt = src->fmt;
+            dst->bold = src->bold;
+
+            if (src->input[0] == '=') {
+                // Formula: adjust cell references
+                adjust_formula_refs(src->input, dst->input, CELL_TEXT_MAX, 0, drow);
+            } else {
+                str_cpy(dst->input, src->input, CELL_TEXT_MAX);
+            }
+        }
+    }
+
+    eval_all_cells();
+    g_modified = true;
+}
+
+// ============================================================================
+// Auto-fit column width
+// ============================================================================
+
+void auto_fit_column(int col) {
+    if (!g_font) return;
+    int max_w = MIN_COL_W;
+    for (int r = 0; r < MAX_ROWS; r++) {
+        if (g_cells[r][col].display[0]) {
+            TrueTypeFont* f = (g_cells[r][col].bold && g_font_bold) ? g_font_bold : g_font;
+            int tw = f->measure_text(g_cells[r][col].display, FONT_SIZE) + 12;
+            if (tw > max_w) max_w = tw;
+        }
+    }
+    g_col_widths[col] = max_w;
+}
+
+// ============================================================================
+// Scroll clamping
+// ============================================================================
+
 void clamp_scroll() {
     int pbh = g_pathbar_open ? PATHBAR_H : 0;
     int max_x = content_width() - (g_win_w - ROW_HEADER_W);

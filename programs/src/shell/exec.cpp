@@ -6,17 +6,34 @@
 
 #include "shell.h"
 
-// ---- Try to spawn an ELF at the given path ----
+// ---- Check if a file exists ----
 
-static bool try_exec(const char* path, const char* args) {
+static bool file_exists(const char* path) {
     int h = montauk::open(path);
     if (h < 0) return false;
     montauk::close(h);
+    return true;
+}
 
+// ---- Try to spawn an ELF at the given path ----
+
+static bool try_exec(const char* path, const char* args) {
+    if (!file_exists(path)) return false;
     int pid = montauk::spawn(path, args);
     if (pid < 0) return false;
     montauk::waitpid(pid);
     return true;
+}
+
+// ---- Build an absolute path from CWD + relative name ----
+
+static void build_cwd_path(const char* name, char* out, int outMax) {
+    build_drive_path(current_drive, "", out, outMax);
+    if (cwd[0]) {
+        scat(out, cwd, outMax);
+        scat(out, "/", outMax);
+    }
+    scat(out, name, outMax);
 }
 
 // ---- Resolve arguments: expand relative file paths against CWD ----
@@ -46,7 +63,12 @@ static void resolve_args(const char* args, char* out, int outMax) {
             int j = 0;
             while (cwd[j] && r < 255) candidate[r++] = cwd[j++];
             if (cwd[0] && r < 255) candidate[r++] = '/';
-            for (int k = 0; k < tokLen && r < 255; k++) candidate[r++] = tokStart[k];
+
+            // Strip leading "./" from token
+            int skip = 0;
+            if (tokLen >= 2 && tokStart[0] == '.' && tokStart[1] == '/') skip = 2;
+
+            for (int k = skip; k < tokLen && r < 255; k++) candidate[r++] = tokStart[k];
             candidate[r] = '\0';
 
             int h = montauk::open(candidate);
@@ -82,38 +104,50 @@ int exec_external(const char* cmd, const char* args) {
     resolve_args(args, resolvedArgs, sizeof(resolvedArgs));
     const char* finalArgs = resolvedArgs[0] ? resolvedArgs : nullptr;
 
-    // 1. Try 0:/os/<cmd>.elf
-    scopy(path, "0:/os/", sizeof(path));
-    scat(path, cmd, sizeof(path));
-    scat(path, ".elf", sizeof(path));
-    if (try_exec(path, finalArgs)) return 0;
+    // Strip leading "./" from command name
+    const char* name = cmd;
+    if (name[0] == '.' && name[1] == '/') name += 2;
 
-    // 2. Try 0:/games/<cmd>.elf
-    scopy(path, "0:/games/", sizeof(path));
-    scat(path, cmd, sizeof(path));
-    scat(path, ".elf", sizeof(path));
-    if (try_exec(path, finalArgs)) return 0;
-
-    // 3. Try N:/<cwd>/<cmd>.elf on current drive
-    if (cwd[0]) {
-        build_drive_path(current_drive, "", path, sizeof(path));
-        scat(path, cwd, sizeof(path));
-        scat(path, "/", sizeof(path));
-        scat(path, cmd, sizeof(path));
-        scat(path, ".elf", sizeof(path));
-        if (try_exec(path, finalArgs)) return 0;
+    // 0. If cmd has a drive prefix (absolute path), try it directly
+    if (has_drive_prefix(cmd)) {
+        if (try_exec(cmd, finalArgs)) return 0;
+        montauk::print(cmd);
+        montauk::print(": not found\n");
+        return 127;
     }
 
-    // 4. Try N:/<cmd>.elf on current drive
-    build_drive_path(current_drive, "", path, sizeof(path));
-    scat(path, cmd, sizeof(path));
+    // 1. Try as-is in CWD (exact name, e.g., "a.out" or "hello.elf")
+    build_cwd_path(name, path, sizeof(path));
+    if (try_exec(path, finalArgs)) return 0;
+
+    // 2. Try with .elf extension in CWD
+    build_cwd_path(name, path, sizeof(path));
     scat(path, ".elf", sizeof(path));
     if (try_exec(path, finalArgs)) return 0;
 
-    // 5. If on a non-zero drive, also try 0:/<cmd>.elf
+    // 3. Try 0:/os/<cmd>.elf
+    scopy(path, "0:/os/", sizeof(path));
+    scat(path, name, sizeof(path));
+    scat(path, ".elf", sizeof(path));
+    if (try_exec(path, finalArgs)) return 0;
+
+    // 4. Try 0:/os/<cmd> (no extension)
+    scopy(path, "0:/os/", sizeof(path));
+    scat(path, name, sizeof(path));
+    if (try_exec(path, finalArgs)) return 0;
+
+    // 5. Try 0:/games/<cmd>.elf
+    scopy(path, "0:/games/", sizeof(path));
+    scat(path, name, sizeof(path));
+    scat(path, ".elf", sizeof(path));
+    if (try_exec(path, finalArgs)) return 0;
+
+    // 6. If on a non-zero drive, also try drive root
     if (current_drive != 0) {
-        scopy(path, "0:/", sizeof(path));
-        scat(path, cmd, sizeof(path));
+        build_drive_path(current_drive, name, path, sizeof(path));
+        if (try_exec(path, finalArgs)) return 0;
+
+        build_drive_path(current_drive, name, path, sizeof(path));
         scat(path, ".elf", sizeof(path));
         if (try_exec(path, finalArgs)) return 0;
     }

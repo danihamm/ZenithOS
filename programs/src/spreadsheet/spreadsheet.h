@@ -11,6 +11,7 @@
 #include <montauk/heap.h>
 #include <gui/gui.hpp>
 #include <gui/truetype.hpp>
+#include <gui/stb_math.h>
 
 extern "C" {
 #include <string.h>
@@ -41,6 +42,9 @@ static constexpr int DEF_COL_W     = 100;
 static constexpr int MIN_COL_W     = 30;
 static constexpr int ROW_H         = 26;
 static constexpr int COL_RESIZE_GRAB = 5;  // pixels from border edge for grab zone
+static constexpr int FILL_HANDLE_SIZE = 6;
+static constexpr int AC_MAX_MATCHES  = 8;
+static constexpr int DBLCLICK_MS     = 400;
 
 static constexpr int CELL_TEXT_MAX = 128;
 static constexpr int FONT_SIZE     = 18;
@@ -174,6 +178,25 @@ extern UndoEntry* g_undo[UNDO_MAX + 1];
 extern int g_undo_count;
 extern int g_undo_pos;
 
+// Formula autocomplete
+extern bool g_ac_open;
+extern int  g_ac_sel;
+extern int  g_ac_count;
+extern char g_ac_matches[AC_MAX_MATCHES][16];
+extern char g_ac_hints[AC_MAX_MATCHES][32];
+
+// Fill handle
+extern bool g_fill_dragging;
+extern int  g_fill_target_row;
+
+// Mouse drag selection
+extern bool g_mouse_selecting;
+
+// Double-click detection
+extern uint64_t g_last_click_ms;
+extern int  g_last_click_col;
+extern int  g_last_click_row;
+
 // ============================================================================
 // Function declarations — helpers.cpp
 // ============================================================================
@@ -203,6 +226,9 @@ int  content_width();
 int  content_height();
 void cell_name(char* buf, int col, int row);
 void format_value(char* buf, int max, double val, NumFormat fmt);
+void update_autocomplete();
+void accept_autocomplete();
+void adjust_formula_refs(const char* src, char* dst, int max, int dcol, int drow);
 
 // ============================================================================
 // Function declarations — fileio.cpp
@@ -231,6 +257,8 @@ void apply_align(CellAlign a);
 void apply_format(NumFormat f);
 void clamp_scroll();
 void ensure_sel_visible();
+void fill_down(int src_r0, int src_c0, int src_r1, int src_c1, int dst_r1);
+void auto_fit_column(int col);
 
 // ============================================================================
 // Function declarations — render.cpp
@@ -243,5 +271,6 @@ void render(uint32_t* pixels);
 // ============================================================================
 
 bool hit_cell(int mx, int my, int* out_col, int* out_row);
+bool hit_fill_handle(int mx, int my);
 bool handle_toolbar_click(int mx, int my);
 bool handle_fmt_dropdown_click(int mx, int my);
