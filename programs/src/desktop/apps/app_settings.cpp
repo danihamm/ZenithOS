@@ -177,7 +177,7 @@ static void settings_draw_appearance(Canvas& c, SettingsState* st) {
     if (mode_image) {
         // Scan for images lazily
         if (!st->wp_scanned) {
-            wallpaper_scan_dir(st->desktop->home_dir, &st->wp_files);
+            wallpaper_scan_home(st->desktop->home_dir, &st->wp_files);
             st->wp_scanned = true;
         }
 
@@ -1156,7 +1156,7 @@ static void settings_on_mouse(Window* win, MouseEvent& ev) {
             s.bg_image = true;
             s.bg_gradient = false;
             if (!st->wp_scanned) {
-                wallpaper_scan_dir(st->desktop->home_dir, &st->wp_files);
+                wallpaper_scan_home(st->desktop->home_dir, &st->wp_files);
                 st->wp_scanned = true;
             }
             settings_persist(st);

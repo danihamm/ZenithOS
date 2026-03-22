@@ -10,6 +10,7 @@
 namespace kcp {
     class Spinlock {
         std::atomic_flag atomic_flag{ATOMIC_FLAG_INIT};
+        uint64_t savedFlags = 0;
     public:
         void Acquire();
         void Release();

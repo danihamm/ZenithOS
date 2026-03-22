@@ -139,9 +139,11 @@ struct WallpaperFileList {
     int count;
 };
 
-inline void wallpaper_scan_dir(const char* dir_path, WallpaperFileList* list) {
-    list->count = 0;
-
+// Scan dir_path for JPEG files and append to list.
+// name_prefix is prepended to each stored filename (e.g. "Pictures/").
+// Caller must zero list->count before the first call if starting fresh.
+inline void wallpaper_scan_dir(const char* dir_path, WallpaperFileList* list,
+                               const char* name_prefix = nullptr) {
     const char* raw_names[64];
     int total = montauk::readdir(dir_path, raw_names, 64);
     if (total <= 0) return;
@@ -164,6 +166,8 @@ inline void wallpaper_scan_dir(const char* dir_path, WallpaperFileList* list) {
             prefix[prefix_len] = '\0';
         }
     }
+
+    int np_len = name_prefix ? montauk::slen(name_prefix) : 0;
 
     auto to_lower = [](char c) -> char {
         return (c >= 'A' && c <= 'Z') ? (char)(c + 32) : c;
@@ -206,10 +210,34 @@ inline void wallpaper_scan_dir(const char* dir_path, WallpaperFileList* list) {
         }
 
         if (is_jpeg) {
-            montauk::strncpy(list->names[list->count], name, 63);
+            if (np_len > 0) {
+                montauk::strncpy(list->names[list->count], name_prefix, 63);
+                int cur = np_len < 63 ? np_len : 63;
+                montauk::strncpy(list->names[list->count] + cur, name,
+                                 63 - cur);
+            } else {
+                montauk::strncpy(list->names[list->count], name, 63);
+            }
             list->count++;
         }
     }
+}
+
+// Scan Pictures/ subdirectory first, then home directory.
+inline void wallpaper_scan_home(const char* home_dir, WallpaperFileList* list) {
+    list->count = 0;
+
+    char pictures[256];
+    montauk::strcpy(pictures, home_dir);
+    int hlen = montauk::slen(pictures);
+    if (hlen > 0 && pictures[hlen - 1] != '/') {
+        pictures[hlen++] = '/';
+        pictures[hlen] = '\0';
+    }
+    montauk::strncpy(pictures + hlen, "Pictures", 256 - hlen);
+
+    wallpaper_scan_dir(pictures, list, "Pictures/");
+    wallpaper_scan_dir(home_dir, list);
 }
 
 } // namespace gui
