@@ -362,15 +362,23 @@ void desktop_poll_external_windows(DesktopState* ds) {
                     ds->windows[i].dirty = true;
                 }
                 ds->windows[i].ext_cursor = extWins[e].cursor;
-                // Re-map if external app resized its buffer
-                if (extWins[e].width != ds->windows[i].content_w ||
-                    extWins[e].height != ds->windows[i].content_h) {
-                    uint64_t va = montauk::win_map(extId);
-                    if (va != 0) {
-                        ds->windows[i].content = (uint32_t*)va;
-                        ds->windows[i].content_w = extWins[e].width;
-                        ds->windows[i].content_h = extWins[e].height;
-                        ds->windows[i].dirty = true;
+                // Always verify mapping is current. If a window slot was
+                // recycled (app exited, new app got same slot), desktopVa
+                // was zeroed and Map() returns a new VA. Detect this and
+                // update the content pointer to avoid using a stale VA.
+                uint64_t va = montauk::win_map(extId);
+                if (va != 0 && va != (uint64_t)(uintptr_t)ds->windows[i].content) {
+                    ds->windows[i].content = (uint32_t*)va;
+                    ds->windows[i].content_w = extWins[e].width;
+                    ds->windows[i].content_h = extWins[e].height;
+                    ds->windows[i].dirty = true;
+                    montauk::strncpy(ds->windows[i].title, extWins[e].title, MAX_TITLE_LEN);
+                    // Clear from closing list if the slot was reused
+                    for (int c = 0; c < ds->closing_ext_count; c++) {
+                        if (ds->closing_ext_ids[c] == extId) {
+                            ds->closing_ext_ids[c] = ds->closing_ext_ids[--ds->closing_ext_count];
+                            break;
+                        }
                     }
                 }
                 break;

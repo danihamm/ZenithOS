@@ -766,11 +766,15 @@ static bool parse_xref_stream(int pos) {
         index_count = 2;
     }
 
-    // Allocate xref array
+    // Allocate xref array and type-2 tracking arrays
     g_doc.xref = (int*)montauk::malloc(size * sizeof(int));
     if (!g_doc.xref) return false;
     montauk::memset(g_doc.xref, 0, size * sizeof(int));
     g_doc.xref_count = size;
+    g_doc.xref_stm = (int*)montauk::malloc(size * sizeof(int));
+    g_doc.xref_idx = (int*)montauk::malloc(size * sizeof(int));
+    if (g_doc.xref_stm) montauk::memset(g_doc.xref_stm, 0, size * sizeof(int));
+    if (g_doc.xref_idx) montauk::memset(g_doc.xref_idx, 0, size * sizeof(int));
 
     // Temporarily add this xref stream object to the xref table
     // so get_stream_data can find it
@@ -847,10 +851,14 @@ static bool parse_xref_stream(int pos) {
                 field3 = (field3 << 8) | stream_data[data_off + w[0] + w[1] + b];
 
             int obj_idx = start_obj + i;
-            if (type == 1 && obj_idx < size && field2 > 0) {
-                g_doc.xref[obj_idx] = field2;
+            if (obj_idx < size) {
+                if (type == 1 && field2 > 0) {
+                    g_doc.xref[obj_idx] = field2;
+                } else if (type == 2 && g_doc.xref_stm && g_doc.xref_idx) {
+                    g_doc.xref_stm[obj_idx] = field2;  // containing ObjStm number
+                    g_doc.xref_idx[obj_idx] = field3;   // index within stream
+                }
             }
-            // Type 0 = free, type 2 = compressed (not supported)
 
             data_off += entry_size;
         }
@@ -858,6 +866,154 @@ static bool parse_xref_stream(int pos) {
 
     montauk::mfree(stream_data);
     return true;
+}
+
+// ============================================================================
+// Object Stream Decompression (xref type 2)
+// ============================================================================
+
+static void decompress_object_streams() {
+    if (!g_doc.xref_stm) return;
+
+    // Collect unique object stream numbers
+    int stm_objs[256];
+    int stm_count = 0;
+
+    for (int i = 0; i < g_doc.xref_count; i++) {
+        if (g_doc.xref_stm[i] == 0) continue;
+        int sobj = g_doc.xref_stm[i];
+        bool found = false;
+        for (int j = 0; j < stm_count; j++) {
+            if (stm_objs[j] == sobj) { found = true; break; }
+        }
+        if (!found && stm_count < 256)
+            stm_objs[stm_count++] = sobj;
+    }
+
+    if (stm_count == 0) return;
+
+    // Build synthetic "N 0 obj\n<data>\nendobj\n" wrappers for each
+    // compressed object and append to g_doc.data
+    int synth_cap = 64 * 1024;
+    uint8_t* synth = (uint8_t*)montauk::malloc(synth_cap);
+    if (!synth) return;
+    int synth_len = 0;
+
+    for (int si = 0; si < stm_count; si++) {
+        int stm_obj = stm_objs[si];
+
+        // Read /N and /First from the ObjStm dict
+        int os, oe;
+        if (find_obj_content(stm_obj, &os, &oe) < 0) continue;
+
+        const uint8_t* d = g_doc.data;
+        int len = g_doc.data_len;
+
+        int n_objects = 0, first = 0;
+        int np = dict_lookup(d, len, os, "N");
+        if (np >= 0) parse_int_at(d, len, np, &n_objects);
+        int fp = dict_lookup(d, len, os, "First");
+        if (fp >= 0) parse_int_at(d, len, fp, &first);
+
+        if (n_objects <= 0 || first <= 0) continue;
+
+        // Decompress stream data
+        int data_len;
+        uint8_t* data = get_stream_data(stm_obj, &data_len);
+        if (!data) continue;
+
+        if (first >= data_len) { montauk::mfree(data); continue; }
+
+        // Parse header: N pairs of (obj_num, byte_offset relative to /First)
+        int* hdr_nums = (int*)montauk::malloc(n_objects * sizeof(int));
+        int* hdr_offs = (int*)montauk::malloc(n_objects * sizeof(int));
+        if (!hdr_nums || !hdr_offs) {
+            if (hdr_nums) montauk::mfree(hdr_nums);
+            if (hdr_offs) montauk::mfree(hdr_offs);
+            montauk::mfree(data);
+            continue;
+        }
+
+        int hp = 0;
+        int parsed = 0;
+        for (int i = 0; i < n_objects; i++) {
+            hp = parse_int_at(data, first, hp, &hdr_nums[i]);
+            if (hp < 0) break;
+            hp = parse_int_at(data, first, hp, &hdr_offs[i]);
+            if (hp < 0) break;
+            parsed++;
+        }
+
+        // Extract each object and build synthetic wrapper
+        for (int i = 0; i < parsed; i++) {
+            int obj_num = hdr_nums[i];
+            if (obj_num < 0 || obj_num >= g_doc.xref_count) continue;
+            if (g_doc.xref[obj_num] > 0) continue; // already has a direct offset
+
+            int obj_off = first + hdr_offs[i];
+            int obj_end_off;
+            if (i + 1 < parsed)
+                obj_end_off = first + hdr_offs[i + 1];
+            else
+                obj_end_off = data_len;
+
+            if (obj_off >= data_len) continue;
+            if (obj_end_off > data_len) obj_end_off = data_len;
+            int obj_data_len = obj_end_off - obj_off;
+            if (obj_data_len <= 0) continue;
+
+            // "N 0 obj\n" + data + "\nendobj\n"
+            char prefix[32];
+            int prefix_len = snprintf(prefix, 32, "%d 0 obj\n", obj_num);
+            int needed = prefix_len + obj_data_len + 8;
+
+            // Grow buffer if needed
+            while (synth_len + needed > synth_cap) {
+                int new_cap = synth_cap * 2;
+                uint8_t* ns = (uint8_t*)montauk::malloc(new_cap);
+                if (!ns) goto done_stream;
+                montauk::memcpy(ns, synth, synth_len);
+                montauk::mfree(synth);
+                synth = ns;
+                synth_cap = new_cap;
+            }
+
+            // Record xref offset into the future expanded buffer
+            g_doc.xref[obj_num] = g_doc.data_len + synth_len;
+
+            // Write synthetic object
+            montauk::memcpy(synth + synth_len, prefix, prefix_len);
+            synth_len += prefix_len;
+            montauk::memcpy(synth + synth_len, data + obj_off, obj_data_len);
+            synth_len += obj_data_len;
+            montauk::memcpy(synth + synth_len, "\nendobj\n", 8);
+            synth_len += 8;
+        }
+
+        done_stream:
+        montauk::mfree(hdr_nums);
+        montauk::mfree(hdr_offs);
+        montauk::mfree(data);
+    }
+
+    // Append synthetic data to g_doc.data
+    if (synth_len > 0) {
+        int new_total = g_doc.data_len + synth_len;
+        uint8_t* new_data = (uint8_t*)montauk::malloc(new_total);
+        if (new_data) {
+            montauk::memcpy(new_data, g_doc.data, g_doc.data_len);
+            montauk::memcpy(new_data + g_doc.data_len, synth, synth_len);
+            montauk::mfree(g_doc.data);
+            g_doc.data = new_data;
+            g_doc.data_len = new_total;
+        } else {
+            // Xref entries already point past old buffer; undo them
+            for (int i = 0; i < g_doc.xref_count; i++)
+                if (g_doc.xref[i] >= g_doc.data_len) g_doc.xref[i] = 0;
+        }
+    }
+
+    montauk::mfree(synth);
 }
 
 // ============================================================================
@@ -1375,6 +1531,9 @@ bool load_pdf(const char* path) {
         return false;
     }
 
+    // Decompress compressed objects from object streams (xref type 2)
+    decompress_object_streams();
+
     // Find /Root in trailer
     int root_num = -1;
     if (starts_with(g_doc.data, g_doc.data_len, xref_off, "xref")) {
@@ -1457,6 +1616,8 @@ bool load_pdf(const char* path) {
 void free_pdf() {
     if (g_doc.data) { montauk::mfree(g_doc.data); g_doc.data = nullptr; }
     if (g_doc.xref) { montauk::mfree(g_doc.xref); g_doc.xref = nullptr; }
+    if (g_doc.xref_stm) { montauk::mfree(g_doc.xref_stm); g_doc.xref_stm = nullptr; }
+    if (g_doc.xref_idx) { montauk::mfree(g_doc.xref_idx); g_doc.xref_idx = nullptr; }
     if (g_doc.pages) {
         for (int i = 0; i < g_doc.page_count; i++) {
             if (g_doc.pages[i].items) montauk::mfree(g_doc.pages[i].items);

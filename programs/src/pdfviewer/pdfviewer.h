@@ -97,6 +97,8 @@ struct PdfDoc {
 
     int* xref;          // byte offset for each object number
     int xref_count;
+    int* xref_stm;      // type 2: containing ObjStm number (0 = none)
+    int* xref_idx;       // type 2: index within ObjStm
 
     PdfPage* pages;
     int* page_objs;     // object number for each page

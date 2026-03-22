@@ -217,6 +217,18 @@ namespace WinServer {
         int numPages = (int)((bufSize + 0xFFF) / 0x1000);
         if (numPages > MaxPixelPages) return -1;
 
+        // Unmap old pixel pages from desktop's address space (if mapped)
+        if (slot.desktopVa != 0 && slot.desktopPid != 0) {
+            auto* desktopProc = Sched::GetProcessByPid(slot.desktopPid);
+            if (desktopProc) {
+                for (int i = 0; i < slot.pixelNumPages; i++) {
+                    Memory::VMM::Paging::UnmapUserIn(
+                        desktopProc->pml4Phys,
+                        slot.desktopVa + (uint64_t)i * 0x1000);
+                }
+            }
+        }
+
         // Unmap old pixel pages from owner's address space, then free them
         int oldNumPages = slot.pixelNumPages;
         for (int i = 0; i < oldNumPages; i++) {
@@ -308,6 +320,22 @@ namespace WinServer {
                 // cause a double-free, creating a cycle in the PFA free list.
 
                 g_slots[i].used = false;
+            }
+
+            // If this process had windows mapped INTO it (was the desktop viewer),
+            // unmap those pixel pages so FreeUserHalf() won't free pages owned
+            // by other processes.
+            if (g_slots[i].used && g_slots[i].desktopPid == pid) {
+                auto* proc = Sched::GetProcessByPid(pid);
+                if (proc) {
+                    for (int p = 0; p < g_slots[i].pixelNumPages; p++) {
+                        Memory::VMM::Paging::UnmapUserIn(
+                            proc->pml4Phys,
+                            g_slots[i].desktopVa + (uint64_t)p * 0x1000);
+                    }
+                }
+                g_slots[i].desktopVa = 0;
+                g_slots[i].desktopPid = 0;
             }
         }
     }
