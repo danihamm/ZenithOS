@@ -31,6 +31,7 @@ APPS=(
     "bluetooth|apps/scalable/bluetooth.svg"
     "rpgdemo|apps/scalable/utilities-terminal.svg"
     "paint|apps/scalable/kolourpaint.svg"
+    "screenshot|apps/scalable/gnome-screenshot.svg"
 )
 
 installed=0
