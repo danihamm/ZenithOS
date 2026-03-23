@@ -51,7 +51,9 @@ CFLAGS := \
     -mcmodel=small \
     -DNORMALUNIX \
     -DLINUX \
+    -DFEATURE_SOUND \
     -isystem $(LIBC_INC) \
+    -I . \
     -I $(PROG_INC) \
     -I $(DOOM_SRC) \
     -isystem $(shell $(CC) -print-file-name=include)
@@ -154,7 +156,7 @@ DOOM_SRCS := \
     z_zone.c
 
 # Local source files
-LOCAL_SRCS := doomgeneric_montauk.c
+LOCAL_SRCS := doomgeneric_montauk.c i_sound_montauk.c
 
 # ---- Object files ----
 

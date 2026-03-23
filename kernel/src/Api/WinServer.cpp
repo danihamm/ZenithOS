@@ -106,19 +106,15 @@ namespace WinServer {
         WindowSlot& slot = g_slots[windowId];
         if (!slot.used || slot.ownerPid != callerPid) return -1;
 
-        // Unmap pixel pages from desktop's address space
-        if (slot.desktopVa != 0 && slot.desktopPid != 0) {
-            auto* desktopProc = Sched::GetProcessByPid(slot.desktopPid);
-            if (desktopProc) {
-                for (int p = 0; p < slot.pixelNumPages; p++) {
-                    Memory::VMM::Paging::UnmapUserIn(
-                        desktopProc->pml4Phys,
-                        slot.desktopVa + (uint64_t)p * 0x1000);
-                }
-            }
-        }
+        // Do NOT unmap snapshot pages from the desktop here -- the desktop
+        // may be running on another CPU with stale TLB entries. Unmapping
+        // causes a page fault when the TLB entry is evicted. Just free the
+        // physical pages (PTEs stay present, pointing to freed memory --
+        // the desktop reads garbage for at most one frame before its next
+        // Enumerate sees the window is gone). FreeUserHalf reclaims the
+        // desktop's page table entries when the desktop eventually exits.
 
-        // Unmap pixel pages from the owner's address space so that
+        // Unmap LIVE pixel pages from the owner's address space so that
         // FreeUserHalf() won't double-free them when the process exits.
         {
             auto* ownerProc = Sched::GetProcessByPid(slot.ownerPid);
@@ -366,25 +362,17 @@ namespace WinServer {
                 Kt::KernelLogStream(Kt::INFO, "WinServer") << "Cleaning up window "
                     << i << " for exited PID " << pid;
 
-                // Unmap pixel pages from desktop's address space to prevent stale access
-                if (g_slots[i].desktopVa != 0 && g_slots[i].desktopPid != 0) {
-                    auto* desktopProc = Sched::GetProcessByPid(g_slots[i].desktopPid);
-                    if (desktopProc) {
-                        for (int p = 0; p < g_slots[i].pixelNumPages; p++) {
-                            Memory::VMM::Paging::UnmapUserIn(
-                                desktopProc->pml4Phys,
-                                g_slots[i].desktopVa + (uint64_t)p * 0x1000);
-                        }
-                    }
-                }
+                // Do NOT unmap snapshot pages from the desktop here -- the
+                // desktop may be on another CPU with stale TLB entries.
+                // Just free the physical pages below (PTEs stay present,
+                // desktop reads garbage for one frame, then its next
+                // Enumerate sees the window is gone).
 
                 // Do NOT free live pixel pages here -- they are still mapped
                 // in the owner's page tables and FreeUserHalf() (called right
                 // after CleanupProcess) will free them.
 
-                // DO free snapshot pages -- they are NOT in the owner's page
-                // tables (they were mapped into the desktop, and we just
-                // unmapped them above). If we don't free them here, they leak.
+                // Free snapshot pages (not in the owner's page tables).
                 for (int p = 0; p < g_slots[i].pixelNumPages; p++) {
                     if (g_slots[i].snapshotPhysPages[p] != 0) {
                         Memory::g_pfa->Free((void*)Memory::HHDM(g_slots[i].snapshotPhysPages[p]));
