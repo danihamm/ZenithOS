@@ -1,7 +1,7 @@
 /*
     * Scheduler.hpp
-    * Preemptive process scheduler with user-mode support
-    * Copyright (c) 2025 Daniel Hammer
+    * Preemptive process scheduler with SMP support
+    * Copyright (c) 2025-2026 Daniel Hammer
 */
 
 #pragma once
@@ -24,12 +24,15 @@ namespace Sched {
         Free,
         Ready,
         Running,
+        Blocked,       // Waiting (e.g. waitpid) -- not schedulable
         Terminated
     };
 
     struct Process {
         int pid;
         ProcessState state;
+        int waitingForPid;     // PID this process is blocked on (-1 if none)
+        uint64_t sleepUntilTick; // Tick deadline for SYS_SLEEP_MS (0 = not sleeping)
         char name[64];
         uint64_t savedRsp;
         uint64_t stackBase;       // Bottom of allocated kernel stack (lowest address)
@@ -40,6 +43,8 @@ namespace Sched {
         uint64_t userStackTop;    // User-space stack top
         uint64_t heapNext;        // Simple bump allocator for user heap
         char args[256];           // Command-line arguments (set by parent via Spawn)
+
+        int runningOnCpu;         // CPU index running this process (-1 if not running)
 
         // I/O redirection for GUI terminal
         bool redirected = false;
@@ -67,7 +72,7 @@ namespace Sched {
     int Spawn(const char* vfsPath, const char* args = nullptr);
     void Schedule();
 
-    // Called from the APIC timer handler on every tick.
+    // Called from the APIC timer handler on every tick (per-CPU).
     void Tick();
 
     // Get the PID of the currently running process (-1 if idle)
@@ -79,8 +84,14 @@ namespace Sched {
     // Called by terminated processes to mark themselves done
     void ExitProcess();
 
-    // Check if a process is still alive (Ready or Running)
+    // Check if a process is still alive (Ready, Running, or Blocked)
     bool IsAlive(int pid);
+
+    // Block the current process until the given PID exits.
+    void BlockOnPid(int pid);
+
+    // Block the current process for the given number of milliseconds.
+    void BlockForSleep(uint64_t ms);
 
     // Find a process by PID (returns nullptr if not found or not alive)
     Process* GetProcessByPid(int pid);

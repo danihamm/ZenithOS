@@ -34,6 +34,11 @@ namespace Drivers::PS2::Mouse {
 
     void SetBounds(int32_t maxX, int32_t maxY);
 
+    // Reset packet assembly state and drain pending PS/2 data.
+    // Call after boot to ensure clean mouse state regardless of
+    // any bytes lost during interrupt-heavy boot sequence.
+    void FlushState();
+
     // Inject a mouse report from an external source (e.g., USB HID mouse)
     void InjectMouseReport(uint8_t buttons, int8_t deltaX, int8_t deltaY, int8_t scroll);
 

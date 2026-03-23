@@ -73,10 +73,15 @@ namespace Hal {
     __attribute__((interrupt)) void ExceptionHandler(System::PanicFrame* frame)
     {
         uint64_t cs = GetExceptionCS(i, frame);
+        bool fromUser = (cs & 3) == 3;
+
+        // SWAPGS: if from user mode, GS base is user-defined.
+        // Swap to kernel per-CPU GS base so scheduler calls work.
+        if (fromUser) asm volatile("swapgs");
 
         // If the fault originated in user-mode (ring 3), kill the process
         // instead of panicking the entire system.
-        if ((cs & 3) == 3 && Sched::GetCurrentPid() >= 0) {
+        if (fromUser && Sched::GetCurrentPid() >= 0) {
             auto* proc = Sched::GetCurrentProcessPtr();
             Kt::KernelLogStream(Kt::ERROR, "Exception")
                 << ExceptionStrings[i] << " in process \""
@@ -88,6 +93,10 @@ namespace Hal {
             frame->InterruptVector = i;
             Panic(ExceptionStrings[i], frame);
         }
+
+        // Unreachable in practice (user faults exit, kernel faults panic),
+        // but balance the SWAPGS for correctness.
+        if (fromUser) asm volatile("swapgs");
     }
 
     void LoadIDT(IDTRStruct& idtr) {

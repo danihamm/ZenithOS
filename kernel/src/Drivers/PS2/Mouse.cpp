@@ -197,6 +197,19 @@ namespace Drivers::PS2::Mouse {
         g_MaxY = maxY;
     }
 
+    void FlushState() {
+        g_PacketIndex = 0;
+
+        // Drain any stale bytes from the PS/2 controller data port
+        constexpr uint16_t StatusPort = 0x64;
+        constexpr uint16_t DataPort_  = 0x60;
+        for (int i = 0; i < 32; i++) {
+            uint8_t status = Io::In8(StatusPort);
+            if (!(status & 0x01)) break;  // output buffer empty
+            Io::In8(DataPort_);            // discard byte
+        }
+    }
+
     void InjectMouseReport(uint8_t buttons, int8_t deltaX, int8_t deltaY, int8_t scroll) {
         g_StateLock.Acquire();
 

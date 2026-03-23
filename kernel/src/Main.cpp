@@ -39,6 +39,7 @@
 #include <Fs/FsProbe.hpp>
 #include <Sched/Scheduler.hpp>
 #include <Api/Syscall.hpp>
+#include <Hal/SmpBoot.hpp>
 using namespace Kt;
 
 namespace Memory {
@@ -145,6 +146,13 @@ extern "C" void kmain() {
 
         Hal::ApicInitialize(g_acpi.GetXSDT());
 
+        // Set up BSP per-CPU data (GS base) before enabling interrupts.
+        // ISR stubs use SWAPGS which requires GS base to point to CpuData.
+        Smp::InitBsp();
+
+        // Now safe to enable interrupts (SWAPGS-aware ISR stubs are installed)
+        asm volatile("sti");
+
         // Initialize ACPI events (SCI, power button) after APIC is ready
         Hal::AcpiEvents::Initialize(g_acpi.GetXSDT());
 
@@ -219,6 +227,13 @@ extern "C" void kmain() {
     Montauk::InitializeSyscalls();
 
     Sched::Initialize();
+
+    // Boot Application Processors (all subsystems ready, APs can schedule)
+    Smp::BootAPs();
+
+    // Flush any stale PS/2 mouse bytes that accumulated during boot
+    // (edge-triggered IRQs can be lost while spinlocks disable interrupts)
+    Drivers::PS2::Mouse::FlushState();
 
     Kt::SuppressKernelLog();
     Sched::Spawn("0:/os/init.elf");

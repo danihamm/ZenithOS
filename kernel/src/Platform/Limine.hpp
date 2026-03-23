@@ -76,6 +76,16 @@ namespace {
     };
 
     }
+
+    // MP request is outside the anonymous namespace so SmpBoot.cpp can
+    // reference it via extern.
+    __attribute__((used, section(".limine_requests")))
+    volatile limine_mp_request mp_request = {
+        .id = LIMINE_MP_REQUEST,
+        .revision = 0,
+        .response = nullptr,
+        .flags = 0
+    };
     
     // Finally, define the start and end markers for the Limine requests.
     // These can also be moved anywhere, to any .cpp file, as seen fit.

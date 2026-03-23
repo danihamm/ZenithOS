@@ -6,7 +6,7 @@ MAKEFLAGS += -rR
 ARCH := x86_64
 
 # Default user QEMU flags. These are appended to the QEMU command calls.
-QEMUFLAGS := -smp 4 -m 2G -d int -D qemu.log
+QEMUFLAGS := -smp 4 -m 2G -d int -D qemu.log -no-reboot
 
 override IMAGE_NAME := montauk-$(ARCH)
 

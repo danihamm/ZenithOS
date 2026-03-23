@@ -1,7 +1,7 @@
 ;
 ;   IsrStubs.asm
-;   Hardware interrupt (IRQ) entry stubs for APIC
-;   Copyright (c) 2025 Daniel Hammer
+;   Hardware interrupt (IRQ) entry stubs for APIC (SMP-aware with SWAPGS)
+;   Copyright (c) 2025-2026 Daniel Hammer
 ;
 
 [bits 64]
@@ -10,18 +10,27 @@ section .text
 ; External C++ handler function
 extern HalIrqDispatch
 
-; Macro to define an IRQ stub
-; Each stub pushes the IRQ number and jumps to the common handler
+; ====================================================================
+; IRQ stub macro with SWAPGS support
+; Each stub checks the saved CS to determine if we came from user mode.
+; If so, SWAPGS is executed to switch GS to per-CPU data.
+; ====================================================================
 %macro IRQ_STUB 1
 global IrqStub%1
 IrqStub%1:
-    push rax                ; Save rax (we use it for the IRQ number)
-    mov  rax, %1            ; IRQ number
+    cmp qword [rsp + 8], 0x08          ; check saved CS: kernel?
+    je %%from_kernel
+    swapgs                              ; from user mode: swap to kernel GS
+%%from_kernel:
+    push rax                            ; save rax (used for IRQ number)
+    mov  rax, %1                        ; IRQ number
     jmp  IrqCommon
 %endmacro
 
+; ====================================================================
 ; Common IRQ handler: saves all general-purpose registers,
 ; calls the C++ dispatch function, restores registers, and returns.
+; ====================================================================
 IrqCommon:
     ; rax is already on the stack and holds the IRQ number
     push rcx
@@ -63,10 +72,17 @@ IrqCommon:
     pop  rcx
     pop  rax
 
+    ; SWAPGS back if returning to user mode
+    cmp qword [rsp + 8], 0x08          ; check saved CS: kernel?
+    je .from_kernel_exit
+    swapgs                              ; returning to user mode: restore user GS
+.from_kernel_exit:
     iretq
 
+; ====================================================================
 ; Define stubs for IRQs 0..47 (vectors 32..79)
 ; 0-23: legacy ISA IRQs via IOAPIC, 24-47: MSI vectors
+; ====================================================================
 IRQ_STUB 0
 IRQ_STUB 1
 IRQ_STUB 2
@@ -121,7 +137,9 @@ global IrqStubSpurious
 IrqStubSpurious:
     iretq
 
+; ====================================================================
 ; Export the stub table for C++ to reference
+; ====================================================================
 section .data
 global IrqStubTable
 IrqStubTable:

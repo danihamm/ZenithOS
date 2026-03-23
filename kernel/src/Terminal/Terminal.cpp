@@ -13,6 +13,7 @@
 #include "../Libraries/String.hpp"
 #include "../Libraries/Memory.hpp"
 #include <CppLib/CString.hpp>
+#include <CppLib/Spinlock.hpp>
 
 namespace Kt {
     flanterm_context *ctx;
@@ -21,6 +22,11 @@ namespace Kt {
     // Kernel log depth counter and suppression flag
     uint32_t g_kernelLogDepth = 0;
     bool g_suppressKernelLog = false;
+
+    // Protects flanterm writes from concurrent CPU access.
+    // Mutex (not Spinlock) so interrupts stay enabled -- prevents dropped
+    // PS/2 mouse/keyboard bytes during log output.
+    kcp::Mutex g_termLock;
 
     // 64KB ring buffer for kernel log messages
     static constexpr uint64_t KLOG_BUF_SIZE = 65536;
@@ -226,6 +232,13 @@ namespace Kt {
             if (g_suppressKernelLog) {
                 return;
             }
+        }
+
+        // Once a graphical app takes over, suppress ALL flanterm writes
+        // (SYS_PRINT from user processes, etc.) to avoid painting text
+        // over the GUI framebuffer.
+        if (g_suppressKernelLog && g_kernelLogDepth == 0) {
+            return;
         }
 
         if (c == '\n') {

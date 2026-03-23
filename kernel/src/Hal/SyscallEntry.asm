@@ -1,28 +1,34 @@
 ;
 ;   SyscallEntry.asm
-;   SYSCALL/SYSRET entry point and user-mode transition
-;   Copyright (c) 2025 Daniel Hammer
+;   SYSCALL/SYSRET entry point and user-mode transition (SMP-aware)
+;   Copyright (c) 2025-2026 Daniel Hammer
 ;
 
 [bits 64]
 section .text
 
 extern SyscallDispatch
-extern g_kernelRsp
 
-; ============================================================
-; SyscallEntry — called by the SYSCALL instruction
+; ====================================================================
+; Per-CPU data offsets (must match CpuData in SmpBoot.hpp)
+; ====================================================================
+%define CPUDATA_KERNEL_RSP  8
+%define CPUDATA_USER_RSP   16
+
+; ====================================================================
+; SyscallEntry -- called by the SYSCALL instruction
 ;   RCX = user RIP, R11 = user RFLAGS, RAX = syscall number
 ;   Args: RDI, RSI, RDX, R10, R8, R9
 ;   Interrupts are masked (FMASK clears IF)
-; ============================================================
+; ====================================================================
 global SyscallEntry
 SyscallEntry:
-    mov [rel g_userRsp], rsp            ; stash user RSP
-    mov rsp, [rel g_kernelRsp]          ; switch to kernel stack
+    swapgs                              ; GS now points to per-CPU CpuData
+    mov [gs:CPUDATA_USER_RSP], rsp      ; save user RSP to per-CPU scratch
+    mov rsp, [gs:CPUDATA_KERNEL_RSP]    ; switch to per-CPU kernel stack
 
     ; Build SyscallFrame on kernel stack (push order matches struct)
-    push qword [rel g_userRsp]          ; user_rsp
+    push qword [gs:CPUDATA_USER_RSP]    ; user_rsp
     push rcx                            ; user_rip
     push r11                            ; user_rflags
     push rax                            ; syscall_nr
@@ -61,13 +67,14 @@ SyscallEntry:
     pop rcx                             ; user RIP
     pop rsp                             ; user RSP
 
+    swapgs                              ; restore user GS
     o64 sysret
 
-; ============================================================
-; JumpToUserMode — initial transition to ring 3 via IRETQ
+; ====================================================================
+; JumpToUserMode -- initial transition to ring 3 via IRETQ
 ;   RDI = user RIP (entry point)
 ;   RSI = user RSP (top of user stack)
-; ============================================================
+; ====================================================================
 global JumpToUserMode
 JumpToUserMode:
     mov ax, 0x1B                        ; UserData | RPL3
@@ -79,11 +86,5 @@ JumpToUserMode:
     push 0x202                          ; RFLAGS (IF=1)
     push 0x23                           ; CS  = UserCode | RPL3
     push rdi                            ; RIP = entry point
+    swapgs                              ; switch from kernel GS to user GS
     iretq
-
-; ============================================================
-; BSS: scratch space for user RSP save
-; ============================================================
-section .bss
-global g_userRsp
-g_userRsp: resq 1

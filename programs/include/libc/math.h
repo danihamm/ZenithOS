@@ -17,12 +17,23 @@ double ceil(double x);
 double sqrt(double x);
 double sin(double x);
 double cos(double x);
+double tan(double x);
+double atan(double x);
 double atan2(double y, double x);
 double pow(double base, double exp);
 double log(double x);
+double log2(double x);
+double log10(double x);
 double exp(double x);
 double fmod(double x, double y);
 double round(double x);
+
+float  floorf(float x);
+float  ceilf(float x);
+float  fabsf(float x);
+float  sqrtf(float x);
+float  sinf(float x);
+float  cosf(float x);
 
 #ifdef __cplusplus
 }

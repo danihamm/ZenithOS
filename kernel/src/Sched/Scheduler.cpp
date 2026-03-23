@@ -1,7 +1,7 @@
 /*
     * Scheduler.cpp
-    * Preemptive process scheduler with user-mode support
-    * Copyright (c) 2025 Daniel Hammer
+    * Preemptive process scheduler with SMP support
+    * Copyright (c) 2025-2026 Daniel Hammer
 */
 
 #include "Scheduler.hpp"
@@ -12,8 +12,11 @@
 #include <Libraries/Memory.hpp>
 #include <Terminal/Terminal.hpp>
 #include <CppLib/Stream.hpp>
+#include <CppLib/Spinlock.hpp>
 #include <Hal/Apic/Apic.hpp>
 #include <Hal/GDT.hpp>
+#include <Hal/SmpBoot.hpp>
+#include <Timekeeping/ApicTimer.hpp>
 #include <Api/WinServer.hpp>
 
 // Assembly: context switch with CR3 and FPU state parameters
@@ -23,16 +26,16 @@ extern "C" void SchedContextSwitch(uint64_t* oldRsp, uint64_t newRsp, uint64_t n
 // Assembly: jump to user mode via IRETQ
 extern "C" void JumpToUserMode(uint64_t rip, uint64_t rsp);
 
-// Global kernel RSP for SYSCALL entry (written by scheduler, read by SyscallEntry.asm)
-extern "C" uint64_t g_kernelRsp;
-uint64_t g_kernelRsp = 0;
-
 namespace Sched {
 
     static Process processTable[MaxProcesses];
-    static int currentPid = -1;  // -1 = idle (kernel main loop)
     static int nextPid = 0;
-    static uint64_t idleSavedRsp = 0;
+
+    // The scheduler lock MUST be a Spinlock (interrupt-disabling).
+    // It is held ACROSS context switches to prevent the race where
+    // another CPU picks up a process whose RSP hasn't been saved yet.
+    // The resumed process releases it.
+    static kcp::Spinlock schedLock;
 
     // The idle loop runs in the kernel PML4
     static uint64_t GetKernelCR3() {
@@ -41,18 +44,22 @@ namespace Sched {
 
     // Startup function for newly spawned processes.
     // SchedContextSwitch "returns" here on first schedule.
+    // The schedLock is held (acquired by the switching-from CPU's Schedule).
     static void ProcessStartup() {
-        // Send EOI for the timer IRQ that triggered the context switch
-        Hal::LocalApic::SendEOI();
+        // Release the schedLock that the switching-from CPU held
+        schedLock.Release();
 
-        if (currentPid >= 0) {
-            Process& proc = processTable[currentPid];
+        auto* cpu = Smp::GetCurrentCpuData();
+        int slot = cpu->currentSlot;
 
-            // Set up kernel RSP for SYSCALL entry
-            g_kernelRsp = proc.kernelStackTop;
+        if (slot >= 0) {
+            Process& proc = processTable[slot];
 
-            // Set up TSS RSP0 for hardware interrupts from ring 3
-            Hal::g_tss.rsp0 = proc.kernelStackTop;
+            // Set up per-CPU kernel RSP for SYSCALL entry
+            cpu->kernelRsp = proc.kernelStackTop;
+
+            // Set up per-CPU TSS RSP0 for hardware interrupts from ring 3
+            cpu->tss->rsp0 = proc.kernelStackTop;
 
             // Jump to user mode (never returns)
             JumpToUserMode(proc.entryPoint, proc.userStackTop);
@@ -78,6 +85,9 @@ namespace Sched {
             processTable[i].userStackTop = 0;
             processTable[i].heapNext = 0;
             processTable[i].args[0] = '\0';
+            processTable[i].runningOnCpu = -1;
+            processTable[i].waitingForPid = -1;
+            processTable[i].sleepUntilTick = 0;
             processTable[i].redirected = false;
             processTable[i].parentPid = -1;
             processTable[i].outBuf = nullptr;
@@ -92,15 +102,15 @@ namespace Sched {
             processTable[i].termRows = 0;
         }
 
-        currentPid = -1;
         nextPid = 0;
-        idleSavedRsp = 0;
 
         Kt::KernelLogStream(Kt::OK, "Sched") << "Initialized (" << MaxProcesses
             << " process slots, " << (uint64_t)TimeSliceMs << " ms time slice)";
     }
 
     int Spawn(const char* vfsPath, const char* args) {
+        schedLock.Acquire();
+
         int slot = -1;
         for (int i = 0; i < MaxProcesses; i++) {
             if (processTable[i].state == ProcessState::Free) {
@@ -110,9 +120,17 @@ namespace Sched {
         }
 
         if (slot < 0) {
+            schedLock.Release();
             Kt::KernelLogStream(Kt::ERROR, "Sched") << "No free process slots";
             return -1;
         }
+
+        // Reserve the slot so another Spawn doesn't claim it.
+        // Use Running (not Ready!) so the scheduler doesn't try to
+        // dispatch this half-initialized process.
+        processTable[slot].state = ProcessState::Running;
+        processTable[slot].runningOnCpu = -1;
+        schedLock.Release();
 
         // Create per-process PML4 with kernel-half copied
         uint64_t pml4Phys = Memory::VMM::Paging::CreateUserPML4();
@@ -120,9 +138,11 @@ namespace Sched {
         // Load ELF into the process's address space
         uint64_t entry = ElfLoad(vfsPath, pml4Phys);
         if (entry == 0) {
-            // Free the PML4 and any pages allocated during ELF load
             Memory::VMM::Paging::FreeUserHalf(pml4Phys);
             Memory::g_pfa->Free((void*)Memory::HHDM(pml4Phys));
+            schedLock.Acquire();
+            processTable[slot].state = ProcessState::Free;
+            schedLock.Release();
             return -1;
         }
 
@@ -132,6 +152,9 @@ namespace Sched {
             Kt::KernelLogStream(Kt::ERROR, "Sched") << "Out of memory for kernel stack";
             Memory::VMM::Paging::FreeUserHalf(pml4Phys);
             Memory::g_pfa->Free((void*)Memory::HHDM(pml4Phys));
+            schedLock.Acquire();
+            processTable[slot].state = ProcessState::Free;
+            schedLock.Release();
             return -1;
         }
         void* stackMem = Memory::g_pfa->ReallocConsecutive(firstPage, StackPages);
@@ -140,6 +163,9 @@ namespace Sched {
             Memory::g_pfa->Free(firstPage);
             Memory::VMM::Paging::FreeUserHalf(pml4Phys);
             Memory::g_pfa->Free((void*)Memory::HHDM(pml4Phys));
+            schedLock.Acquire();
+            processTable[slot].state = ProcessState::Free;
+            schedLock.Release();
             return -1;
         }
 
@@ -151,6 +177,9 @@ namespace Sched {
             Memory::VMM::Paging::FreeUserHalf(pml4Phys);
             Memory::g_pfa->Free((void*)Memory::HHDM(pml4Phys));
             Memory::g_pfa->Free(stackMem, StackPages);
+            schedLock.Acquire();
+            processTable[slot].state = ProcessState::Free;
+            schedLock.Release();
         };
 
         // Allocate user stack pages and map them in the process PML4
@@ -174,7 +203,6 @@ namespace Sched {
         }
 
         // Allocate and map a user-space exit stub page.
-        // When _start() returns, it jumps here and calls SYS_EXIT(0).
         {
             void* stubPage = Memory::g_pfa->AllocateZeroed();
             if (stubPage == nullptr) {
@@ -198,7 +226,6 @@ namespace Sched {
         }
 
         // Push exit stub address as the return address on the user stack.
-        // UserStackTop - 8 falls at offset 0xFF8 within the top stack page.
         {
             uint8_t* topPage = (uint8_t*)Memory::HHDM(topStackPagePhys);
             *(uint64_t*)(topPage + 0xFF8) = ExitStubAddr;
@@ -216,6 +243,8 @@ namespace Sched {
         *(--sp) = 0;  // r14
         *(--sp) = 0;  // r15
 
+        schedLock.Acquire();
+
         Process& proc = processTable[slot];
         proc.pid = nextPid++;
         proc.state = ProcessState::Ready;
@@ -230,8 +259,11 @@ namespace Sched {
         proc.sliceRemaining = TimeSliceMs;
         proc.pml4Phys = pml4Phys;
         proc.kernelStackTop = kernelStackTop;
-        proc.userStackTop = UserStackTop - 8;  // account for pushed exit stub return address
+        proc.userStackTop = UserStackTop - 8;
         proc.heapNext = UserHeapBase;
+        proc.runningOnCpu = -1;
+        proc.waitingForPid = -1;
+        proc.sleepUntilTick = 0;
 
         // Copy arguments string into process
         proc.args[0] = '\0';
@@ -261,29 +293,60 @@ namespace Sched {
         *(uint16_t*)&proc.fpuState[0] = 0x037F;   // FCW: default x87 control word
         *(uint32_t*)&proc.fpuState[24] = 0x1F80;   // MXCSR: default SSE control/status
 
-        return proc.pid;
+        int resultPid = proc.pid;
+        schedLock.Release();
+
+        return resultPid;
+    }
+
+    // ====================================================================
+    // Schedule -- core context switch logic
+    //
+    // The schedLock is held ACROSS the context switch. This is critical:
+    // setting the old process to Ready and saving its RSP must be atomic
+    // with respect to other CPUs. If we released the lock before saving
+    // RSP, another CPU could pick up the process with a stale savedRsp.
+    //
+    // The RESUMED process releases the lock (it was acquired by whatever
+    // CPU called Schedule() and switched away from that process).
+    // New processes release it in ProcessStartup().
+    // ====================================================================
+
+    // Reclaim terminated process slots. Called from BSP's Tick only,
+    // NOT from every Schedule() call on every CPU. This avoids holding
+    // schedLock (with interrupts disabled) during PFA::Free on the
+    // hot scheduling path.
+    static void ReclaimTerminated() {
+        schedLock.Acquire();
+        for (int i = 0; i < MaxProcesses; i++) {
+            if (processTable[i].state == ProcessState::Terminated) {
+                // Grab the pointers, mark Free, then free memory after releasing lock
+                void* stackBase = (processTable[i].stackBase != 0)
+                    ? (void*)processTable[i].stackBase : nullptr;
+                void* pml4 = (processTable[i].pml4Phys != 0)
+                    ? (void*)Memory::HHDM(processTable[i].pml4Phys) : nullptr;
+                processTable[i].stackBase = 0;
+                processTable[i].pml4Phys = 0;
+                processTable[i].state = ProcessState::Free;
+
+                // Release lock during PFA::Free to minimize hold time
+                schedLock.Release();
+                if (stackBase) Memory::g_pfa->Free(stackBase, StackPages);
+                if (pml4) Memory::g_pfa->Free(pml4);
+                schedLock.Acquire();
+            }
+        }
+        schedLock.Release();
     }
 
     void Schedule() {
-        // Reclaim terminated process slots — free deferred resources first
-        for (int i = 0; i < MaxProcesses; i++) {
-            if (processTable[i].state == ProcessState::Terminated) {
-                // Free kernel stack (deferred from ExitProcess — can't free while running on it)
-                if (processTable[i].stackBase != 0) {
-                    Memory::g_pfa->Free((void*)processTable[i].stackBase, StackPages);
-                    processTable[i].stackBase = 0;
-                }
-                // Free the PML4 page (deferred from ExitProcess — can't free while it's CR3)
-                if (processTable[i].pml4Phys != 0) {
-                    Memory::g_pfa->Free((void*)Memory::HHDM(processTable[i].pml4Phys));
-                    processTable[i].pml4Phys = 0;
-                }
-                processTable[i].state = ProcessState::Free;
-            }
-        }
+        auto* cpu = Smp::GetCurrentCpuData();
 
+        schedLock.Acquire();
+
+        // Find the next Ready process (round-robin from after current slot)
         int next = -1;
-        int start = (currentPid >= 0) ? currentPid + 1 : 0;
+        int start = (cpu->currentSlot >= 0) ? cpu->currentSlot + 1 : 0;
 
         for (int i = 0; i < MaxProcesses; i++) {
             int idx = (start + i) % MaxProcesses;
@@ -294,83 +357,146 @@ namespace Sched {
         }
 
         if (next < 0) {
+            // No ready processes. If we were running one, return to idle.
+            if (cpu->currentSlot >= 0) {
+                int oldSlot = cpu->currentSlot;
+                processTable[oldSlot].state = ProcessState::Ready;
+                processTable[oldSlot].runningOnCpu = -1;
+                cpu->currentSlot = -1;
+
+                // Lock held across context switch -- the idle loop
+                // doesn't release it; the next Schedule() that resumes
+                // a process from idle will release it via the resumed
+                // process path.  But idle is special: we release here
+                // because idle doesn't go through ProcessStartup.
+                // The RSP save is safe because interrupts are disabled
+                // (Spinlock), so no timer can fire between Ready and save.
+                SchedContextSwitch(&processTable[oldSlot].savedRsp, cpu->idleSavedRsp,
+                                  GetKernelCR3(), processTable[oldSlot].fpuState, nullptr);
+                // Resumed from idle -- lock was held by whoever switched to us
+                schedLock.Release();
+            } else {
+                schedLock.Release();
+            }
             return;
         }
 
-        if (next == currentPid) {
+        if (next == cpu->currentSlot) {
+            // Same process, just reset time slice
+            processTable[next].sliceRemaining = TimeSliceMs;
+            schedLock.Release();
             return;
         }
 
+        // Prepare the context switch
         uint64_t* oldRspPtr;
-        uint64_t oldCR3;
+        int oldSlot = cpu->currentSlot;
 
-        if (currentPid >= 0) {
-            processTable[currentPid].state = ProcessState::Ready;
-            oldRspPtr = &processTable[currentPid].savedRsp;
+        if (oldSlot >= 0) {
+            processTable[oldSlot].state = ProcessState::Ready;
+            processTable[oldSlot].runningOnCpu = -1;
+            oldRspPtr = &processTable[oldSlot].savedRsp;
         } else {
-            oldRspPtr = &idleSavedRsp;
+            oldRspPtr = &cpu->idleSavedRsp;
         }
 
-        int oldPid = currentPid;
-        currentPid = next;
+        cpu->currentSlot = next;
         processTable[next].state = ProcessState::Running;
+        processTable[next].runningOnCpu = cpu->cpuIndex;
         processTable[next].sliceRemaining = TimeSliceMs;
 
         uint64_t newCR3 = processTable[next].pml4Phys;
 
-        // Disable interrupts while updating global kernel RSP and TSS,
-        // preventing an interrupt from using stale values mid-update.
-        asm volatile("cli");
+        // Update per-CPU kernel RSP and TSS RSP0
+        cpu->kernelRsp = processTable[next].kernelStackTop;
+        cpu->tss->rsp0 = processTable[next].kernelStackTop;
 
-        // Update kernel RSP for SYSCALL entry
-        g_kernelRsp = processTable[next].kernelStackTop;
-
-        // Update TSS RSP0 for hardware interrupts from ring 3
-        Hal::g_tss.rsp0 = processTable[next].kernelStackTop;
-
-        asm volatile("sti");
-
-        uint8_t* oldFpu = (oldPid >= 0) ? processTable[oldPid].fpuState : nullptr;
+        uint8_t* oldFpu = (oldSlot >= 0) ? processTable[oldSlot].fpuState : nullptr;
         uint8_t* newFpu = processTable[next].fpuState;
+
+        // DO NOT release schedLock here! It is held across the context
+        // switch so that setting Ready + saving RSP is atomic. The
+        // resumed process releases it.
         SchedContextSwitch(oldRspPtr, processTable[next].savedRsp, newCR3, oldFpu, newFpu);
+
+        // We reach here when this process is resumed by another CPU's
+        // Schedule(). That CPU held the lock across its context switch.
+        // Release it now.
+        schedLock.Release();
     }
 
     void Tick() {
-        if (currentPid < 0) {
-            // Idle — check if any process became ready
-            Schedule();
+        auto* cpu = Smp::GetCurrentCpuData();
+
+        // BSP: wake sleeping processes and reclaim terminated slots
+        if (cpu->cpuIndex == 0) {
+            uint64_t now = Timekeeping::GetTicks();
+            for (int i = 0; i < MaxProcesses; i++) {
+                if (processTable[i].state == ProcessState::Blocked &&
+                    processTable[i].sleepUntilTick != 0 &&
+                    now >= processTable[i].sleepUntilTick) {
+                    processTable[i].sleepUntilTick = 0;
+                    processTable[i].state = ProcessState::Ready;
+                }
+            }
+
+            // Reclaim terminated process memory (BSP only, once per tick)
+            ReclaimTerminated();
+        }
+
+        int slot = cpu->currentSlot;
+
+        if (slot < 0) {
+            // Idle CPU. Do a quick lockless scan before taking the
+            // expensive schedLock path. On a 32-core system with 5
+            // active processes, 27 CPUs are idle -- without this check,
+            // they'd each acquire schedLock 1000x/sec to find nothing.
+            for (int i = 0; i < MaxProcesses; i++) {
+                if (processTable[i].state == ProcessState::Ready) {
+                    Schedule();
+                    return;
+                }
+            }
+            // Nothing ready -- stay halted, don't touch schedLock
             return;
         }
 
-        if (processTable[currentPid].sliceRemaining > 0) {
-            processTable[currentPid].sliceRemaining--;
+        if (processTable[slot].sliceRemaining > 0) {
+            processTable[slot].sliceRemaining--;
         }
 
-        if (processTable[currentPid].sliceRemaining == 0) {
+        if (processTable[slot].sliceRemaining == 0) {
             Schedule();
         }
     }
 
     int GetCurrentPid() {
-        return (currentPid >= 0) ? processTable[currentPid].pid : -1;
+        auto* cpu = Smp::GetCurrentCpuData();
+        int slot = cpu->currentSlot;
+        return (slot >= 0) ? processTable[slot].pid : -1;
     }
 
     Process* GetCurrentProcessPtr() {
-        if (currentPid < 0) return nullptr;
-        return &processTable[currentPid];
+        auto* cpu = Smp::GetCurrentCpuData();
+        int slot = cpu->currentSlot;
+        if (slot < 0) return nullptr;
+        return &processTable[slot];
     }
 
     void ExitProcess() {
-        if (currentPid < 0) {
+        auto* cpu = Smp::GetCurrentCpuData();
+        int slot = cpu->currentSlot;
+
+        if (slot < 0) {
             return;
         }
 
-        Process& proc = processTable[currentPid];
+        Process& proc = processTable[slot];
 
-        // Clean up any windows owned by this process (unmaps pixel pages from desktop)
+        // Clean up any windows owned by this process
         WinServer::CleanupProcess(proc.pid);
 
-        // Free I/O redirect buffers (kernel-allocated pages)
+        // Free I/O redirect buffers
         if (proc.outBuf) {
             Memory::g_pfa->Free(proc.outBuf);
             proc.outBuf = nullptr;
@@ -380,12 +506,139 @@ namespace Sched {
             proc.inBuf = nullptr;
         }
 
-        // Free all user-space physical pages and page table structures (entries 0-255).
-        // This covers ELF code/data, user stack, exit stub, heap, and window pixel buffers.
-        // The PML4 page itself is freed later in Schedule() (can't free while it's CR3).
+        // Free all user-space physical pages and page table structures
         Memory::VMM::Paging::FreeUserHalf(proc.pml4Phys);
 
+        schedLock.Acquire();
+
+        int exitingPid = proc.pid;
         proc.state = ProcessState::Terminated;
+        proc.runningOnCpu = -1;
+
+        // Wake any processes blocked on this PID
+        for (int i = 0; i < MaxProcesses; i++) {
+            if (processTable[i].state == ProcessState::Blocked &&
+                processTable[i].waitingForPid == exitingPid) {
+                processTable[i].state = ProcessState::Ready;
+                processTable[i].waitingForPid = -1;
+            }
+        }
+
+        // Find next ready process
+        int next = -1;
+        for (int i = 0; i < MaxProcesses; i++) {
+            if (processTable[i].state == ProcessState::Ready) {
+                next = i;
+                break;
+            }
+        }
+
+        if (next >= 0) {
+            cpu->currentSlot = next;
+            processTable[next].state = ProcessState::Running;
+            processTable[next].runningOnCpu = cpu->cpuIndex;
+            processTable[next].sliceRemaining = TimeSliceMs;
+
+            uint64_t newCR3 = processTable[next].pml4Phys;
+            cpu->kernelRsp = processTable[next].kernelStackTop;
+            cpu->tss->rsp0 = processTable[next].kernelStackTop;
+
+            // Lock held across context switch -- resumed process releases it
+            SchedContextSwitch(&processTable[slot].savedRsp, processTable[next].savedRsp, newCR3,
+                              processTable[slot].fpuState, processTable[next].fpuState);
+            schedLock.Release();
+        } else {
+            cpu->currentSlot = -1;
+
+            // Switch to idle -- release after resuming from idle
+            SchedContextSwitch(&processTable[slot].savedRsp, cpu->idleSavedRsp, GetKernelCR3(),
+                              processTable[slot].fpuState, nullptr);
+            schedLock.Release();
+        }
+
+        for (;;) {
+            asm volatile("hlt");
+        }
+    }
+
+    void BlockOnPid(int pid) {
+        // If the target is already dead, return immediately
+        if (!IsAlive(pid)) return;
+
+        auto* cpu = Smp::GetCurrentCpuData();
+        int slot = cpu->currentSlot;
+        if (slot < 0) return;
+
+        schedLock.Acquire();
+
+        // Double-check under lock (target might have exited between
+        // the lockless IsAlive check and acquiring the lock)
+        bool stillAlive = false;
+        for (int i = 0; i < MaxProcesses; i++) {
+            if (processTable[i].pid == pid) {
+                auto s = processTable[i].state;
+                stillAlive = (s == ProcessState::Ready ||
+                              s == ProcessState::Running ||
+                              s == ProcessState::Blocked);
+                break;
+            }
+        }
+
+        if (!stillAlive) {
+            schedLock.Release();
+            return;
+        }
+
+        // Mark current process as Blocked -- scheduler will skip it.
+        // ExitProcess will wake us when the target terminates.
+        processTable[slot].state = ProcessState::Blocked;
+        processTable[slot].waitingForPid = pid;
+        processTable[slot].runningOnCpu = -1;
+
+        // Find next ready process to switch to
+        int next = -1;
+        for (int i = 0; i < MaxProcesses; i++) {
+            if (processTable[i].state == ProcessState::Ready) {
+                next = i;
+                break;
+            }
+        }
+
+        if (next >= 0) {
+            cpu->currentSlot = next;
+            processTable[next].state = ProcessState::Running;
+            processTable[next].runningOnCpu = cpu->cpuIndex;
+            processTable[next].sliceRemaining = TimeSliceMs;
+
+            cpu->kernelRsp = processTable[next].kernelStackTop;
+            cpu->tss->rsp0 = processTable[next].kernelStackTop;
+
+            SchedContextSwitch(&processTable[slot].savedRsp, processTable[next].savedRsp,
+                              processTable[next].pml4Phys,
+                              processTable[slot].fpuState, processTable[next].fpuState);
+            schedLock.Release();
+        } else {
+            // No ready process -- go idle
+            cpu->currentSlot = -1;
+
+            SchedContextSwitch(&processTable[slot].savedRsp, cpu->idleSavedRsp,
+                              GetKernelCR3(), processTable[slot].fpuState, nullptr);
+            schedLock.Release();
+        }
+    }
+
+    void BlockForSleep(uint64_t ms) {
+        if (ms == 0) return;
+
+        auto* cpu = Smp::GetCurrentCpuData();
+        int slot = cpu->currentSlot;
+        if (slot < 0) return;
+
+        schedLock.Acquire();
+
+        processTable[slot].state = ProcessState::Blocked;
+        processTable[slot].sleepUntilTick = Timekeeping::GetTicks() + ms;
+        processTable[slot].runningOnCpu = -1;
 
         int next = -1;
         for (int i = 0; i < MaxProcesses; i++) {
@@ -396,34 +649,34 @@ namespace Sched {
         }
 
         if (next >= 0) {
-            int old = currentPid;
-            currentPid = next;
+            cpu->currentSlot = next;
             processTable[next].state = ProcessState::Running;
+            processTable[next].runningOnCpu = cpu->cpuIndex;
             processTable[next].sliceRemaining = TimeSliceMs;
 
-            uint64_t newCR3 = processTable[next].pml4Phys;
-            g_kernelRsp = processTable[next].kernelStackTop;
-            Hal::g_tss.rsp0 = processTable[next].kernelStackTop;
+            cpu->kernelRsp = processTable[next].kernelStackTop;
+            cpu->tss->rsp0 = processTable[next].kernelStackTop;
 
-            SchedContextSwitch(&processTable[old].savedRsp, processTable[next].savedRsp, newCR3,
-                              processTable[old].fpuState, processTable[next].fpuState);
+            SchedContextSwitch(&processTable[slot].savedRsp, processTable[next].savedRsp,
+                              processTable[next].pml4Phys,
+                              processTable[slot].fpuState, processTable[next].fpuState);
+            schedLock.Release();
         } else {
-            int old = currentPid;
-            currentPid = -1;
-            SchedContextSwitch(&processTable[old].savedRsp, idleSavedRsp, GetKernelCR3(),
-                              processTable[old].fpuState, nullptr);
-        }
+            cpu->currentSlot = -1;
 
-        for (;;) {
-            asm volatile("hlt");
+            SchedContextSwitch(&processTable[slot].savedRsp, cpu->idleSavedRsp,
+                              GetKernelCR3(), processTable[slot].fpuState, nullptr);
+            schedLock.Release();
         }
     }
 
     bool IsAlive(int pid) {
         for (int i = 0; i < MaxProcesses; i++) {
             if (processTable[i].pid == pid) {
-                return processTable[i].state == ProcessState::Ready
-                    || processTable[i].state == ProcessState::Running;
+                auto s = processTable[i].state;
+                return s == ProcessState::Ready
+                    || s == ProcessState::Running
+                    || s == ProcessState::Blocked;
             }
         }
         return false;
@@ -431,10 +684,12 @@ namespace Sched {
 
     Process* GetProcessByPid(int pid) {
         for (int i = 0; i < MaxProcesses; i++) {
-            if (processTable[i].pid == pid &&
-                (processTable[i].state == ProcessState::Ready ||
-                 processTable[i].state == ProcessState::Running)) {
-                return &processTable[i];
+            if (processTable[i].pid == pid) {
+                auto s = processTable[i].state;
+                if (s == ProcessState::Ready || s == ProcessState::Running ||
+                    s == ProcessState::Blocked) {
+                    return &processTable[i];
+                }
             }
         }
         return nullptr;

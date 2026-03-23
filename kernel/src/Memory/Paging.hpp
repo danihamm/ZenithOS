@@ -124,6 +124,13 @@ public:
 
     extern Paging* g_paging;
 
+    // Protects user page table modifications from concurrent access.
+    // Required for SMP: e.g. WinServer::Resize unmaps pages from the
+    // desktop's page tables while the desktop may be allocating pages
+    // on another CPU.
+    void LockUserPaging();
+    void UnlockUserPaging();
+
     extern "C" uint64_t GetCR3();
     extern "C" void LoadCR3(PageTable* PML4);
 

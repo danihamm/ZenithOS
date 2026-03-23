@@ -24,6 +24,7 @@
 #include <Graphics/Cursor.hpp>
 #include <Libraries/Memory.hpp>
 #include <Hal/MSR.hpp>
+#include <Hal/SmpBoot.hpp>
 #include <Api/Syscall.hpp>
 
 using namespace Kt;
@@ -424,6 +425,14 @@ namespace Hal {
             Hal::LoadTSS();
             reinitProgress(0x03);  // Syscalls
             Montauk::InitializeSyscalls();
+            // Re-set GS base for BSP (lost during S3)
+            {
+                auto* bsp = Smp::GetCpuData(0);
+                if (bsp) {
+                    Hal::WriteMSR(0xC0000101, (uint64_t)bsp); // IA32_GS_BASE
+                    Hal::WriteMSR(0xC0000102, 0);              // IA32_KERNEL_GS_BASE
+                }
+            }
             reinitProgress(0x04);  // PAT
             Hal::InitializePAT();
             reinitProgress(0x05);  // PIC

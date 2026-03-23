@@ -36,10 +36,8 @@ CFLAGS := \
     -fdata-sections \
     -m64 \
     -march=x86-64 \
-    -mno-80387 \
-    -mno-mmx \
-    -mno-sse \
-    -mno-sse2 \
+    -msse \
+    -msse2 \
     -mno-red-zone \
     -mcmodel=small \
     -isystem $(LIBC_INC) \

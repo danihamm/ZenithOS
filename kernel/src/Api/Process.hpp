@@ -26,7 +26,7 @@ namespace Montauk {
     }
 
     static void Sys_SleepMs(uint64_t ms) {
-        Timekeeping::Sleep(ms);
+        Sched::BlockForSleep(ms);
     }
 
     static int Sys_GetPid() {
@@ -34,9 +34,7 @@ namespace Montauk {
     }
 
     static void Sys_WaitPid(int pid) {
-        while (Sched::IsAlive(pid)) {
-            Sched::Schedule();  // yield until the process exits
-        }
+        Sched::BlockOnPid(pid);
     }
 
     static int Sys_Spawn(const char* path, const char* args) {

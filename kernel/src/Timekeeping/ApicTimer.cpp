@@ -7,6 +7,7 @@
 #include "ApicTimer.hpp"
 #include <Hal/Apic/Apic.hpp>
 #include <Hal/Apic/Interrupts.hpp>
+#include <Hal/SmpBoot.hpp>
 #include <Io/IoPort.hpp>
 #include <Terminal/Terminal.hpp>
 #include <CppLib/Stream.hpp>
@@ -40,15 +41,18 @@ namespace Timekeeping {
 
     static bool g_schedEnabled = false;
 
-    // Timer IRQ handler: increment tick count, poll NIC, and drive scheduler
+    // Timer IRQ handler: BSP handles timekeeping+polling, all CPUs run scheduler
     static void TimerHandler(uint8_t) {
-        g_tickCount = g_tickCount + 1;
+        auto* cpu = Smp::GetCurrentCpuData();
 
-        // In polling mode, drain the NIC's RX ring from timer context
-        // (equivalent to a real NIC IRQ handler, runs with interrupts disabled)
-        Drivers::Net::E1000E::Poll();
-        Drivers::USB::Xhci::ProcessDeferredWork();
-        Drivers::USB::HidKeyboard::Tick();
+        if (cpu->cpuIndex == 0) {
+            // BSP: increment global tick count and poll devices
+            g_tickCount = g_tickCount + 1;
+
+            Drivers::Net::E1000E::Poll();
+            Drivers::USB::Xhci::ProcessDeferredWork();
+            Drivers::USB::HidKeyboard::Tick();
+        }
 
         if (g_schedEnabled) {
             Sched::Tick();
@@ -165,12 +169,25 @@ namespace Timekeeping {
         g_schedEnabled = true;
     }
 
+    void ApicTimerInitializeAP() {
+        // Use the BSP's calibrated ticks-per-ms value directly.
+        // All cores share the same bus clock, so the APIC timer rate is
+        // identical. This avoids PIT contention during AP boot.
+        if (g_ticksPerMs == 0) return;
+
+        // Configure periodic timer at 1000 Hz (same vector as BSP)
+        uint32_t lvt = (Hal::IRQ_VECTOR_BASE + Hal::IRQ_TIMER) | LVT_PERIODIC;
+        Hal::LocalApic::WriteRegister(Hal::LocalApic::REG_TIMER_DIVIDE, DIVIDE_BY_16);
+        Hal::LocalApic::WriteRegister(Hal::LocalApic::REG_TIMER_LVT, lvt);
+        Hal::LocalApic::WriteRegister(Hal::LocalApic::REG_TIMER_INITIAL, g_ticksPerMs);
+    }
+
     void Sleep(uint64_t ms) {
         uint64_t target = g_tickCount + ms;
         while (g_tickCount < target) {
             // Yield to other processes instead of hlt. Using hlt here causes
             // a deadlock: if the timer ISR preempts us during hlt and context-
-            // switches away (via Tick → Schedule), EOI is never sent, so no
+            // switches away (via Tick -> Schedule), EOI is never sent, so no
             // more timer interrupts fire and any process doing hlt freezes.
             Sched::Schedule();
         }

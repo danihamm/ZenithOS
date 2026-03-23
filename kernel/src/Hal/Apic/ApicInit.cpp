@@ -70,9 +70,9 @@ namespace Hal {
         IoApic::RouteIrq(IRQ_KEYBOARD, IRQ_VECTOR_BASE + IRQ_KEYBOARD, bspApicId);
         IoApic::RouteIrq(IRQ_MOUSE,    IRQ_VECTOR_BASE + IRQ_MOUSE,    bspApicId);
 
-        // Step 8: Enable interrupts
-        asm volatile("sti");
+        // Note: sti is NOT called here. The caller (Main.cpp) enables
+        // interrupts after setting up per-CPU GS base for SMP/SWAPGS.
 
-        KernelLogStream(OK, "APIC") << "APIC subsystem initialized, interrupts enabled";
+        KernelLogStream(OK, "APIC") << "APIC subsystem initialized";
     }
 };

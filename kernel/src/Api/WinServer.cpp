@@ -10,15 +10,24 @@
 #include <Memory/HHDM.hpp>
 #include <Libraries/Memory.hpp>
 #include <Terminal/Terminal.hpp>
+#include <CppLib/Spinlock.hpp>
 #include <Sched/Scheduler.hpp>
 
 namespace WinServer {
 
     static WindowSlot g_slots[MaxWindows];
     static int g_uiScale = 1;
+    static kcp::Mutex wsLock;
+
+    // RAII lock guard for WinServer operations
+    struct WsGuard {
+        WsGuard()  { wsLock.Acquire(); }
+        ~WsGuard() { wsLock.Release(); }
+    };
 
     int Create(int ownerPid, uint64_t ownerPml4, const char* title, int w, int h,
                uint64_t& heapNext, uint64_t& outVa) {
+        WsGuard guard;
         // Find a free slot
         int slotIdx = -1;
         for (int i = 0; i < MaxWindows; i++) {
@@ -56,12 +65,12 @@ namespace WinServer {
         }
         slot.title[tlen] = '\0';
 
-        // Allocate physical pages and map into owner's address space
+        // Allocate live pixel pages (app renders here) and snapshot pages
+        // (compositor reads here). Present copies live -> snapshot.
         uint64_t userVa = heapNext;
         for (int i = 0; i < numPages; i++) {
             void* page = Memory::g_pfa->AllocateZeroed();
             if (page == nullptr) {
-                // Cleanup on failure - mark slot unused
                 slot.used = false;
                 return -1;
             }
@@ -71,6 +80,14 @@ namespace WinServer {
                 slot.used = false;
                 return -1;
             }
+
+            // Allocate corresponding snapshot page
+            void* snapPage = Memory::g_pfa->AllocateZeroed();
+            if (snapPage == nullptr) {
+                slot.used = false;
+                return -1;
+            }
+            slot.snapshotPhysPages[i] = Memory::SubHHDM((uint64_t)snapPage);
         }
 
         slot.ownerVa = userVa;
@@ -84,6 +101,7 @@ namespace WinServer {
     }
 
     int Destroy(int windowId, int callerPid) {
+        WsGuard guard;
         if (windowId < 0 || windowId >= MaxWindows) return -1;
         WindowSlot& slot = g_slots[windowId];
         if (!slot.used || slot.ownerPid != callerPid) return -1;
@@ -113,10 +131,13 @@ namespace WinServer {
             }
         }
 
-        // Free physical pixel pages
+        // Free physical pixel pages and snapshot pages
         for (int i = 0; i < slot.pixelNumPages; i++) {
             if (slot.pixelPhysPages[i] != 0) {
                 Memory::g_pfa->Free((void*)Memory::HHDM(slot.pixelPhysPages[i]));
+            }
+            if (slot.snapshotPhysPages[i] != 0) {
+                Memory::g_pfa->Free((void*)Memory::HHDM(slot.snapshotPhysPages[i]));
             }
         }
 
@@ -125,15 +146,34 @@ namespace WinServer {
     }
 
     int Present(int windowId, int callerPid) {
-        if (windowId < 0 || windowId >= MaxWindows) return -1;
+        // Validate ownership under the lock (brief)
+        wsLock.Acquire();
+        if (windowId < 0 || windowId >= MaxWindows) { wsLock.Release(); return -1; }
         WindowSlot& slot = g_slots[windowId];
-        if (!slot.used || slot.ownerPid != callerPid) return -1;
+        if (!slot.used || slot.ownerPid != callerPid) { wsLock.Release(); return -1; }
+        int numPages = slot.pixelNumPages;
+        wsLock.Release();
 
+        // Snapshot memcpy OUTSIDE the lock. This is safe because only the
+        // owning process calls Present/Resize, and a process runs on one
+        // CPU at a time. Holding wsLock during an 8MB copy would block
+        // ALL other WinServer operations (Poll, Enumerate, SendEvent)
+        // across all CPUs, causing convoy stalls and lockups.
+        for (int i = 0; i < numPages; i++) {
+            void* src = (void*)Memory::HHDM(slot.pixelPhysPages[i]);
+            void* dst = (void*)Memory::HHDM(slot.snapshotPhysPages[i]);
+            memcpy(dst, src, 0x1000);
+        }
+
+        // Set dirty under lock
+        wsLock.Acquire();
         slot.dirty = true;
+        wsLock.Release();
         return 0;
     }
 
     int Poll(int windowId, int callerPid, Montauk::WinEvent* outEvent) {
+        WsGuard guard;
         if (windowId < 0 || windowId >= MaxWindows) return -1;
         WindowSlot& slot = g_slots[windowId];
         if (!slot.used || slot.ownerPid != callerPid) return -1;
@@ -146,6 +186,7 @@ namespace WinServer {
     }
 
     int Enumerate(Montauk::WinInfo* outArray, int maxCount) {
+        WsGuard guard;
         int count = 0;
         for (int i = 0; i < MaxWindows && count < maxCount; i++) {
             if (!g_slots[i].used) continue;
@@ -164,6 +205,7 @@ namespace WinServer {
     }
 
     uint64_t Map(int windowId, int callerPid, uint64_t callerPml4, uint64_t& heapNext) {
+        WsGuard guard;
         if (windowId < 0 || windowId >= MaxWindows) return 0;
         WindowSlot& slot = g_slots[windowId];
         if (!slot.used) return 0;
@@ -175,8 +217,10 @@ namespace WinServer {
 
         uint64_t userVa = heapNext;
 
+        // Map the SNAPSHOT pages (not live pages) so the compositor
+        // always reads a complete frame captured at Present time.
         for (int i = 0; i < slot.pixelNumPages; i++) {
-            if (!Memory::VMM::Paging::MapUserIn(callerPml4, slot.pixelPhysPages[i],
+            if (!Memory::VMM::Paging::MapUserIn(callerPml4, slot.snapshotPhysPages[i],
                                            userVa + (uint64_t)i * 0x1000)) {
                 return 0;
             }
@@ -189,7 +233,8 @@ namespace WinServer {
         return userVa;
     }
 
-    int SendEvent(int windowId, const Montauk::WinEvent* event) {
+    // Internal: send event without acquiring lock (caller must hold wsLock)
+    static int SendEventLocked(int windowId, const Montauk::WinEvent* event) {
         if (windowId < 0 || windowId >= MaxWindows) return -1;
         WindowSlot& slot = g_slots[windowId];
         if (!slot.used) return -1;
@@ -202,8 +247,14 @@ namespace WinServer {
         return 0;
     }
 
+    int SendEvent(int windowId, const Montauk::WinEvent* event) {
+        WsGuard guard;
+        return SendEventLocked(windowId, event);
+    }
+
     int Resize(int windowId, int callerPid, uint64_t ownerPml4, int newW, int newH,
                uint64_t& heapNext, uint64_t& outVa) {
+        WsGuard guard;
         if (windowId < 0 || windowId >= MaxWindows) return -1;
         WindowSlot& slot = g_slots[windowId];
         if (!slot.used || slot.ownerPid != callerPid) return -1;
@@ -217,19 +268,21 @@ namespace WinServer {
         int numPages = (int)((bufSize + 0xFFF) / 0x1000);
         if (numPages > MaxPixelPages) return -1;
 
-        // Unmap old pixel pages from desktop's address space (if mapped)
-        if (slot.desktopVa != 0 && slot.desktopPid != 0) {
-            auto* desktopProc = Sched::GetProcessByPid(slot.desktopPid);
-            if (desktopProc) {
-                for (int i = 0; i < slot.pixelNumPages; i++) {
-                    Memory::VMM::Paging::UnmapUserIn(
-                        desktopProc->pml4Phys,
-                        slot.desktopVa + (uint64_t)i * 0x1000);
-                }
-            }
-        }
+        // Do NOT unmap/free snapshot pages from the desktop here.
+        // The desktop may be running on another CPU with stale TLB entries
+        // pointing to the old snapshot pages. Unmapping + freeing them
+        // causes a page fault on the desktop when the TLB entry is evicted.
+        // Instead, leave them mapped -- the desktop will get new snapshot
+        // pages on its next Map call (desktopVa is invalidated below).
+        // The old snapshot pages remain in the desktop's page tables and
+        // are reclaimed by FreeUserHalf when the desktop exits.
 
-        // Unmap old pixel pages from owner's address space, then free them
+        // Unmap old LIVE pixel pages from owner's address space and free them.
+        // Free old snapshot pages too (don't leak). The desktop's PTEs still
+        // point to the old physical addresses, but we don't clear them (no
+        // UnmapUserIn for desktop) to avoid TLB-eviction page faults. The
+        // desktop may read one frame of garbage from the freed pages before
+        // re-mapping -- acceptable during a resize.
         int oldNumPages = slot.pixelNumPages;
         for (int i = 0; i < oldNumPages; i++) {
             Memory::VMM::Paging::UnmapUserIn(
@@ -238,9 +291,13 @@ namespace WinServer {
                 Memory::g_pfa->Free((void*)Memory::HHDM(slot.pixelPhysPages[i]));
                 slot.pixelPhysPages[i] = 0;
             }
+            if (slot.snapshotPhysPages[i] != 0) {
+                Memory::g_pfa->Free((void*)Memory::HHDM(slot.snapshotPhysPages[i]));
+                slot.snapshotPhysPages[i] = 0;
+            }
         }
 
-        // Allocate new pages and map into owner's address space
+        // Allocate new live + snapshot pages and map live into owner's address space
         uint64_t userVa = heapNext;
         for (int i = 0; i < numPages; i++) {
             void* page = Memory::g_pfa->AllocateZeroed();
@@ -250,6 +307,10 @@ namespace WinServer {
             if (!Memory::VMM::Paging::MapUserIn(ownerPml4, physAddr, userVa + (uint64_t)i * 0x1000)) {
                 return -1;
             }
+
+            void* snapPage = Memory::g_pfa->AllocateZeroed();
+            if (snapPage == nullptr) return -1;
+            slot.snapshotPhysPages[i] = Memory::SubHHDM((uint64_t)snapPage);
         }
 
         slot.width = newW;
@@ -267,6 +328,7 @@ namespace WinServer {
     }
 
     int SetCursor(int windowId, int callerPid, int cursor) {
+        WsGuard guard;
         if (windowId < 0 || windowId >= MaxWindows) return -1;
         WindowSlot& slot = g_slots[windowId];
         if (!slot.used || slot.ownerPid != callerPid) return -1;
@@ -275,6 +337,7 @@ namespace WinServer {
     }
 
     int SetScale(int scale) {
+        WsGuard guard;
         if (scale < 0) scale = 0;
         if (scale > 2) scale = 2;
         g_uiScale = scale;
@@ -286,7 +349,7 @@ namespace WinServer {
         ev.scale.scale = scale;
         for (int i = 0; i < MaxWindows; i++) {
             if (g_slots[i].used) {
-                SendEvent(i, &ev);
+                SendEventLocked(i, &ev);
             }
         }
         return 0;
@@ -297,6 +360,7 @@ namespace WinServer {
     }
 
     void CleanupProcess(int pid) {
+        WsGuard guard;
         for (int i = 0; i < MaxWindows; i++) {
             if (g_slots[i].used && g_slots[i].ownerPid == pid) {
                 Kt::KernelLogStream(Kt::INFO, "WinServer") << "Cleaning up window "
@@ -314,10 +378,19 @@ namespace WinServer {
                     }
                 }
 
-                // Do NOT free physical pixel pages here — they are still mapped
+                // Do NOT free live pixel pages here -- they are still mapped
                 // in the owner's page tables and FreeUserHalf() (called right
-                // after CleanupProcess) will free them.  Freeing here would
-                // cause a double-free, creating a cycle in the PFA free list.
+                // after CleanupProcess) will free them.
+
+                // DO free snapshot pages -- they are NOT in the owner's page
+                // tables (they were mapped into the desktop, and we just
+                // unmapped them above). If we don't free them here, they leak.
+                for (int p = 0; p < g_slots[i].pixelNumPages; p++) {
+                    if (g_slots[i].snapshotPhysPages[p] != 0) {
+                        Memory::g_pfa->Free((void*)Memory::HHDM(g_slots[i].snapshotPhysPages[p]));
+                        g_slots[i].snapshotPhysPages[p] = 0;
+                    }
+                }
 
                 g_slots[i].used = false;
             }

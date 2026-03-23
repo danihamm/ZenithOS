@@ -11,6 +11,7 @@
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <math.h>
 #include <fcntl.h>
 #include <sys/stat.h>
 
@@ -626,7 +627,18 @@ char *getenv(const char *name) {
     return NULL;
 }
 
+static void (*_atexit_funcs[32])(void);
+static int _atexit_count = 0;
+
+int atexit(void (*func)(void)) {
+    if (_atexit_count >= 32 || func == NULL) return -1;
+    _atexit_funcs[_atexit_count++] = func;
+    return 0;
+}
+
 void exit(int status) {
+    for (int i = _atexit_count - 1; i >= 0; i--)
+        _atexit_funcs[i]();
     _zos_syscall1(SYS_EXIT, (long)status);
     __builtin_unreachable();
 }
@@ -1440,19 +1452,6 @@ int fstat(int fd, struct stat *buf) {
 }
 
 /* ========================================================================
-   stdlib.h: system() and atexit()
-   ======================================================================== */
-
-static void (*_atexit_funcs[32])(void);
-static int _atexit_count = 0;
-
-int atexit(void (*func)(void)) {
-    if (_atexit_count >= 32 || func == NULL) return -1;
-    _atexit_funcs[_atexit_count++] = func;
-    return 0;
-}
-
-/* ========================================================================
    stdlib.h: qsort
    ======================================================================== */
 
@@ -1519,4 +1518,271 @@ ldiv_t ldiv(long numer, long denom) {
 
 long atol(const char *s) {
     return strtol(s, NULL, 10);
+}
+
+/* ========================================================================
+   math.h functions
+   ======================================================================== */
+
+/* Constants */
+#define M_PI        3.14159265358979323846
+#define M_PI_2      1.57079632679489661923
+#define M_LN2       0.69314718055994530942
+#define M_LOG2E     1.44269504088896340736
+
+double fabs(double x) { return x < 0 ? -x : x; }
+
+double floor(double x) {
+    double t = (double)(long long)x;
+    return (x < t) ? t - 1.0 : t;
+}
+
+double ceil(double x) {
+    double f = floor(x);
+    return (x > f) ? f + 1.0 : f;
+}
+
+double fmod(double x, double y) {
+    if (y == 0.0) return 0.0;
+    return x - (double)((long long)(x / y)) * y;
+}
+
+double sqrt(double x) {
+    if (x <= 0.0) return 0.0;
+    double guess = x;
+    for (int i = 0; i < 20; i++)
+        guess = (guess + x / guess) * 0.5;
+    return guess;
+}
+
+/* ---- sin / cos via range reduction + minimax polynomial ---- */
+
+/* Reduce x to [-pi, pi] */
+static double _reduce_angle(double x) {
+    /* Bring into [-2pi, 2pi] via fmod, then into [-pi, pi] */
+    x = fmod(x, 2.0 * M_PI);
+    if (x > M_PI) x -= 2.0 * M_PI;
+    else if (x < -M_PI) x += 2.0 * M_PI;
+    return x;
+}
+
+/* Core sin approximation for x in [-pi/2, pi/2].
+   Taylor series to degree 17 for < 1e-11 accuracy at the boundary. */
+static double _sin_core(double x) {
+    double x2 = x * x;
+    return x * (1.0 + x2 * (-1.0/6.0 + x2 * (1.0/120.0 + x2 * (-1.0/5040.0
+           + x2 * (1.0/362880.0 + x2 * (-1.0/39916800.0
+           + x2 * (1.0/6227020800.0 + x2 * (-1.0/1307674368000.0))))))));
+}
+
+double sin(double x) {
+    x = _reduce_angle(x);
+    /* Reduce to [-pi/2, pi/2] using sin(pi - x) = sin(x) */
+    if (x > M_PI_2) x = M_PI - x;
+    else if (x < -M_PI_2) x = -M_PI - x;
+    return _sin_core(x);
+}
+
+double cos(double x) {
+    return sin(x + M_PI_2);
+}
+
+/* ---- log via exponent extraction + polynomial on [1, 2) ---- */
+
+/* Union for double bit manipulation */
+typedef union { double d; uint64_t u; } _dbl_bits;
+
+double log(double x) {
+    if (x <= 0.0) return -HUGE_VAL;
+    if (x == 1.0) return 0.0;
+
+    /* Extract exponent and mantissa: x = m * 2^e, where m in [1, 2) */
+    _dbl_bits bits;
+    bits.d = x;
+    int e = (int)((bits.u >> 52) & 0x7FF) - 1023;
+    bits.u = (bits.u & 0x000FFFFFFFFFFFFFULL) | 0x3FF0000000000000ULL;
+    double m = bits.d;
+
+    /* log(x) = e * ln(2) + log(m), where m in [1, 2)
+       Use log(m) = log((1+f)/(1-f)) = 2*(f + f^3/3 + f^5/5 + ...) where f = (m-1)/(m+1) */
+    double f = (m - 1.0) / (m + 1.0);
+    double f2 = f * f;
+    double ln_m = 2.0 * f * (1.0 + f2 * (1.0/3.0 + f2 * (1.0/5.0 + f2 * (1.0/7.0
+                 + f2 * (1.0/9.0 + f2 * (1.0/11.0 + f2 * (1.0/13.0
+                 + f2 * (1.0/15.0 + f2 * (1.0/17.0)))))))));
+
+    return (double)e * M_LN2 + ln_m;
+}
+
+/* ---- exp via range reduction to [0, ln2) + polynomial ---- */
+
+double exp(double x) {
+    if (x == 0.0) return 1.0;
+    if (x < -708.0) return 0.0;
+    if (x > 709.0) return HUGE_VAL;
+
+    /* Range reduction: exp(x) = 2^k * exp(r), where x = k*ln(2) + r, |r| <= ln(2)/2 */
+    double k_real = floor(x * M_LOG2E + 0.5);
+    int k = (int)k_real;
+    double r = x - k_real * M_LN2;
+
+    /* Pade-like polynomial for exp(r), |r| <= ~0.347:
+       1 + r + r^2/2 + r^3/6 + r^4/24 + r^5/120 + r^6/720 + r^7/5040 */
+    double exp_r = 1.0 + r * (1.0 + r * (1.0/2.0 + r * (1.0/6.0
+                 + r * (1.0/24.0 + r * (1.0/120.0 + r * (1.0/720.0 + r * (1.0/5040.0)))))));
+
+    /* Multiply by 2^k via bit manipulation */
+    _dbl_bits bits;
+    bits.d = exp_r;
+    bits.u += (uint64_t)k << 52;
+    return bits.d;
+}
+
+/* ---- pow via exp(exp * log(base)) ---- */
+
+double pow(double base, double e) {
+    if (e == 0.0) return 1.0;
+    if (base == 0.0) return 0.0;
+    if (base == 1.0) return 1.0;
+    if (e == 1.0) return base;
+
+    /* Integer exponent fast path */
+    if (e == (double)(long long)e && fabs(e) < 64) {
+        long long ei = (long long)e;
+        int neg = 0;
+        if (ei < 0) { neg = 1; ei = -ei; }
+        double r = 1.0;
+        double b = base;
+        while (ei > 0) {
+            if (ei & 1) r *= b;
+            b *= b;
+            ei >>= 1;
+        }
+        return neg ? 1.0 / r : r;
+    }
+
+    /* General case */
+    if (base < 0.0) return 0.0; /* negative base with fractional exp is undefined (in reals) */
+    return exp(e * log(base));
+}
+
+double tan(double x) {
+    double c = cos(x);
+    if (c == 0.0) return (sin(x) > 0.0) ? HUGE_VAL : -HUGE_VAL;
+    return sin(x) / c;
+}
+
+double log2(double x)  { return log(x) * M_LOG2E; }
+double log10(double x) { return log(x) * 0.43429448190325182765; /* 1/ln(10) */ }
+
+/* ---- atan / atan2 via polynomial approximation ---- */
+
+/* Core atan for |x| <= ~0.414 (= tan(pi/8)).
+   Taylor series converges well in this small range. */
+static double _atan_small(double x) {
+    double x2 = x * x;
+    return x * (1.0 + x2 * (-1.0/3.0 + x2 * (1.0/5.0 + x2 * (-1.0/7.0
+           + x2 * (1.0/9.0 + x2 * (-1.0/11.0 + x2 * (1.0/13.0
+           + x2 * (-1.0/15.0 + x2 * (1.0/17.0)))))))));
+}
+
+#define M_PI_4 0.78539816339744830962
+
+/* atan for x >= 0, using range reduction:
+   - |x| <= tan(pi/8) ~ 0.4142: polynomial directly
+   - 0.4142 < |x| <= 1: atan(x) = pi/4 + atan((x-1)/(x+1))
+   - |x| > 1: atan(x) = pi/2 - atan(1/x) */
+static double _atan_positive(double x) {
+    if (x <= 0.41421356237309504) {
+        return _atan_small(x);
+    } else if (x <= 1.0) {
+        return M_PI_4 + _atan_small((x - 1.0) / (x + 1.0));
+    } else {
+        return M_PI_2 - _atan_positive(1.0 / x);
+    }
+}
+
+double atan2(double y, double x) {
+    if (x == 0.0 && y == 0.0) return 0.0;
+    if (x == 0.0) return (y > 0.0) ? M_PI_2 : -M_PI_2;
+    if (y == 0.0) return (x > 0.0) ? 0.0 : M_PI;
+
+    double a = _atan_positive(fabs(y) / fabs(x));
+
+    /* Map to correct quadrant */
+    if (x < 0.0) a = M_PI - a;
+    if (y < 0.0) a = -a;
+    return a;
+}
+
+double atan(double x) {
+    if (x >= 0.0) return _atan_positive(x);
+    return -_atan_positive(-x);
+}
+
+double round(double x) { return floor(x + 0.5); }
+
+/* ---- atof: basic floating-point string parser ---- */
+
+double atof(const char *s) {
+    if (s == NULL) return 0.0;
+
+    while (isspace((unsigned char)*s)) s++;
+
+    int neg = 0;
+    if (*s == '-') { neg = 1; s++; }
+    else if (*s == '+') s++;
+
+    /* Integer part */
+    double val = 0.0;
+    while (isdigit((unsigned char)*s)) {
+        val = val * 10.0 + (*s - '0');
+        s++;
+    }
+
+    /* Fractional part */
+    if (*s == '.') {
+        s++;
+        double place = 0.1;
+        while (isdigit((unsigned char)*s)) {
+            val += (*s - '0') * place;
+            place *= 0.1;
+            s++;
+        }
+    }
+
+    /* Exponent part */
+    if (*s == 'e' || *s == 'E') {
+        s++;
+        int eneg = 0;
+        if (*s == '-') { eneg = 1; s++; }
+        else if (*s == '+') s++;
+        int ev = 0;
+        while (isdigit((unsigned char)*s)) {
+            ev = ev * 10 + (*s - '0');
+            s++;
+        }
+        double mul = 1.0;
+        while (ev-- > 0) mul *= 10.0;
+        if (eneg) val /= mul;
+        else val *= mul;
+    }
+
+    return neg ? -val : val;
+}
+
+float floorf(float x) { return (float)floor((double)x); }
+float ceilf(float x)  { return (float)ceil((double)x); }
+float fabsf(float x)  { return x < 0.0f ? -x : x; }
+float sqrtf(float x)  { return (float)sqrt((double)x); }
+float sinf(float x)   { return (float)sin((double)x); }
+float cosf(float x)   { return (float)cos((double)x); }
+
+/* ========================================================================
+   unistd.h: sleep
+   ======================================================================== */
+
+unsigned int sleep(unsigned int seconds) {
+    (void)seconds;
+    return 0;
 }

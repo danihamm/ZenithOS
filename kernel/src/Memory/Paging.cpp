@@ -2,9 +2,16 @@
 #include <Memory/PageFrameAllocator.hpp>
 #include <Common/Panic.hpp>
 #include <Memory/HHDM.hpp>
+#include <CppLib/Spinlock.hpp>
 
 namespace Memory::VMM {
     Paging* g_paging = nullptr;
+
+    // Protects user page table modifications from concurrent SMP access
+    static kcp::Mutex pagingLock;
+
+    void LockUserPaging()   { pagingLock.Acquire(); }
+    void UnlockUserPaging() { pagingLock.Release(); }
 
     extern "C" uint64_t KernelStartSymbol;
 
@@ -184,7 +191,9 @@ namespace Memory::VMM {
     }
 
     bool Paging::MapUserIn(std::uint64_t pml4Phys, std::uint64_t physicalAddress, std::uint64_t virtualAddress) {
+        pagingLock.Acquire();
         if (virtualAddress % 0x1000 != 0 || physicalAddress % 0x1000 != 0) {
+            pagingLock.Release();
             Panic("Non-aligned address in Paging::MapUserIn!", nullptr);
         }
 
@@ -211,22 +220,25 @@ namespace Memory::VMM {
 
         PageTable* pml4 = (PageTable*)pml4Phys;
         auto pml3 = walkLevel(pml4, va.GetL4Index());
-        if (!pml3) return false;
+        if (!pml3) { pagingLock.Release(); return false; }
         auto pml2 = walkLevel(pml3, va.GetL3Index());
-        if (!pml2) return false;
+        if (!pml2) { pagingLock.Release(); return false; }
         auto pml1 = walkLevel(pml2, va.GetL2Index());
-        if (!pml1) return false;
+        if (!pml1) { pagingLock.Release(); return false; }
 
         PageTableEntry* pageEntry = (PageTableEntry*)Memory::HHDM(&pml1->entries[va.GetPageIndex()]);
         pageEntry->Present = true;
         pageEntry->Writable = true;
         pageEntry->Supervisor = 1;
         pageEntry->Address = physicalAddress >> 12;
+        pagingLock.Release();
         return true;
     }
 
     bool Paging::MapUserInWC(std::uint64_t pml4Phys, std::uint64_t physicalAddress, std::uint64_t virtualAddress) {
+        pagingLock.Acquire();
         if (virtualAddress % 0x1000 != 0 || physicalAddress % 0x1000 != 0) {
+            pagingLock.Release();
             Panic("Non-aligned address in Paging::MapUserInWC!", nullptr);
         }
 
@@ -251,25 +263,27 @@ namespace Memory::VMM {
 
         PageTable* pml4 = (PageTable*)pml4Phys;
         auto pml3 = walkLevel(pml4, va.GetL4Index());
-        if (!pml3) return false;
+        if (!pml3) { pagingLock.Release(); return false; }
         auto pml2 = walkLevel(pml3, va.GetL3Index());
-        if (!pml2) return false;
+        if (!pml2) { pagingLock.Release(); return false; }
         auto pml1 = walkLevel(pml2, va.GetL2Index());
-        if (!pml1) return false;
+        if (!pml1) { pagingLock.Release(); return false; }
 
         PageTableEntry* pageEntry = (PageTableEntry*)Memory::HHDM(&pml1->entries[va.GetPageIndex()]);
         pageEntry->Present = true;
         pageEntry->Writable = true;
         pageEntry->Supervisor = 1;
-        pageEntry->WriteThrough = true;   // PWT=1, PCD=0 → PAT entry 1 = WC
+        pageEntry->WriteThrough = true;   // PWT=1, PCD=0 -> PAT entry 1 = WC
         pageEntry->Address = physicalAddress >> 12;
+        pagingLock.Release();
         return true;
     }
 
     void Paging::UnmapUserIn(std::uint64_t pml4Phys, std::uint64_t virtualAddress) {
+        pagingLock.Acquire();
         VirtualAddress va(virtualAddress);
 
-        // Walk without allocating — if any level is absent, nothing is mapped.
+        // Walk without allocating -- if any level is absent, nothing is mapped.
         auto walkRead = [](PageTable* table, uint64_t index) -> PageTable* {
             PageTableEntry* entry = (PageTableEntry*)Memory::HHDM(&table->entries[index]);
             if (!entry->Present) return nullptr;
@@ -278,20 +292,21 @@ namespace Memory::VMM {
 
         PageTable* pml4 = (PageTable*)pml4Phys;
         auto pml3 = walkRead(pml4, va.GetL4Index());
-        if (!pml3) return;
+        if (!pml3) { pagingLock.Release(); return; }
         auto pml2 = walkRead(pml3, va.GetL3Index());
-        if (!pml2) return;
+        if (!pml2) { pagingLock.Release(); return; }
         auto pml1 = walkRead(pml2, va.GetL2Index());
-        if (!pml1) return;
+        if (!pml1) { pagingLock.Release(); return; }
 
         PageTableEntry* pageEntry = (PageTableEntry*)Memory::HHDM(&pml1->entries[va.GetPageIndex()]);
-        if (!pageEntry->Present) return;
+        if (!pageEntry->Present) { pagingLock.Release(); return; }
 
         // Clear the entire 8-byte PTE
         *(uint64_t*)pageEntry = 0;
 
         // Invalidate TLB for this virtual address
         asm volatile("invlpg (%0)" :: "r"(virtualAddress) : "memory");
+        pagingLock.Release();
     }
 
     void Paging::FreeUserHalf(std::uint64_t pml4Phys) {

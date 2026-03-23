@@ -20,6 +20,7 @@ endif
 DOOM_SRC   := ../../../doomgeneric/doomgeneric
 LIBC_INC   := ../../include/libc
 PROG_INC   := ../../include
+LIBDIR     := ../../lib
 LINK_LD    := ../../link.ld
 BINDIR     := ../../bin
 OBJDIR     := obj
@@ -153,7 +154,7 @@ DOOM_SRCS := \
     z_zone.c
 
 # Local source files
-LOCAL_SRCS := doomgeneric_montauk.c libc.c
+LOCAL_SRCS := doomgeneric_montauk.c
 
 # ---- Object files ----
 
@@ -171,7 +172,7 @@ all: $(TARGET)
 
 $(TARGET): $(ALL_OBJS) $(LINK_LD) Makefile
 	mkdir -p $(BINDIR)/apps/doom
-	$(LD) $(CFLAGS) $(LDFLAGS) $(ALL_OBJS) -o $@
+	$(LD) $(CFLAGS) $(LDFLAGS) $(ALL_OBJS) $(LIBDIR)/libc/liblibc.a -o $@
 
 # DOOM source files (from doomgeneric directory)
 $(OBJDIR)/%.o: $(DOOM_SRC)/%.c Makefile

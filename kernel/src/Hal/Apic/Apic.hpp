@@ -33,6 +33,11 @@ namespace Hal {
 
         void Initialize(uint64_t apicBasePhys);
 
+        // Initialize the Local APIC on an AP.
+        // Uses the same MMIO base as the BSP (each CPU's APIC is at the same
+        // physical address but routes to its own hardware).
+        void InitializeAP();
+
         // Re-enable the Local APIC after S3 resume.
         // The MMIO mapping and base address survive (they're in page tables / RAM).
         // Only the SVR and TPR hardware registers need reprogramming.

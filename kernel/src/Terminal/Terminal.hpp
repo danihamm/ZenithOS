@@ -10,6 +10,7 @@
 
 #include <Libraries/String.hpp>
 #include <CppLib/Stream.hpp>
+#include <CppLib/Spinlock.hpp>
 
 using namespace kcp;
 
@@ -41,6 +42,11 @@ namespace Kt
                     std::uint8_t blue_mask_size, std::uint8_t blue_mask_shift);
     void Putchar(char c);
     void Print(const char *text);
+
+    // Terminal mutex - protects flanterm from concurrent CPU access.
+    // Uses Mutex (not Spinlock) to keep interrupts enabled while held,
+    // preventing dropped PS/2 mouse/keyboard bytes during log output.
+    extern kcp::Mutex g_termLock;
 
     void UpdatePanelBar(const char* panelText);
 
@@ -138,7 +144,8 @@ public:
             }
         }
 
-        KernelLogStream(KernelLogLevel level, const char* desiredComponentName) { /* level for potential future rich event logging */
+        KernelLogStream(KernelLogLevel level, const char* desiredComponentName) {
+            g_termLock.Acquire();
             g_kernelLogDepth++;
             componentName = desiredComponentName;
 
@@ -148,6 +155,7 @@ public:
         ~KernelLogStream() {
             localStream << newline;
             g_kernelLogDepth--;
+            g_termLock.Release();
         }
 
         template<typename T>

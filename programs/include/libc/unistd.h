@@ -14,6 +14,8 @@ int    write(int fd, const void *buf, size_t count);
 int    close(int fd);
 long   lseek(int fd, long offset, int whence);
 
+unsigned int sleep(unsigned int seconds);
+
 #ifdef __cplusplus
 }
 #endif

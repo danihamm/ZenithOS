@@ -6,6 +6,7 @@
 
 #include "Vfs.hpp"
 #include <Terminal/Terminal.hpp>
+#include <CppLib/Spinlock.hpp>
 
 namespace Fs::Vfs {
 
@@ -17,6 +18,11 @@ namespace Fs::Vfs {
 
     static FsDriver* driveTable[MaxDrives];
     static HandleEntry handleTable[MaxHandles];
+
+    // Protects handle table and driver dispatch from concurrent CPU access.
+    // Uses Mutex (not Spinlock) so interrupts stay enabled while held --
+    // VFS is never called from interrupt context.
+    static kcp::Mutex vfsLock;
 
     // Parse "N:/path" into drive number and local path.
     // Returns true on success, sets outDrive and outPath.
@@ -74,23 +80,18 @@ namespace Fs::Vfs {
         int drive;
         const char* localPath;
 
-        if (!ParsePath(path, drive, localPath)) {
-            Kt::KernelLogStream(Kt::ERROR, "VFS") << "Invalid path format";
-            return -1;
-        }
+        if (!ParsePath(path, drive, localPath)) return -1;
+        if (drive < 0 || drive >= MaxDrives || driveTable[drive] == nullptr) return -1;
 
-        if (drive < 0 || drive >= MaxDrives || driveTable[drive] == nullptr) {
-            Kt::KernelLogStream(Kt::ERROR, "VFS") << "Drive " << drive << " not registered";
-            return -1;
-        }
+        vfsLock.Acquire();
 
         int localHandle = driveTable[drive]->Open(localPath);
-        if (localHandle < 0) return -1;
+        if (localHandle < 0) { vfsLock.Release(); return -1; }
 
         int globalHandle = AllocHandle();
         if (globalHandle < 0) {
             driveTable[drive]->Close(localHandle);
-            Kt::KernelLogStream(Kt::ERROR, "VFS") << "No free handles";
+            vfsLock.Release();
             return -1;
         }
 
@@ -98,61 +99,67 @@ namespace Fs::Vfs {
         handleTable[globalHandle].driveNumber = drive;
         handleTable[globalHandle].localHandle = localHandle;
 
+        vfsLock.Release();
         return globalHandle;
     }
 
     int VfsRead(int handle, uint8_t* buffer, uint64_t offset, uint64_t size) {
-        if (handle < 0 || handle >= MaxHandles || !handleTable[handle].inUse) return -1;
+        vfsLock.Acquire();
+        if (handle < 0 || handle >= MaxHandles || !handleTable[handle].inUse) { vfsLock.Release(); return -1; }
 
         HandleEntry& entry = handleTable[handle];
-        return driveTable[entry.driveNumber]->Read(entry.localHandle, buffer, offset, size);
+        int result = driveTable[entry.driveNumber]->Read(entry.localHandle, buffer, offset, size);
+        vfsLock.Release();
+        return result;
     }
 
     uint64_t VfsGetSize(int handle) {
-        if (handle < 0 || handle >= MaxHandles || !handleTable[handle].inUse) return 0;
+        vfsLock.Acquire();
+        if (handle < 0 || handle >= MaxHandles || !handleTable[handle].inUse) { vfsLock.Release(); return 0; }
 
         HandleEntry& entry = handleTable[handle];
-        return driveTable[entry.driveNumber]->GetSize(entry.localHandle);
+        uint64_t result = driveTable[entry.driveNumber]->GetSize(entry.localHandle);
+        vfsLock.Release();
+        return result;
     }
 
     void VfsClose(int handle) {
-        if (handle < 0 || handle >= MaxHandles || !handleTable[handle].inUse) return;
+        vfsLock.Acquire();
+        if (handle < 0 || handle >= MaxHandles || !handleTable[handle].inUse) { vfsLock.Release(); return; }
 
         HandleEntry& entry = handleTable[handle];
         driveTable[entry.driveNumber]->Close(entry.localHandle);
         entry.inUse = false;
+        vfsLock.Release();
     }
 
     int VfsWrite(int handle, const uint8_t* buffer, uint64_t offset, uint64_t size) {
-        if (handle < 0 || handle >= MaxHandles || !handleTable[handle].inUse) return -1;
+        vfsLock.Acquire();
+        if (handle < 0 || handle >= MaxHandles || !handleTable[handle].inUse) { vfsLock.Release(); return -1; }
 
         HandleEntry& entry = handleTable[handle];
-        if (driveTable[entry.driveNumber]->Write == nullptr) return -1;
-        return driveTable[entry.driveNumber]->Write(entry.localHandle, buffer, offset, size);
+        if (driveTable[entry.driveNumber]->Write == nullptr) { vfsLock.Release(); return -1; }
+        int result = driveTable[entry.driveNumber]->Write(entry.localHandle, buffer, offset, size);
+        vfsLock.Release();
+        return result;
     }
 
     int VfsCreate(const char* path) {
         int drive;
         const char* localPath;
 
-        if (!ParsePath(path, drive, localPath)) {
-            Kt::KernelLogStream(Kt::ERROR, "VFS") << "Invalid path format for Create";
-            return -1;
-        }
-
-        if (drive < 0 || drive >= MaxDrives || driveTable[drive] == nullptr) {
-            Kt::KernelLogStream(Kt::ERROR, "VFS") << "Drive " << drive << " not registered";
-            return -1;
-        }
-
+        if (!ParsePath(path, drive, localPath)) return -1;
+        if (drive < 0 || drive >= MaxDrives || driveTable[drive] == nullptr) return -1;
         if (driveTable[drive]->Create == nullptr) return -1;
 
+        vfsLock.Acquire();
+
         int localHandle = driveTable[drive]->Create(localPath);
-        if (localHandle < 0) return -1;
+        if (localHandle < 0) { vfsLock.Release(); return -1; }
 
         int globalHandle = AllocHandle();
         if (globalHandle < 0) {
-            Kt::KernelLogStream(Kt::ERROR, "VFS") << "No free handles";
+            vfsLock.Release();
             return -1;
         }
 
@@ -160,6 +167,7 @@ namespace Fs::Vfs {
         handleTable[globalHandle].driveNumber = drive;
         handleTable[globalHandle].localHandle = localHandle;
 
+        vfsLock.Release();
         return globalHandle;
     }
 
@@ -168,12 +176,13 @@ namespace Fs::Vfs {
         const char* localPath;
 
         if (!ParsePath(path, drive, localPath)) return -1;
-
         if (drive < 0 || drive >= MaxDrives || driveTable[drive] == nullptr) return -1;
-
         if (driveTable[drive]->Delete == nullptr) return -1;
 
-        return driveTable[drive]->Delete(localPath);
+        vfsLock.Acquire();
+        int result = driveTable[drive]->Delete(localPath);
+        vfsLock.Release();
+        return result;
     }
 
     int VfsMkdir(const char* path) {
@@ -184,7 +193,10 @@ namespace Fs::Vfs {
         if (drive < 0 || drive >= MaxDrives || driveTable[drive] == nullptr) return -1;
         if (driveTable[drive]->Mkdir == nullptr) return -1;
 
-        return driveTable[drive]->Mkdir(localPath);
+        vfsLock.Acquire();
+        int result = driveTable[drive]->Mkdir(localPath);
+        vfsLock.Release();
+        return result;
     }
 
     int VfsDriveList(int* outDrives, int maxEntries) {
@@ -201,17 +213,13 @@ namespace Fs::Vfs {
         int drive;
         const char* localPath;
 
-        if (!ParsePath(path, drive, localPath)) {
-            Kt::KernelLogStream(Kt::ERROR, "VFS") << "Invalid path format for ReadDir";
-            return -1;
-        }
+        if (!ParsePath(path, drive, localPath)) return -1;
+        if (drive < 0 || drive >= MaxDrives || driveTable[drive] == nullptr) return -1;
 
-        if (drive < 0 || drive >= MaxDrives || driveTable[drive] == nullptr) {
-            Kt::KernelLogStream(Kt::ERROR, "VFS") << "Drive " << drive << " not registered";
-            return -1;
-        }
-
-        return driveTable[drive]->ReadDir(localPath, outNames, maxEntries);
+        vfsLock.Acquire();
+        int result = driveTable[drive]->ReadDir(localPath, outNames, maxEntries);
+        vfsLock.Release();
+        return result;
     }
 
 }

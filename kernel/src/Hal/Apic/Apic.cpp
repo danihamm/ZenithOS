@@ -64,6 +64,27 @@ namespace Hal {
                 << " max LVT=" << base::dec << (uint64_t)((version >> 16) & 0xFF);
         }
 
+        void InitializeAP() {
+            if (!g_apicBase) return;
+
+            // Re-assert APIC Global Enable in MSR
+            uint64_t msrValue = ReadMSR(MSR_APIC_BASE);
+            if (!(msrValue & (1ULL << 11))) {
+                msrValue |= (1ULL << 11);
+                WriteMSR(MSR_APIC_BASE, msrValue);
+            }
+
+            // Enable APIC software enable + set spurious vector
+            uint32_t svr = ReadRegister(REG_SPURIOUS);
+            svr |= (1 << 8);
+            svr = (svr & 0xFFFFFF00) | SPURIOUS_VECTOR;
+            WriteRegister(REG_SPURIOUS, svr);
+
+            // Accept all interrupts
+            WriteRegister(REG_TPR, 0);
+            // No log here -- APs boot in parallel and the BSP logs a summary.
+        }
+
         void Reinitialize() {
             if (!g_apicBase) return;
 

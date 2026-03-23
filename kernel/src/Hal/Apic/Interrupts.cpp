@@ -42,10 +42,16 @@ namespace Hal {
 
 // C linkage dispatch function called from assembly stubs
 extern "C" void HalIrqDispatch(uint64_t irqNumber) {
+    // Send EOI BEFORE calling the handler. The handler may context-switch
+    // (via Tick -> Schedule -> SchedContextSwitch) and never return here.
+    // If EOI is deferred until after the handler, the LAPIC timer vector
+    // stays masked on this CPU -- no more timer interrupts, no more
+    // scheduling, and the system eventually locks up.
+    // This is safe because the ISR runs with IF=0; the LAPIC won't
+    // deliver a new interrupt until iretq re-enables them.
+    Hal::LocalApic::SendEOI();
+
     if (irqNumber < Hal::IRQ_COUNT && Hal::g_irqHandlers[irqNumber] != nullptr) {
         Hal::g_irqHandlers[irqNumber]((uint8_t)irqNumber);
     }
-
-    // Send End of Interrupt to the Local APIC
-    Hal::LocalApic::SendEOI();
 }
