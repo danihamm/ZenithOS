@@ -25,6 +25,6 @@ namespace Hal {
     }__attribute__((packed));
 
     void IDTInitialize();
-    void IDTEncodeInterrupt(std::size_t i, void* handler, uint8_t type_attr);
+    void IDTEncodeInterrupt(std::size_t i, void* handler, uint8_t type_attr, uint8_t ist = 0);
     void IDTReload();
 };

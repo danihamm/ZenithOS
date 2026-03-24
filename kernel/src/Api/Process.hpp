@@ -97,43 +97,6 @@ namespace Montauk {
     }
 
     static int Sys_Kill(int pid) {
-        // Refuse to kill PID 0 (init)
-        if (pid == 0) return -1;
-        // Refuse to kill the caller's own process
-        if (pid == Sched::GetCurrentPid()) return -1;
-
-        auto* proc = Sched::GetProcessByPid(pid);
-        if (!proc) return -1;
-
-        // Clean up any windows owned by this process (unmaps pixel pages from desktop)
-        WinServer::CleanupProcess(pid);
-
-        // Free I/O redirect buffers
-        if (proc->outBuf) {
-            Memory::g_pfa->Free(proc->outBuf);
-            proc->outBuf = nullptr;
-        }
-        if (proc->inBuf) {
-            Memory::g_pfa->Free(proc->inBuf);
-            proc->inBuf = nullptr;
-        }
-
-        // Free all user-space pages and page table structures
-        Memory::VMM::Paging::FreeUserHalf(proc->pml4Phys);
-
-        // Free kernel stack (safe — killed process isn't running on single-core)
-        if (proc->stackBase != 0) {
-            Memory::g_pfa->Free((void*)proc->stackBase, Sched::StackPages);
-            proc->stackBase = 0;
-        }
-
-        // Free the PML4 page
-        if (proc->pml4Phys != 0) {
-            Memory::g_pfa->Free((void*)Memory::HHDM(proc->pml4Phys));
-            proc->pml4Phys = 0;
-        }
-
-        proc->state = Sched::ProcessState::Terminated;
-        return 0;
+        return Sched::KillProcess(pid);
     }
 };

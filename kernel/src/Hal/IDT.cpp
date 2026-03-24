@@ -118,7 +118,7 @@ namespace Hal {
         return result;
     }
 
-    void IDTEncodeInterrupt(size_t i, void* handler, uint8_t type_attr) {
+    void IDTEncodeInterrupt(size_t i, void* handler, uint8_t type_attr, uint8_t ist) {
         uint64_t offset = (uint64_t)handler;
         auto ptr = GetInterruptDescriptor(i);
 
@@ -126,7 +126,7 @@ namespace Hal {
             .Offset1 = (uint16_t)(offset & 0x000000000000ffff),
 
             .Selector = 0x08,
-            .IST = 0x00,
+            .IST = ist,
             .TypeAttributes = type_attr,
 
             .Offset2 = (uint16_t)((offset & 0x00000000ffff0000) >> 16),
@@ -139,7 +139,10 @@ namespace Hal {
     template<int I, int N>
     struct SetHandler {
         static void run() {
-            IDTEncodeInterrupt(I, (void*)ExceptionHandler<I>, TrapGate);
+            // Use IST1 for NMI (2) and Double Fault (8) so they get a
+            // known-good stack even if the kernel stack has overflowed.
+            uint8_t ist = (I == 2 || I == 8) ? 1 : 0;
+            IDTEncodeInterrupt(I, (void*)ExceptionHandler<I>, TrapGate, ist);
             SetHandler<I+1,N>::run();
         }
     };

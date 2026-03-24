@@ -181,20 +181,31 @@ namespace Drivers::PS2::Mouse {
     }
 
     int32_t GetX() {
-        return g_State.X;
+        g_StateLock.Acquire();
+        int32_t x = g_State.X;
+        g_StateLock.Release();
+        return x;
     }
 
     int32_t GetY() {
-        return g_State.Y;
+        g_StateLock.Acquire();
+        int32_t y = g_State.Y;
+        g_StateLock.Release();
+        return y;
     }
 
     uint8_t GetButtons() {
-        return g_State.Buttons;
+        g_StateLock.Acquire();
+        uint8_t b = g_State.Buttons;
+        g_StateLock.Release();
+        return b;
     }
 
     void SetBounds(int32_t maxX, int32_t maxY) {
+        g_StateLock.Acquire();
         g_MaxX = maxX;
         g_MaxY = maxY;
+        g_StateLock.Release();
     }
 
     void FlushState() {

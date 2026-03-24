@@ -37,6 +37,7 @@ namespace Smp {
         volatile bool started;     // set by AP after init is complete
 
         Hal::TSS64* tss;          // pointer to this CPU's TSS
+        bool hasMwait;            // CPU supports MONITOR/MWAIT
 
         // Per-CPU GDT and TSS (APs use these; BSP uses globals)
         Hal::BasicGDT cpuGdt __attribute__((aligned(16)));

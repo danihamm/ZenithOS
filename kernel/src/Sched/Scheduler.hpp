@@ -45,19 +45,20 @@ namespace Sched {
         char args[256];           // Command-line arguments (set by parent via Spawn)
 
         int runningOnCpu;         // CPU index running this process (-1 if not running)
+        bool killPending = false; // Set by Sys_Kill when target is running on another CPU
 
         // I/O redirection for GUI terminal
         bool redirected = false;
         int parentPid = -1;
         uint8_t* outBuf = nullptr;   // 4KB ring: child writes (print/putchar), parent reads
-        uint32_t outHead = 0;
-        uint32_t outTail = 0;
+        volatile uint32_t outHead = 0;
+        volatile uint32_t outTail = 0;
         uint8_t* inBuf = nullptr;    // 4KB ring: parent writes, child reads (getchar)
-        uint32_t inHead = 0;
-        uint32_t inTail = 0;
+        volatile uint32_t inHead = 0;
+        volatile uint32_t inTail = 0;
         Montauk::KeyEvent keyBuf[64]; // parent injects, child reads (getkey/iskeyavailable)
-        uint32_t keyHead = 0;
-        uint32_t keyTail = 0;
+        volatile uint32_t keyHead = 0;
+        volatile uint32_t keyTail = 0;
         static constexpr uint32_t IoBufSize = 4096;
 
         // GUI terminal dimensions (set by desktop, read by SYS_TERMSIZE)
@@ -92,6 +93,11 @@ namespace Sched {
 
     // Block the current process for the given number of milliseconds.
     void BlockForSleep(uint64_t ms);
+
+    // Kill a process by PID. If the process is running on another CPU,
+    // sets a kill-pending flag checked on the next timer tick.
+    // Returns 0 on success, -1 on failure.
+    int KillProcess(int pid);
 
     // Find a process by PID (returns nullptr if not found or not alive)
     Process* GetProcessByPid(int pid);

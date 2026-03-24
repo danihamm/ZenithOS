@@ -12,17 +12,26 @@ namespace Montauk {
         return Sched::GetProcessByPid(proc->parentPid);
     }
 
-    static void RingWrite(uint8_t* buf, uint32_t& head, uint32_t /*tail*/, uint32_t size, uint8_t byte) {
-        buf[head] = byte;
-        head = (head + 1) % size;
+    // SPSC ring buffer helpers. On x86 TSO, atomic-width aligned
+    // loads/stores are naturally atomic. The compiler barrier ensures
+    // the data write is visible before the head update.
+    static void RingWrite(uint8_t* buf, volatile uint32_t& head, uint32_t /*tail*/, uint32_t size, uint8_t byte) {
+        uint32_t h = head;
+        buf[h] = byte;
+        asm volatile("" ::: "memory");  // compiler barrier
+        head = (h + 1) % size;
     }
 
-    static int RingRead(uint8_t* buf, uint32_t& head, uint32_t& tail, uint32_t size, uint8_t* out, int maxLen) {
+    static int RingRead(uint8_t* buf, volatile uint32_t& head, volatile uint32_t& tail, uint32_t size, uint8_t* out, int maxLen) {
         int count = 0;
-        while (tail != head && count < maxLen) {
-            out[count++] = buf[tail];
-            tail = (tail + 1) % size;
+        uint32_t t = tail;
+        uint32_t h = head;
+        while (t != h && count < maxLen) {
+            out[count++] = buf[t];
+            t = (t + 1) % size;
         }
+        asm volatile("" ::: "memory");  // compiler barrier
+        tail = t;
         return count;
     }
 }

@@ -11,6 +11,7 @@
 #include <Hal/MSR.hpp>
 #include <Hal/Cpu.hpp>
 #include <Memory/Paging.hpp>
+#include <Memory/PageFrameAllocator.hpp>
 #include <Memory/HHDM.hpp>
 #include <Terminal/Terminal.hpp>
 #include <CppLib/Stream.hpp>
@@ -59,6 +60,14 @@ namespace Smp {
         // Zero the TSS
         memset(&cpu.cpuTss, 0, sizeof(Hal::TSS64));
         cpu.cpuTss.iopbOffset = sizeof(Hal::TSS64);
+
+        // Allocate a 4KB IST1 stack for Double Fault and NMI.
+        // These exceptions need a known-good stack to avoid triple
+        // faults when the normal kernel stack overflows.
+        void* istPage = Memory::g_pfa->AllocateZeroed();
+        if (istPage) {
+            cpu.cpuTss.ist1 = (uint64_t)istPage + 0x1000;  // top of stack
+        }
 
         // Copy the standard GDT layout
         cpu.cpuGdt = {
@@ -122,9 +131,16 @@ namespace Smp {
         bsp.lapicId = Hal::LocalApic::GetId();
         bsp.currentSlot = -1;
         bsp.started = true;
+        bsp.hasMwait = Hal::HasMwait();
 
         // BSP uses the global TSS (already set up in PrepareGDT)
         bsp.tss = &Hal::g_tss;
+
+        // Allocate IST1 stack for the BSP (for Double Fault / NMI)
+        void* bspIstPage = Memory::g_pfa->AllocateZeroed();
+        if (bspIstPage) {
+            Hal::g_tss.ist1 = (uint64_t)bspIstPage + 0x1000;
+        }
 
         // Set GS base for BSP
         SetGSBase(&bsp);
@@ -187,14 +203,25 @@ namespace Smp {
         // --- Calibrate and start APIC timer ---
         Timekeeping::ApicTimerInitializeAP();
 
+        // --- Check MWAIT support ---
+        cpu->hasMwait = Hal::HasMwait();
+
         // --- Signal that we are online ---
         cpu->started = true;
 
         // --- Enable interrupts and enter idle loop ---
         asm volatile("sti");
 
-        for (;;) {
-            asm volatile("hlt");
+        // Use MWAIT for deeper C-states if available, otherwise HLT.
+        static volatile uint64_t s_idleMonitor = 0;
+        if (cpu->hasMwait) {
+            for (;;) {
+                Hal::IdleWait(&s_idleMonitor);
+            }
+        } else {
+            for (;;) {
+                asm volatile("hlt");
+            }
         }
     }
 

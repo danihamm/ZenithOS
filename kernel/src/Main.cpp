@@ -241,8 +241,17 @@ extern "C" void kmain() {
     // Enable preemptive scheduling via the APIC timer
     Timekeeping::EnableSchedulerTick();
 
-    // Main loop: halt until next interrupt
-    for (;;) {
-        asm volatile ("hlt");
+    // Main loop: idle until next interrupt.
+    // Use MWAIT for deeper C-states if available, otherwise HLT.
+    auto* bspCpu = Smp::GetCpuData(0);
+    if (bspCpu && bspCpu->hasMwait) {
+        static volatile uint64_t s_bspIdleMonitor = 0;
+        for (;;) {
+            Hal::IdleWait(&s_bspIdleMonitor);
+        }
+    } else {
+        for (;;) {
+            asm volatile("hlt");
+        }
     }
 }

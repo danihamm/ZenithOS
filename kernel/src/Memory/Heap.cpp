@@ -56,10 +56,11 @@ namespace Memory
     void* HeapAllocator::Request(size_t size) {
         Lock.Acquire();
 
+        size_t sizeNeeded = size + sizeof(Header);
+
+    retry:
         Node* current = head.next;
         Node* prev = &head;
-
-        size_t sizeNeeded = size + sizeof(Header);
 
         while (current != nullptr) {
             if (current->size >= sizeNeeded) {
@@ -89,13 +90,11 @@ namespace Memory
             current = current->next;
         }
 
-        Lock.Release();
-
-        // First pass allocation failed -- grow the heap
+        // No suitable block found -- grow the heap under the lock so
+        // InsertToFreelist is protected from concurrent modification.
         size_t pagesNeeded = (sizeNeeded + 0xFFF) / 0x1000;
         InsertPagesToFreelist(pagesNeeded);
-
-        return Request(size);
+        goto retry;
     }
 
     void* HeapAllocator::Realloc(void* ptr, size_t size) {

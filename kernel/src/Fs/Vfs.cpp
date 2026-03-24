@@ -200,12 +200,14 @@ namespace Fs::Vfs {
     }
 
     int VfsDriveList(int* outDrives, int maxEntries) {
+        vfsLock.Acquire();
         int count = 0;
         for (int i = 0; i < MaxDrives && count < maxEntries; i++) {
             if (driveTable[i] != nullptr) {
                 outDrives[count++] = i;
             }
         }
+        vfsLock.Release();
         return count;
     }
 

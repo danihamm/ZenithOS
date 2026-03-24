@@ -5,6 +5,7 @@
 */
 
 #include "ApicTimer.hpp"
+#include <atomic>
 #include <Hal/Apic/Apic.hpp>
 #include <Hal/Apic/Interrupts.hpp>
 #include <Hal/SmpBoot.hpp>
@@ -36,7 +37,7 @@ namespace Timekeeping {
     static constexpr uint32_t TIMER_HZ = 1000;
 
     // Global state
-    static volatile uint64_t g_tickCount = 0;
+    static std::atomic<uint64_t> g_tickCount{0};
     static uint32_t g_ticksPerMs = 0;
 
     static bool g_schedEnabled = false;
@@ -47,7 +48,7 @@ namespace Timekeeping {
 
         if (cpu->cpuIndex == 0) {
             // BSP: increment global tick count and poll devices
-            g_tickCount = g_tickCount + 1;
+            g_tickCount.fetch_add(1, std::memory_order_relaxed);
 
             Drivers::Net::E1000E::Poll();
             Drivers::USB::Xhci::ProcessDeferredWork();
@@ -158,11 +159,11 @@ namespace Timekeeping {
     }
 
     uint64_t GetTicks() {
-        return g_tickCount;
+        return g_tickCount.load(std::memory_order_relaxed);
     }
 
     uint64_t GetMilliseconds() {
-        return g_tickCount;  // 1 tick = 1 ms at 1000 Hz
+        return g_tickCount.load(std::memory_order_relaxed);  // 1 tick = 1 ms at 1000 Hz
     }
 
     void EnableSchedulerTick() {
@@ -183,13 +184,10 @@ namespace Timekeeping {
     }
 
     void Sleep(uint64_t ms) {
-        uint64_t target = g_tickCount + ms;
-        while (g_tickCount < target) {
-            // Yield to other processes instead of hlt. Using hlt here causes
-            // a deadlock: if the timer ISR preempts us during hlt and context-
-            // switches away (via Tick -> Schedule), EOI is never sent, so no
-            // more timer interrupts fire and any process doing hlt freezes.
-            Sched::Schedule();
-        }
+        if (ms == 0) return;
+        // Use BlockForSleep to properly deschedule the process instead
+        // of busy-waiting with Schedule(). This frees the CPU for real
+        // work and avoids unnecessary scheduling overhead.
+        Sched::BlockForSleep(ms);
     }
 };
