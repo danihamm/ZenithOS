@@ -43,6 +43,7 @@ namespace Sched {
         uint64_t userStackTop;    // User-space stack top
         uint64_t heapNext;        // Simple bump allocator for user heap
         char args[256];           // Command-line arguments (set by parent via Spawn)
+        char user[32];            // Owner user name (inherited from parent on spawn)
 
         int runningOnCpu;         // CPU index running this process (-1 if not running)
         bool killPending = false; // Set by Sys_Kill when target is running on another CPU

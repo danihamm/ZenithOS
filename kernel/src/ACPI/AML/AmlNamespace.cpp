@@ -6,27 +6,72 @@
 
 #include "AmlNamespace.hpp"
 #include <Libraries/Memory.hpp>
+#include <Memory/Heap.hpp>
 
 namespace Hal {
     namespace AML {
 
-        Namespace::Namespace() : m_nodeCount(0) {
-            for (int i = 0; i < MaxNamespaceNodes; i++)
-                m_nodes[i].Clear();
+        Namespace::Namespace() : m_chunkCount(0), m_nodeCount(0) {
+            for (int i = 0; i < MaxChunks; i++)
+                m_chunks[i] = nullptr;
+            // Root node is created lazily by the first CreateNode/AllocNode call,
+            // which happens during LoadTable -- after the kernel heap is ready.
+        }
 
-            // Create root node "\"
+        void Namespace::EnsureRoot() {
+            if (m_nodeCount > 0) return;
             int32_t root = AllocNode();
-            m_nodes[root].Name[0] = '\\';
-            m_nodes[root].Name[1] = '\0';
-            m_nodes[root].ParentIndex = -1;
+            auto* rootNode = GetNode(root);
+            if (rootNode) {
+                rootNode->Name[0] = '\\';
+                rootNode->Name[1] = '\0';
+                rootNode->ParentIndex = -1;
+            }
+        }
+
+        bool Namespace::AllocChunk() {
+            if (m_chunkCount >= MaxChunks) return false;
+
+            auto* chunk = (NamespaceNode*)Memory::g_heap->Request(
+                sizeof(NamespaceNode) * NodesPerChunk);
+            if (!chunk) return false;
+
+            // Zero-initialize the chunk
+            memset(chunk, 0, sizeof(NamespaceNode) * NodesPerChunk);
+            for (int i = 0; i < NodesPerChunk; i++)
+                chunk[i].Clear();
+
+            m_chunks[m_chunkCount++] = chunk;
+            return true;
         }
 
         int32_t Namespace::AllocNode() {
-            if (m_nodeCount >= MaxNamespaceNodes)
-                return -1;
+            // Check if we need a new chunk
+            int32_t capacity = m_chunkCount * NodesPerChunk;
+            if (m_nodeCount >= capacity) {
+                if (!AllocChunk()) return -1;
+            }
+
             int32_t idx = m_nodeCount++;
-            m_nodes[idx].Clear();
+            auto* node = GetNode(idx);
+            if (node) node->Clear();
             return idx;
+        }
+
+        NamespaceNode* Namespace::GetNode(int32_t index) {
+            if (index < 0 || index >= m_nodeCount) return nullptr;
+            int chunk = index / NodesPerChunk;
+            int offset = index % NodesPerChunk;
+            if (chunk >= m_chunkCount || !m_chunks[chunk]) return nullptr;
+            return &m_chunks[chunk][offset];
+        }
+
+        const NamespaceNode* Namespace::GetNode(int32_t index) const {
+            if (index < 0 || index >= m_nodeCount) return nullptr;
+            int chunk = index / NodesPerChunk;
+            int offset = index % NodesPerChunk;
+            if (chunk >= m_chunkCount || !m_chunks[chunk]) return nullptr;
+            return &m_chunks[chunk][offset];
         }
 
         bool Namespace::SegmentEqual(const char* a, const char* b) {
@@ -63,7 +108,7 @@ namespace Hal {
             while (*p && count < maxSegments) {
                 // Skip dots (parent prefix / dual/multi name prefix separator)
                 if (*p == '.') { p++; continue; }
-                // Skip caret (parent prefix) — we don't handle relative paths here
+                // Skip caret (parent prefix) -- we don't handle relative paths here
                 if (*p == '^') { p++; continue; }
 
                 // Read up to 4 characters for a name segment
@@ -91,14 +136,16 @@ namespace Hal {
 
             for (int32_t i = 0; i < parent->ChildCount; i++) {
                 int32_t ci = parent->ChildIndices[i];
-                if (ci < 0 || ci >= m_nodeCount) continue;
-                if (SegmentEqual(m_nodes[ci].Name, seg))
+                auto* child = GetNode(ci);
+                if (!child) continue;
+                if (SegmentEqual(child->Name, seg))
                     return ci;
             }
             return -1;
         }
 
         int32_t Namespace::CreateNode(const char* absolutePath) {
+            EnsureRoot();
             char segments[MaxPathDepth][MaxNameSegLen + 1];
             int segCount = ParsePath(absolutePath, segments, MaxPathDepth);
 
@@ -110,11 +157,14 @@ namespace Hal {
                     child = AllocNode();
                     if (child < 0) return -1;
 
-                    memcpy(m_nodes[child].Name, segments[i], MaxNameSegLen + 1);
-                    m_nodes[child].ParentIndex = current;
+                    auto* childNode = GetNode(child);
+                    if (!childNode) return -1;
+                    memcpy(childNode->Name, segments[i], MaxNameSegLen + 1);
+                    childNode->ParentIndex = current;
 
                     // Add to parent's children
-                    auto* parent = &m_nodes[current];
+                    auto* parent = GetNode(current);
+                    if (!parent) return -1;
                     if (parent->ChildCount < MaxChildren) {
                         parent->ChildIndices[parent->ChildCount++] = child;
                     } else {
@@ -151,20 +201,11 @@ namespace Hal {
             while (scope >= 0) {
                 int32_t found = FindChildByName(scope, padded);
                 if (found >= 0) return found;
-                scope = m_nodes[scope].ParentIndex;
+                auto* node = GetNode(scope);
+                scope = node ? node->ParentIndex : -1;
             }
 
             return -1;
-        }
-
-        NamespaceNode* Namespace::GetNode(int32_t index) {
-            if (index < 0 || index >= m_nodeCount) return nullptr;
-            return &m_nodes[index];
-        }
-
-        const NamespaceNode* Namespace::GetNode(int32_t index) const {
-            if (index < 0 || index >= m_nodeCount) return nullptr;
-            return &m_nodes[index];
         }
 
         char* Namespace::GetNodePath(int32_t index, char* outBuf, int maxLen) const {

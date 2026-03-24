@@ -90,6 +90,7 @@ namespace Sched {
             processTable[i].userStackTop = 0;
             processTable[i].heapNext = 0;
             processTable[i].args[0] = '\0';
+            processTable[i].user[0] = '\0';
             processTable[i].runningOnCpu = -1;
             processTable[i].killPending = false;
             processTable[i].waitingForPid = -1;
@@ -281,6 +282,23 @@ namespace Sched {
                 proc.args[i] = args[i];
             }
             proc.args[i] = '\0';
+        }
+
+        // Inherit user string from parent, or default to "system" if no parent
+        {
+            auto* cpu = Smp::GetCurrentCpuData();
+            int parentSlot = cpu->currentSlot;
+            if (parentSlot >= 0) {
+                int i = 0;
+                for (; i < 31 && processTable[parentSlot].user[i]; i++)
+                    proc.user[i] = processTable[parentSlot].user[i];
+                proc.user[i] = '\0';
+            } else {
+                // Spawned from kernel (no parent process) - set to "system"
+                proc.user[0] = 's'; proc.user[1] = 'y'; proc.user[2] = 's';
+                proc.user[3] = 't'; proc.user[4] = 'e'; proc.user[5] = 'm';
+                proc.user[6] = '\0';
+            }
         }
 
         proc.redirected = false;

@@ -120,6 +120,7 @@ struct DesktopState {
     SvgIcon icon_procmgr;
     SvgIcon icon_mandelbrot;
     SvgIcon icon_volume;
+    SvgIcon icon_temperature;
 
     // External apps discovered from 0:/apps/ manifests
     ExternalApp external_apps[MAX_EXTERNAL_APPS];
@@ -140,6 +141,13 @@ struct DesktopState {
     int vol_pre_mute;         // volume before mute
     bool vol_dragging;        // slider drag in progress
     uint64_t vol_last_poll;
+
+    // Temperature monitoring
+    static constexpr int MAX_THERMAL_ZONES = 8;
+    Montauk::ThermalInfo thermal_zones[MAX_THERMAL_ZONES];
+    int thermal_zone_count;
+    uint64_t thermal_last_poll;
+    Rect temp_icon_rect;
 
     int screen_w, screen_h;
 

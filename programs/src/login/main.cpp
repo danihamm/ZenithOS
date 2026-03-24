@@ -546,6 +546,7 @@ static void handle_key(LoginState* ls, const Montauk::KeyEvent& key) {
                 // Spawn desktop with username
                 int pid = montauk::spawn("0:/os/desktop.elf", ls->username);
                 if (pid >= 0) {
+                    montauk::setuser(pid, ls->username);
                     montauk::waitpid(pid);
                 }
                 // Desktop exited (logout) — clear session and fields
@@ -688,6 +689,7 @@ static void handle_mouse(LoginState* ls) {
             if (try_login(ls)) {
                 int pid = montauk::spawn("0:/os/desktop.elf", ls->username);
                 if (pid >= 0) {
+                    montauk::setuser(pid, ls->username);
                     montauk::waitpid(pid);
                 }
                 montauk::user::clear_session();
@@ -772,6 +774,7 @@ extern "C" void _start() {
             // Launch desktop directly -- no login required
             int pid = montauk::spawn("0:/os/desktop.elf", user);
             if (pid >= 0) {
+                montauk::setuser(pid, user);
                 montauk::waitpid(pid);
             }
             // Desktop exited (reboot/shutdown expected in setup mode).

@@ -55,13 +55,17 @@ namespace Hal {
         // ============================================================================
         static constexpr int MaxNameSegLen     = 4;
         static constexpr int MaxPathDepth      = 16;
-        static constexpr int MaxChildren       = 32;
+        static constexpr int MaxChildren       = 64;
         static constexpr int MaxStringLen      = 64;
         static constexpr int MaxBufferLen      = 256;
         static constexpr int MaxPackageElements = 16;
         static constexpr int MaxMethodArgs     = 7;
         static constexpr int MaxMethodLocals   = 8;
-        static constexpr int MaxNamespaceNodes = 256;
+
+        // Nodes are allocated dynamically in chunks from the kernel heap.
+        // Each chunk holds this many nodes; new chunks are allocated on demand.
+        static constexpr int NodesPerChunk     = 256;
+        static constexpr int MaxChunks         = 128;  // up to 32768 nodes
 
         // ============================================================================
 
@@ -143,7 +147,8 @@ namespace Hal {
         // Namespace
 
         // ============================================================================
-        // Flat array of nodes forming a tree via parent/child indices.
+        // Dynamically-allocated node pool forming a tree via parent/child indices.
+        // Nodes are allocated in chunks from the kernel heap on demand.
         class Namespace {
         public:
             Namespace();
@@ -173,6 +178,9 @@ namespace Hal {
 
             // Get the number of nodes in the namespace.
             int32_t NodeCount() const { return m_nodeCount; }
+
+            // Maximum capacity with current chunk limit.
+            int32_t MaxCapacity() const { return MaxChunks * NodesPerChunk; }
 
             // Iterate children of a node matching a given object type.
             // callback returns true to continue, false to stop.
@@ -208,6 +216,8 @@ namespace Hal {
 
         private:
             int32_t AllocNode();
+            bool    AllocChunk();
+            void    EnsureRoot();
             int32_t FindChildByName(int32_t parentIndex, const char* seg) const;
 
             // Parse an absolute path into segments. Returns number of segments.
@@ -215,8 +225,9 @@ namespace Hal {
             static bool SegmentEqual(const char* a, const char* b);
             static void PadSegment(const char* src, char* dst); // pad to 4 chars with '_'
 
-            NamespaceNode m_nodes[MaxNamespaceNodes];
-            int32_t       m_nodeCount;
+            NamespaceNode* m_chunks[MaxChunks];  // array of pointers to heap-allocated chunks
+            int32_t        m_chunkCount;
+            int32_t        m_nodeCount;
         };
 
     };

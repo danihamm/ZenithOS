@@ -244,6 +244,9 @@ namespace Hal {
             if (!interp.LoadTable(dsdtData)) {
                 KernelLogStream(ERROR, "AML") << "Failed to load DSDT into AML interpreter";
             }
+            auto& ns = interp.GetNamespace();
+            KernelLogStream(OK, "AML") << "Namespace: " << base::dec
+                << (uint64_t)ns.NodeCount() << " / " << (uint64_t)ns.MaxCapacity() << " nodes (dynamic)";
         }
 
     };

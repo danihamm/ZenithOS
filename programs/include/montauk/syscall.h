@@ -402,6 +402,14 @@ namespace montauk {
     // Kernel introspection
     inline void memstats(Montauk::MemStats* out) { syscall1(Montauk::SYS_MEMSTATS, (uint64_t)out); }
 
+    // User management
+    inline int setuser(int pid, const char* name) {
+        return (int)syscall2(Montauk::SYS_SETUSER, (uint64_t)pid, (uint64_t)name);
+    }
+    inline int getuser(char* buf, uint64_t maxLen) {
+        return (int)syscall2(Montauk::SYS_GETUSER, (uint64_t)buf, maxLen);
+    }
+
     // Window server
     inline int win_create(const char* title, int w, int h, Montauk::WinCreateResult* result) {
         return (int)syscall4(Montauk::SYS_WINCREATE, (uint64_t)title, (uint64_t)w, (uint64_t)h, (uint64_t)result);

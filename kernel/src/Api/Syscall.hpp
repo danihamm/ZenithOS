@@ -178,6 +178,10 @@ namespace Montauk {
     static constexpr uint64_t SYS_SETTZ         = 90;
     static constexpr uint64_t SYS_GETTZ         = 91;
 
+    /* Process.hpp */
+    static constexpr uint64_t SYS_SETUSER       = 92;
+    static constexpr uint64_t SYS_GETUSER       = 93;
+
     static constexpr int SOCK_TCP = 1;
     static constexpr int SOCK_UDP = 2;
 
@@ -369,6 +373,12 @@ namespace Montauk {
         uint8_t  initialized;
         uint8_t  scanning;
         char     name[64];
+    };
+
+    struct ThermalInfo {
+        char     name[32];          // short zone name (e.g. "THRM", "TZ00")
+        int32_t  temperature;       // tenths of degrees Celsius, or -1 if unavailable
+        uint32_t _pad;
     };
 
     // Stack frame pushed by SyscallEntry.asm

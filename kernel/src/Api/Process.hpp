@@ -99,4 +99,25 @@ namespace Montauk {
     static int Sys_Kill(int pid) {
         return Sched::KillProcess(pid);
     }
+
+    static int Sys_SetUser(int pid, const char* name) {
+        if (name == nullptr) return -1;
+        auto* target = Sched::GetProcessByPid(pid);
+        if (target == nullptr) return -1;
+        int i = 0;
+        for (; i < 31 && name[i]; i++)
+            target->user[i] = name[i];
+        target->user[i] = '\0';
+        return 0;
+    }
+
+    static int Sys_GetUser(char* buf, uint64_t maxLen) {
+        auto* proc = Sched::GetCurrentProcessPtr();
+        if (proc == nullptr || buf == nullptr || maxLen == 0) return -1;
+        int i = 0;
+        for (; i < (int)maxLen - 1 && proc->user[i]; i++)
+            buf[i] = proc->user[i];
+        buf[i] = '\0';
+        return i;
+    }
 };

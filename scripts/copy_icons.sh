@@ -109,6 +109,7 @@ ICONS=(
     "apps/scalable/lock.svg"
     "apps/scalable/sleep.svg"
     "apps/scalable/kolourpaint.svg" # paint app
+    "panel/sensors-temperature-symbolic.svg" # temperature panel icon
 )
 
 copied=0

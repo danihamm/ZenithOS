@@ -1652,8 +1652,7 @@ namespace Hal {
             }
 
             if (space == RegionSpace::PciConfig) {
-                // PCI config space access — address encodes bus/dev/func/offset
-                // Not implemented yet; would need PCI config read support
+                // PCI config space access -- not yet implemented
                 return false;
             }
 

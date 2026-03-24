@@ -120,6 +120,10 @@ namespace Montauk {
     static constexpr uint64_t SYS_SETTZ         = 90;
     static constexpr uint64_t SYS_GETTZ         = 91;
 
+    // User management
+    static constexpr uint64_t SYS_SETUSER       = 92;
+    static constexpr uint64_t SYS_GETUSER       = 93;
+
     // Audio control commands (for SYS_AUDIOCTL)
     static constexpr int AUDIO_CTL_SET_VOLUME = 0;
     static constexpr int AUDIO_CTL_GET_VOLUME = 1;
@@ -304,6 +308,12 @@ namespace Montauk {
         uint8_t  initialized;
         uint8_t  scanning;
         char     name[64];
+    };
+
+    struct ThermalInfo {
+        char     name[32];          // short zone name (e.g. "THRM", "TZ00")
+        int32_t  temperature;       // tenths of degrees Celsius, or -1 if unavailable
+        uint32_t _pad;
     };
 
     struct ProcInfo {

@@ -9,15 +9,14 @@
 #include <montauk/heap.h>
 #include <montauk/config.h>
 
+/*
+    Mar 24, 2026 - update to use getuser() syscall
+*/
 extern "C" void _start() {
-    auto doc = montauk::config::load("session");
-    const char* name = doc.get_string("session.username", "");
-    if (name[0]) {
-        montauk::print(name);
-        montauk::putchar('\n');
-    } else {
-        montauk::print("unknown\n");
-    }
-    doc.destroy();
+    char username[32] = { };
+    montauk::getuser((char*)&username, 32);
+    montauk::print((const char*)username);
+    montauk::print("\n");
+
     montauk::exit(0);
 }
