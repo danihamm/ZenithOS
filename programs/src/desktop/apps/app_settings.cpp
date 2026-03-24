@@ -301,6 +301,35 @@ static void settings_draw_display(Canvas& c, SettingsState* st) {
     draw_toggle_btn(c, bx, y, sbw, btn_h, "Small", s.ui_scale == 0, accent);
     draw_toggle_btn(c, bx + sbw + 8, y, sbw, btn_h, "Default", s.ui_scale == 1, accent);
     draw_toggle_btn(c, bx + (sbw + 8) * 2, y, sbw, btn_h, "Large", s.ui_scale == 2, accent);
+    y += btn_h + 20;
+
+    // Separator
+    c.hline(x, y, c.w - 2 * x, colors::BORDER);
+    y += 16;
+
+    // UTC Offset
+    c.text(x, y + 6, "UTC Offset", colors::TEXT_COLOR);
+    bx = x + 180;
+
+    // [-] button
+    draw_toggle_btn(c, bx, y, 36, btn_h, "-", false, accent);
+
+    // Offset label
+    int off = s.tz_offset_minutes;
+    int offH = off / 60;
+    int offM = off % 60;
+    if (offM < 0) offM = -offM;
+    char tz_label[16];
+    if (offM)
+        snprintf(tz_label, sizeof(tz_label), "UTC%s%d:%02d", offH >= 0 ? "+" : "", offH, offM);
+    else
+        snprintf(tz_label, sizeof(tz_label), "UTC%s%d", offH >= 0 ? "+" : "", offH);
+    int tw = text_width(tz_label);
+    int label_w = 90;
+    c.text(bx + 36 + (label_w - tw) / 2, y + 6, tz_label, colors::TEXT_COLOR);
+
+    // [+] button
+    draw_toggle_btn(c, bx + 36 + label_w, y, 36, btn_h, "+", false, accent);
 }
 
 static void settings_draw_about(Canvas& c, SettingsState* st) {
@@ -389,6 +418,14 @@ static void settings_persist(SettingsState* st) {
     montauk::config::set_bool(&doc, "display.show_shadows", s.show_shadows);
 
     montauk::config::save_user(user, "desktop", &doc);
+    doc.destroy();
+}
+
+static void settings_persist_tz(SettingsState* st) {
+    montauk::toml::Doc doc;
+    doc.init();
+    montauk::config::set_int(&doc, "timezone.offset_minutes", st->desktop->settings.tz_offset_minutes);
+    montauk::config::save("timezone", &doc);
     doc.destroy();
 }
 
@@ -1293,6 +1330,27 @@ static void settings_on_mouse(Window* win, MouseEvent& ev) {
             apply_ui_scale(2);
             montauk::win_setscale(2);
             settings_persist(st);
+            return;
+        }
+        y += btn_h + 20 + 16;
+
+        // UTC Offset: [-] button
+        if (mx >= bx && mx < bx + 36 && cy >= y && cy < y + btn_h) {
+            if (s.tz_offset_minutes > -720) {
+                s.tz_offset_minutes -= 60;
+                montauk::settz(s.tz_offset_minutes);
+                settings_persist_tz(st);
+            }
+            return;
+        }
+        // UTC Offset: [+] button
+        int label_w = 90;
+        if (mx >= bx + 36 + label_w && mx < bx + 36 + label_w + 36 && cy >= y && cy < y + btn_h) {
+            if (s.tz_offset_minutes < 840) {
+                s.tz_offset_minutes += 60;
+                montauk::settz(s.tz_offset_minutes);
+                settings_persist_tz(st);
+            }
             return;
         }
     } else if (st->active_tab == 2) {

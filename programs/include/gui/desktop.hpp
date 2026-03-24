@@ -52,6 +52,7 @@ struct DesktopSettings {
     bool show_shadows;      // window shadows on/off
     bool clock_24h;         // 24-hour clock format
     int ui_scale;           // 0=Small, 1=Default, 2=Large
+    int tz_offset_minutes;  // timezone offset from UTC in minutes
 };
 
 struct DesktopState {

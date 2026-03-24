@@ -249,6 +249,10 @@ namespace montauk {
     // Timekeeping (wall-clock)
     inline void gettime(Montauk::DateTime* out) { syscall1(Montauk::SYS_GETTIME, (uint64_t)out); }
 
+    // Timezone offset (total minutes from UTC)
+    inline void settz(int offset_minutes) { syscall1(Montauk::SYS_SETTZ, (uint64_t)(int64_t)offset_minutes); }
+    inline int gettz() { return (int)syscall0(Montauk::SYS_GETTZ); }
+
     // Random number generation
     inline int64_t getrandom(void* buf, uint32_t len) {
         return syscall2(Montauk::SYS_GETRANDOM, (uint64_t)buf, (uint64_t)len);

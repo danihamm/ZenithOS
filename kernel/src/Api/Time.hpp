@@ -29,4 +29,13 @@ namespace Montauk {
         out->Minute = dt.Minute;
         out->Second = dt.Second;
     }
+
+    static int64_t Sys_SetTZ(int32_t offsetMinutes) {
+        Timekeeping::SetTZOffset(offsetMinutes);
+        return 0;
+    }
+
+    static int64_t Sys_GetTZ() {
+        return (int64_t)Timekeeping::GetTZOffset();
+    }
 };

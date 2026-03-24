@@ -256,6 +256,7 @@ void gui::desktop_init(DesktopState* ds) {
     ds->settings.show_shadows = true;
     ds->settings.clock_24h = true;
     ds->settings.ui_scale = 1;
+    ds->settings.tz_offset_minutes = 60; // default CET (UTC+1)
 
     // Load per-user desktop settings
     {
@@ -311,6 +312,15 @@ void gui::desktop_init(DesktopState* ds) {
 
         doc.destroy();
     }
+
+    // Load timezone config
+    {
+        auto tz = montauk::config::load("timezone");
+        ds->settings.tz_offset_minutes = (int)tz.get_int("timezone.offset_minutes", 60);
+        tz.destroy();
+    }
+    montauk::settz(ds->settings.tz_offset_minutes);
+
     montauk::win_setscale(ds->settings.ui_scale);
 
     ds->ctx_menu_open = false;

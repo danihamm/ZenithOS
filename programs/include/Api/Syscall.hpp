@@ -116,6 +116,10 @@ namespace Montauk {
     // Power management
     static constexpr uint64_t SYS_SUSPEND      = 89;
 
+    // Timezone
+    static constexpr uint64_t SYS_SETTZ         = 90;
+    static constexpr uint64_t SYS_GETTZ         = 91;
+
     // Audio control commands (for SYS_AUDIOCTL)
     static constexpr int AUDIO_CTL_SET_VOLUME = 0;
     static constexpr int AUDIO_CTL_GET_VOLUME = 1;

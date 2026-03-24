@@ -174,6 +174,10 @@ namespace Montauk {
     /* Power.hpp */
     static constexpr uint64_t SYS_SUSPEND      = 89;
 
+    /* Time.hpp */
+    static constexpr uint64_t SYS_SETTZ         = 90;
+    static constexpr uint64_t SYS_GETTZ         = 91;
+
     static constexpr int SOCK_TCP = 1;
     static constexpr int SOCK_UDP = 2;
 

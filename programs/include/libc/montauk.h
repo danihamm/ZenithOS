@@ -94,6 +94,8 @@ extern "C" {
 #define MTK_SYS_AUDIOCLOSE      81
 #define MTK_SYS_AUDIOWRITE      82
 #define MTK_SYS_AUDIOCTL        83
+#define MTK_SYS_SETTZ           90
+#define MTK_SYS_GETTZ           91
 
 #define MTK_SOCK_TCP 1
 #define MTK_SOCK_UDP 2
@@ -409,6 +411,14 @@ static inline unsigned long mtk_get_ms(void) {
 
 static inline void mtk_gettime(mtk_datetime *out) {
     _mtk_syscall1(MTK_SYS_GETTIME, (long)out);
+}
+
+static inline void mtk_settz(int offset_minutes) {
+    _mtk_syscall1(MTK_SYS_SETTZ, (long)offset_minutes);
+}
+
+static inline int mtk_gettz(void) {
+    return (int)_mtk_syscall0(MTK_SYS_GETTZ);
 }
 
 /* ====================================================================

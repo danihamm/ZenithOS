@@ -11,6 +11,7 @@
 using namespace Kt;
 
 static int64_t g_bootEpoch = 0;
+static int g_tzOffsetMinutes = 60; /* Default: UTC+1 (CET) until userspace overrides */
 
 static bool IsLeapYear(int year) {
     return (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
@@ -68,34 +69,29 @@ static Timekeeping::DateTime EpochToDate(int64_t epoch) {
 
 void Timekeeping::Init(uint16_t Year, uint8_t Month, uint8_t Day, uint8_t Hour, uint8_t Minute, uint8_t Second) {
     g_bootEpoch = DateToEpoch(Year, Month, Day, Hour, Minute, Second);
-    /* Hardcode CET for now */
-    TimeZone CET = {
-        "Central European Time",
-        "CET",
-        1, /* UTC+1 */
-        0,
-        false
-    };
 
-    Kt::KernelLogStream(INFO, "Timekeeping Service") << "Setting time zone to " << CET.TZLongName << " (" << CET.TZShortName << ")";
+    /* Apply default timezone offset for boot log display */
+    int adjMin = Minute + (g_tzOffsetMinutes % 60);
+    int adjHour = Hour + (g_tzOffsetMinutes / 60);
+    if (adjMin < 0) { adjMin += 60; adjHour -= 1; }
+    if (adjMin >= 60) { adjMin -= 60; adjHour += 1; }
+    if (adjHour < 0) adjHour += 24;
+    if (adjHour >= 24) adjHour -= 24;
 
-    Minute = Minute + CET.MinuteOffset;
-    Hour = Hour + CET.HourOffset;
-    if (Minute >= 60) {
-        Minute -= 60;
-        Hour += 1;
-    }
-    if (Hour >= 24) {
-        Hour -= 24;
-        Day += 1;
-        /* Note: No month/day overflow handling yet */
-    }
+    int offH = g_tzOffsetMinutes / 60;
+    int offM = g_tzOffsetMinutes % 60;
+    if (offM < 0) offM = -offM;
+
+    Kt::KernelLogStream(INFO, "Timekeeping Service") << "Time zone: UTC"
+        << (offH >= 0 ? "+" : "") << offH
+        << (offM ? ":" : "") << (offM >= 10 ? "" : (offM ? "0" : ""))
+        << (offM ? offM : 0);
 
     kcp::cstringstream minuteStream;
-    if (Minute < 10) {
+    if (adjMin < 10) {
         minuteStream << "0";
     }
-    minuteStream << Minute;
+    minuteStream << adjMin;
     CString minuteStr = minuteStream.c_str();
 
     kcp::cstringstream secondStream;
@@ -111,12 +107,10 @@ void Timekeeping::Init(uint16_t Year, uint8_t Month, uint8_t Day, uint8_t Hour, 
         << Day << " "
         << Months[Month] << " "
         << Year << ", "
-        << Hour << ":"
-
+        << adjHour << ":"
         << minuteStr << ":"
         << secondStr
-        << " (" << CET.TZLongName << ")";
-
+        << " (UTC" << (offH >= 0 ? "+" : "") << offH << ")";
 
     CString dateString = panelStr.c_str();
 
@@ -128,5 +122,13 @@ int64_t Timekeeping::GetUnixTimestamp() {
 }
 
 Timekeeping::DateTime Timekeeping::GetDateTime() {
-    return EpochToDate(GetUnixTimestamp());
+    return EpochToDate(GetUnixTimestamp() + (int64_t)g_tzOffsetMinutes * 60);
+}
+
+void Timekeeping::SetTZOffset(int totalMinutes) {
+    g_tzOffsetMinutes = totalMinutes;
+}
+
+int Timekeeping::GetTZOffset() {
+    return g_tzOffsetMinutes;
 }

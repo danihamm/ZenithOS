@@ -53,4 +53,7 @@ namespace Timekeeping {
     void Init(uint16_t Year, uint8_t Month, uint8_t Day, uint8_t Hour, uint8_t Minute, uint8_t Second);
     int64_t GetUnixTimestamp();
     DateTime GetDateTime();
+
+    void SetTZOffset(int totalMinutes);
+    int GetTZOffset();
 };

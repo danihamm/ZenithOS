@@ -333,6 +333,10 @@ namespace Montauk {
                 return Sys_BtInfo((BtAdapterInfo*)frame->arg1);
             case SYS_SUSPEND:
                 return Sys_Suspend();
+            case SYS_SETTZ:
+                return Sys_SetTZ((int32_t)frame->arg1);
+            case SYS_GETTZ:
+                return Sys_GetTZ();
             default:
                 return -1;
         }
