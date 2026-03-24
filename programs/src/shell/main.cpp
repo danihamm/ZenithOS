@@ -17,14 +17,15 @@ char session_home[64] = "";
 // ---- Session info (read once at startup) ----
 
 void read_session() {
-    auto doc = montauk::config::load("session");
-    const char* name = doc.get_string("session.username", "");
-    if (name[0]) {
-        scopy(session_user, name, sizeof(session_user));
-        scopy(session_home, "0:/users/", sizeof(session_home));
-        scat(session_home, session_user, sizeof(session_home));
-    }
-    doc.destroy();
+    // TODO Why is getuser treated as not defined in VSCode intellisense?
+
+    montauk::getuser(
+        (char *)&session_user, // Buffer
+        32                     // Buffer max size
+    );
+
+    scopy(session_home, "0:/users/", sizeof(session_home));
+    scat(session_home, session_user, sizeof(session_home));
 }
 
 // ---- Command history ----

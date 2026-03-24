@@ -337,6 +337,12 @@ namespace Montauk {
                 return Sys_SetTZ((int32_t)frame->arg1);
             case SYS_GETTZ:
                 return Sys_GetTZ();
+            case SYS_SETUSER:
+                if (!ValidUserPtr(frame->arg2)) return -1;
+                return Sys_SetUser((int)frame->arg1, (const char*)frame->arg2);
+            case SYS_GETUSER:
+                if (!ValidUserPtr(frame->arg1)) return -1;
+                return Sys_GetUser((char*)frame->arg1, frame->arg2);
             default:
                 return -1;
         }
