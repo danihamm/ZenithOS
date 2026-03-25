@@ -95,6 +95,7 @@ static inline long _zos_syscall4(long nr, long a1, long a2, long a3, long a4) {
 #define SYS_FCREATE 42
 #define SYS_FDELETE 77
 #define SYS_FMKDIR  78
+#define SYS_FRENAME 94
 
 /* ========================================================================
    errno
@@ -1217,40 +1218,8 @@ int remove(const char *path) {
 }
 
 int rename(const char *oldpath, const char *newpath) {
-    /* No atomic rename syscall -- copy + delete */
     if (oldpath == NULL || newpath == NULL) return -1;
-
-    int src = (int)_zos_syscall1(SYS_OPEN, (long)oldpath);
-    if (src < 0) return -1;
-
-    unsigned long sz = (unsigned long)_zos_syscall1(SYS_GETSIZE, (long)src);
-
-    /* Create destination */
-    _zos_syscall1(SYS_FDELETE, (long)newpath);
-    int dst = (int)_zos_syscall1(SYS_FCREATE, (long)newpath);
-    if (dst < 0) {
-        _zos_syscall1(SYS_CLOSE, (long)src);
-        return -1;
-    }
-
-    /* Copy in chunks */
-    char copybuf[4096];
-    unsigned long off = 0;
-    while (off < sz) {
-        unsigned long chunk = sz - off;
-        if (chunk > sizeof(copybuf)) chunk = sizeof(copybuf);
-        int r = (int)_zos_syscall4(SYS_READ, (long)src,
-                                    (long)copybuf, (long)off, (long)chunk);
-        if (r <= 0) break;
-        _zos_syscall4(SYS_FWRITE, (long)dst,
-                       (long)copybuf, (long)off, (long)r);
-        off += (unsigned long)r;
-    }
-
-    _zos_syscall1(SYS_CLOSE, (long)src);
-    _zos_syscall1(SYS_CLOSE, (long)dst);
-    _zos_syscall1(SYS_FDELETE, (long)oldpath);
-    return 0;
+    return (int)_zos_syscall2(SYS_FRENAME, (long)oldpath, (long)newpath);
 }
 
 void perror(const char *s) {

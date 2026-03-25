@@ -23,6 +23,7 @@ namespace Fs::Vfs {
         int (*Create)(const char* path);
         int (*Delete)(const char* path);
         int (*Mkdir)(const char* path);
+        int (*Rename)(const char* oldPath, const char* newPath);
     };
 
     void Initialize();
@@ -37,6 +38,7 @@ namespace Fs::Vfs {
     void VfsClose(int handle);
     int VfsReadDir(const char* path, const char** outNames, int maxEntries);
     int VfsMkdir(const char* path);
+    int VfsRename(const char* oldPath, const char* newPath);
 
     // Returns number of registered drives, fills outDrives[] with their indices
     int VfsDriveList(int* outDrives, int maxEntries);

@@ -1438,6 +1438,109 @@ namespace Fs::Ext2 {
     }
 
     // =========================================================================
+    // Rename — move a directory entry (inode stays the same)
+    // =========================================================================
+
+    static int RenameImpl(int inst, const char* oldPath, const char* newPath) {
+        if (inst < 0 || inst >= g_instanceCount || !g_instances[inst].active) return -1;
+        auto& self = g_instances[inst];
+
+        // Split old path
+        char oldParentPath[MaxNameLen];
+        char oldFileName[MaxNameLen];
+        SplitPath(oldPath, oldParentPath, MaxNameLen, oldFileName, MaxNameLen);
+        if (oldFileName[0] == '\0') return -1;
+
+        // Split new path
+        char newParentPath[MaxNameLen];
+        char newFileName[MaxNameLen];
+        SplitPath(newPath, newParentPath, MaxNameLen, newFileName, MaxNameLen);
+        if (newFileName[0] == '\0') return -1;
+
+        // Find old entry
+        uint32_t oldParentInodeNum;
+        Inode oldParentInode;
+        if (!TraversePath(self, oldParentPath, &oldParentInodeNum, &oldParentInode)) return -1;
+        if ((oldParentInode.i_mode & IMODE_TYPE_MASK) != IMODE_DIR) return -1;
+
+        ParsedEntry oldEntry;
+        if (!FindInDirectory(self, oldParentInode, oldFileName, &oldEntry)) return -1;
+
+        // Find new parent
+        uint32_t newParentInodeNum;
+        Inode newParentInode;
+        if (!TraversePath(self, newParentPath, &newParentInodeNum, &newParentInode)) return -1;
+        if ((newParentInode.i_mode & IMODE_TYPE_MASK) != IMODE_DIR) return -1;
+
+        // If destination already exists, delete it
+        ParsedEntry destEntry;
+        if (FindInDirectory(self, newParentInode, newFileName, &destEntry)) {
+            Inode destInode;
+            if (!ReadInode(self, destEntry.inodeNum, &destInode)) return -1;
+
+            bool destIsDir = (destInode.i_mode & IMODE_TYPE_MASK) == IMODE_DIR;
+            if (destIsDir) {
+                ParsedEntry children[1];
+                int childCount = ReadDirectoryEntries(self, destInode, children, 1);
+                if (childCount > 0) return -1;
+            }
+
+            if (!RemoveDirEntry(self, newParentInode, newFileName)) return -1;
+
+            if (destIsDir) {
+                newParentInode.i_links_count--;
+                WriteInode(self, newParentInodeNum, &newParentInode);
+            }
+
+            destInode.i_links_count--;
+            if (destIsDir) destInode.i_links_count--;
+            if (destInode.i_links_count <= 0) {
+                FreeInodeBlocks(self, destInode);
+                destInode.i_mode = 0;
+                WriteInode(self, destEntry.inodeNum, &destInode);
+                FreeInode(self, destEntry.inodeNum);
+            } else {
+                WriteInode(self, destEntry.inodeNum, &destInode);
+            }
+
+            // Re-read new parent inode since RemoveDirEntry may have modified it
+            ReadInode(self, newParentInodeNum, &newParentInode);
+        }
+
+        // Remove old directory entry (does not touch the inode)
+        // Re-read old parent in case it's the same dir and was modified above
+        ReadInode(self, oldParentInodeNum, &oldParentInode);
+        if (!RemoveDirEntry(self, oldParentInode, oldFileName)) return -1;
+
+        // Add new directory entry pointing to the same inode
+        if (!AddDirEntry(self, newParentInodeNum, newParentInode,
+                         oldEntry.inodeNum, newFileName, oldEntry.fileType)) {
+            // Failed to add — try to restore old entry
+            ReadInode(self, oldParentInodeNum, &oldParentInode);
+            AddDirEntry(self, oldParentInodeNum, oldParentInode,
+                        oldEntry.inodeNum, oldFileName, oldEntry.fileType);
+            return -1;
+        }
+
+        // If moving a directory across parents, update ".." entry and link counts
+        bool isDir = oldEntry.fileType == EXT2_FT_DIR;
+        if (isDir && oldParentInodeNum != newParentInodeNum) {
+            // Decrement old parent link count, increment new parent
+            ReadInode(self, oldParentInodeNum, &oldParentInode);
+            oldParentInode.i_links_count--;
+            WriteInode(self, oldParentInodeNum, &oldParentInode);
+
+            ReadInode(self, newParentInodeNum, &newParentInode);
+            newParentInode.i_links_count++;
+            WriteInode(self, newParentInodeNum, &newParentInode);
+
+            // TODO: update ".." entry inside the moved directory to point to new parent
+        }
+
+        return 0;
+    }
+
+    // =========================================================================
     // Template thunks — generate unique function pointers per instance
     // =========================================================================
 
@@ -1451,6 +1554,7 @@ namespace Fs::Ext2 {
         static int Create(const char* p) { return CreateImpl(N, p); }
         static int Delete(const char* p) { return DeleteImpl(N, p); }
         static int Mkdir(const char* p) { return MkdirImpl(N, p); }
+        static int Rename(const char* o, const char* n) { return RenameImpl(N, o, n); }
     };
 
     template<int N>
@@ -1465,6 +1569,7 @@ namespace Fs::Ext2 {
             Thunks<N>::Create,
             Thunks<N>::Delete,
             Thunks<N>::Mkdir,
+            Thunks<N>::Rename,
         };
     }
 

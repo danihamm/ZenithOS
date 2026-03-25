@@ -211,6 +211,25 @@ namespace Fs::Vfs {
         return count;
     }
 
+    int VfsRename(const char* oldPath, const char* newPath) {
+        int oldDrive, newDrive;
+        const char* oldLocal;
+        const char* newLocal;
+
+        if (!ParsePath(oldPath, oldDrive, oldLocal)) return -1;
+        if (!ParsePath(newPath, newDrive, newLocal)) return -1;
+
+        // Cross-drive rename not supported
+        if (oldDrive != newDrive) return -1;
+        if (oldDrive < 0 || oldDrive >= MaxDrives || driveTable[oldDrive] == nullptr) return -1;
+        if (driveTable[oldDrive]->Rename == nullptr) return -1;
+
+        vfsLock.Acquire();
+        int result = driveTable[oldDrive]->Rename(oldLocal, newLocal);
+        vfsLock.Release();
+        return result;
+    }
+
     int VfsReadDir(const char* path, const char** outNames, int maxEntries) {
         int drive;
         const char* localPath;

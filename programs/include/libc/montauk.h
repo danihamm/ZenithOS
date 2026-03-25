@@ -89,6 +89,7 @@ extern "C" {
 #define MTK_SYS_WINSETCURSOR    68
 #define MTK_SYS_FDELETE         77
 #define MTK_SYS_FMKDIR          78
+#define MTK_SYS_FRENAME         94
 #define MTK_SYS_DRIVELIST       79
 #define MTK_SYS_AUDIOOPEN       80
 #define MTK_SYS_AUDIOCLOSE      81
@@ -375,6 +376,10 @@ static inline int mtk_delete(const char *path) {
 
 static inline int mtk_mkdir(const char *path) {
     return (int)_mtk_syscall1(MTK_SYS_FMKDIR, (long)path);
+}
+
+static inline int mtk_rename(const char *oldpath, const char *newpath) {
+    return (int)_mtk_syscall2(MTK_SYS_FRENAME, (long)oldpath, (long)newpath);
 }
 
 static inline int mtk_readdir(const char *path, const char **names, int max) {

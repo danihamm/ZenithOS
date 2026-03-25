@@ -1470,6 +1470,220 @@ namespace Fs::Fat32 {
     }
 
     // =========================================================================
+    // Rename — atomic directory entry move
+    // =========================================================================
+
+    static int RenameImpl(int inst, const char* oldPath, const char* newPath) {
+        if (inst < 0 || inst >= g_instanceCount || !g_instances[inst].active) return -1;
+        auto& self = g_instances[inst];
+
+        // Split old path
+        char oldParentPath[MaxNameLen];
+        char oldFileName[MaxNameLen];
+        SplitPath(oldPath, oldParentPath, MaxNameLen, oldFileName, MaxNameLen);
+        if (oldFileName[0] == '\0') return -1;
+
+        // Split new path
+        char newParentPath[MaxNameLen];
+        char newFileName[MaxNameLen];
+        SplitPath(newPath, newParentPath, MaxNameLen, newFileName, MaxNameLen);
+        if (newFileName[0] == '\0') return -1;
+
+        // Traverse to old parent directory
+        ParsedEntry oldParent;
+        if (!TraversePath(inst, oldParentPath, &oldParent)) return -1;
+        if (!(oldParent.attributes & ATTR_DIRECTORY)) return -1;
+
+        // Find old entry
+        ParsedEntry oldEntry;
+        if (!FindInDirectory(inst, oldParent.firstCluster, oldFileName, &oldEntry)) return -1;
+
+        // Save the data we need from the old entry before deleting it
+        uint32_t savedFirstCluster = oldEntry.firstCluster;
+        uint32_t savedFileSize = oldEntry.fileSize;
+        uint8_t  savedAttributes = oldEntry.attributes;
+
+        // Traverse to new parent directory
+        ParsedEntry newParent;
+        if (!TraversePath(inst, newParentPath, &newParent)) return -1;
+        if (!(newParent.attributes & ATTR_DIRECTORY)) return -1;
+
+        // If destination already exists, delete it (including its cluster chain)
+        ParsedEntry destEntry;
+        if (FindInDirectory(inst, newParent.firstCluster, newFileName, &destEntry)) {
+            // Don't allow overwriting a non-empty directory
+            if (destEntry.attributes & ATTR_DIRECTORY) {
+                ParsedEntry children[1];
+                int childCount = ReadDirectory(inst, destEntry.firstCluster, children, 1);
+                if (childCount > 0) return -1;
+            }
+            // Free destination cluster chain
+            uint32_t cl = destEntry.firstCluster;
+            while (!IsEndOfChain(cl) && cl >= 2) {
+                uint32_t next = GetNextCluster(self, cl);
+                WriteFatEntry(self, cl, CLUSTER_FREE);
+                cl = next;
+            }
+            // Mark destination directory entries as deleted
+            // (reuse the delete-entry-marking logic inline)
+            uint32_t cluster = newParent.firstCluster;
+            while (!IsEndOfChain(cluster)) {
+                if (!ReadCluster(self, cluster)) return -1;
+                int perCluster = (int)(self.clusterSize / 32);
+                bool modified = false;
+                for (int i = 0; i < perCluster; i++) {
+                    uint8_t* e = self.clusterBuf + i * 32;
+                    if (e[0] == 0x00) break;
+                    if (e[0] == 0xE5) continue;
+                    uint64_t clusterPartSec = ClusterToPartSector(self, cluster);
+                    uint32_t byteOff = i * 32;
+                    uint64_t entrySec = clusterPartSec + (byteOff / self.bytesPerSector);
+                    uint32_t entryOff = byteOff % self.bytesPerSector;
+                    if (entrySec == destEntry.sfnPartSector &&
+                        entryOff == destEntry.sfnOffInSector) {
+                        e[0] = 0xE5;
+                        modified = true;
+                    }
+                }
+                if (modified) WriteClusterData(self, cluster, self.clusterBuf);
+                cluster = GetNextCluster(self, cluster);
+            }
+        }
+
+        // Mark old directory entries as deleted (but DO NOT free the cluster chain)
+        {
+            uint32_t cluster = oldParent.firstCluster;
+            bool inLfnRun = false;
+
+            while (!IsEndOfChain(cluster)) {
+                if (!ReadCluster(self, cluster)) return -1;
+                int perCluster = (int)(self.clusterSize / 32);
+                bool modified = false;
+
+                for (int i = 0; i < perCluster; i++) {
+                    uint8_t* e = self.clusterBuf + i * 32;
+                    if (e[0] == 0x00) goto old_write_back;
+                    if (e[0] == 0xE5) { inLfnRun = false; continue; }
+
+                    uint8_t attr = e[11];
+                    if (attr == ATTR_LFN) {
+                        uint8_t seq = e[0];
+                        if (seq & 0x40) {
+                            inLfnRun = false;
+                            int lfnCount = seq & 0x1F;
+                            int sfnIdx = i + lfnCount;
+                            if (sfnIdx < perCluster) {
+                                uint64_t clusterPartSec = ClusterToPartSector(self, cluster);
+                                uint32_t byteOff = sfnIdx * 32;
+                                uint64_t sfnSec = clusterPartSec + (byteOff / self.bytesPerSector);
+                                uint32_t sfnOff = byteOff % self.bytesPerSector;
+                                if (sfnSec == oldEntry.sfnPartSector &&
+                                    sfnOff == oldEntry.sfnOffInSector) {
+                                    inLfnRun = true;
+                                    e[0] = 0xE5;
+                                    modified = true;
+                                }
+                            }
+                        } else if (inLfnRun) {
+                            e[0] = 0xE5;
+                            modified = true;
+                        }
+                        continue;
+                    }
+
+                    uint64_t clusterPartSec = ClusterToPartSector(self, cluster);
+                    uint32_t byteOff = i * 32;
+                    uint64_t entrySec = clusterPartSec + (byteOff / self.bytesPerSector);
+                    uint32_t entryOff = byteOff % self.bytesPerSector;
+                    if (entrySec == oldEntry.sfnPartSector &&
+                        entryOff == oldEntry.sfnOffInSector) {
+                        e[0] = 0xE5;
+                        modified = true;
+                        inLfnRun = false;
+                        goto old_write_back;
+                    }
+                    inLfnRun = false;
+                }
+
+            old_write_back:
+                if (modified) WriteClusterData(self, cluster, self.clusterBuf);
+                {
+                    uint64_t clusterPartSec = ClusterToPartSector(self, cluster);
+                    uint64_t clusterEndSec = clusterPartSec + self.sectorsPerCluster;
+                    if (oldEntry.sfnPartSector >= clusterPartSec &&
+                        oldEntry.sfnPartSector < clusterEndSec) {
+                        break; // done removing old entry
+                    }
+                }
+                cluster = GetNextCluster(self, cluster);
+            }
+        }
+
+        // Create new directory entry with the saved cluster chain and size
+        char shortName[11];
+        GenerateShortName(newFileName, shortName);
+        MakeShortNameUnique(inst, newParent.firstCluster, shortName);
+
+        uint8_t lfnEntries[20 * 32];
+        int lfnCount = 0;
+        bool needsLfn = NeedsLfn(newFileName, shortName);
+        if (needsLfn) {
+            uint8_t checksum = LfnChecksum(shortName);
+            lfnCount = BuildLfnEntries(newFileName, checksum, lfnEntries);
+        }
+
+        int totalSlots = lfnCount + 1;
+        DirSlotPos pos = FindFreeDirSlots(inst, newParent.firstCluster, totalSlots);
+        if (!pos.found) return -1;
+
+        // Build all entries (LFN + SFN) contiguously
+        uint8_t allEntries[21 * 32];
+        if (lfnCount > 0) {
+            memcpy(allEntries, lfnEntries, lfnCount * 32);
+        }
+
+        // Build the SFN entry with preserved cluster/size
+        uint8_t* sfn = allEntries + lfnCount * 32;
+        memset(sfn, 0, 32);
+        memcpy(sfn, shortName, 11);
+        sfn[11] = savedAttributes;
+
+        uint16_t clHi = (uint16_t)(savedFirstCluster >> 16);
+        uint16_t clLo = (uint16_t)(savedFirstCluster & 0xFFFF);
+        memcpy(sfn + 20, &clHi, 2);
+        memcpy(sfn + 26, &clLo, 2);
+        memcpy(sfn + 28, &savedFileSize, 4);
+
+        // Write entries to disk, handling sector boundaries
+        uint64_t curSector = pos.partSector;
+        uint32_t curOff = pos.offsetInSec;
+        uint8_t sectorBuf[512];
+
+        if (!ReadPartSectors(self, curSector, 1, sectorBuf)) return -1;
+
+        int bytesTotal = totalSlots * 32;
+        int written = 0;
+
+        while (written < bytesTotal) {
+            int space = (int)self.bytesPerSector - (int)curOff;
+            int chunk = bytesTotal - written;
+            if (chunk > space) chunk = space;
+
+            memcpy(sectorBuf + curOff, allEntries + written, chunk);
+            written += chunk;
+
+            if (!WritePartSectors(self, curSector, 1, sectorBuf)) return -1;
+            if (written < bytesTotal) {
+                curSector++;
+                curOff = 0;
+                if (!ReadPartSectors(self, curSector, 1, sectorBuf)) return -1;
+            }
+        }
+
+        return 0;
+    }
+
+    // =========================================================================
     // Template thunks — generate unique function pointers per instance
     // =========================================================================
 
@@ -1483,6 +1697,7 @@ namespace Fs::Fat32 {
         static int Create(const char* p) { return CreateImpl(N, p); }
         static int Delete(const char* p) { return DeleteImpl(N, p); }
         static int Mkdir(const char* p) { return MkdirImpl(N, p); }
+        static int Rename(const char* o, const char* n) { return RenameImpl(N, o, n); }
     };
 
     template<int N>
@@ -1497,6 +1712,7 @@ namespace Fs::Fat32 {
             Thunks<N>::Create,
             Thunks<N>::Delete,
             Thunks<N>::Mkdir,
+            Thunks<N>::Rename,
         };
     }
 

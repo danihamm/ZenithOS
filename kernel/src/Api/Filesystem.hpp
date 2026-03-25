@@ -81,6 +81,10 @@ namespace Montauk {
         return Fs::Vfs::VfsMkdir(path);
     }
 
+    static int Sys_FRename(const char* oldPath, const char* newPath) {
+        return Fs::Vfs::VfsRename(oldPath, newPath);
+    }
+
     static int Sys_DriveList(int* outDrives, int maxEntries) {
         return Fs::Vfs::VfsDriveList(outDrives, maxEntries);
     }

@@ -200,6 +200,10 @@ namespace Montauk {
             case SYS_FMKDIR:
                 if (!ValidUserPtr(frame->arg1)) return -1;
                 return (int64_t)Sys_FMkdir((const char*)frame->arg1);
+            case SYS_FRENAME:
+                if (!ValidUserPtr(frame->arg1)) return -1;
+                if (!ValidUserPtr(frame->arg2)) return -1;
+                return (int64_t)Sys_FRename((const char*)frame->arg1, (const char*)frame->arg2);
             case SYS_DRIVELIST:
                 if (!ValidUserPtr(frame->arg1)) return -1;
                 return (int64_t)Sys_DriveList((int*)frame->arg1, (int)frame->arg2);
