@@ -207,11 +207,12 @@ struct WinCreateResult {
 **`WinEvent` struct:**
 ```cpp
 struct WinEvent {
-    int type;   // 0=Key, 1=Mouse, 2=Resize, 3=Close
+    int type;   // 0=Key, 1=Mouse, 2=Resize, 3=Close, 4=Scale
     union {
         struct { uint8_t scancode; char ascii; bool pressed, shift, ctrl, alt; } key;
         struct { int x, y; uint8_t buttons, prev_buttons; int32_t scroll; } mouse;
         struct { int w, h; } resize;
+        struct { int scale; } scale;
     };
 };
 ```

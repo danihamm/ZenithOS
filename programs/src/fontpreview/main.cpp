@@ -9,6 +9,7 @@
 #include <montauk/string.h>
 #include <montauk/heap.h>
 #include <gui/gui.hpp>
+#include <gui/standalone.hpp>
 #include <gui/truetype.hpp>
 
 using namespace gui;
@@ -74,21 +75,6 @@ static TrueTypeFont* g_ui_font = nullptr;
 
 static stbtt_fontinfo g_preview_info;
 static uint8_t*       g_preview_data = nullptr;
-
-// ============================================================================
-// Helpers
-// ============================================================================
-
-static void px_fill(uint32_t* px, int bw, int bh,
-                    int x, int y, int w, int h, Color c) {
-    uint32_t v = c.to_pixel();
-    int x0 = x < 0 ? 0 : x,   y0 = y < 0 ? 0 : y;
-    int x1 = x + w > bw ? bw : x + w;
-    int y1 = y + h > bh ? bh : y + h;
-    for (int row = y0; row < y1; row++)
-        for (int col = x0; col < x1; col++)
-            px[row * bw + col] = v;
-}
 
 static const char* basename(const char* path) {
     const char* last = path;
@@ -248,14 +234,12 @@ static int calc_content_height() {
 // Rendering
 // ============================================================================
 
-static void render(uint32_t* pixels) {
-    px_fill(pixels, g_win_w, g_win_h, 0, 0, g_win_w, g_win_h, BG_COLOR);
+static void render(Canvas& canvas) {
+    canvas.fill(BG_COLOR);
 
     if (!g_load_ok) {
-        if (g_ui_font) {
-            g_ui_font->draw_to_buffer(pixels, g_win_w, g_win_h,
-                PADDING, g_win_h / 2 - 8, "Error: could not load font", ERR_COLOR, 15);
-        }
+        draw_text(canvas, g_ui_font, PADDING, g_win_h / 2 - 8,
+                  "Error: could not load font", ERR_COLOR, 15);
         return;
     }
 
@@ -279,27 +263,25 @@ static void render(uint32_t* pixels) {
             char label[16] = {};
             int_to_str(label, PREVIEW_SIZES[s]);
             str_append(label, "px", 16);
-            g_ui_font->draw_to_buffer(pixels, g_win_w, g_win_h,
-                PADDING, y, label, LABEL_COLOR, UI_FONT_SZ);
+            draw_text(canvas, g_ui_font, PADDING, y, label, LABEL_COLOR, UI_FONT_SZ);
             y += g_ui_font->get_line_height(UI_FONT_SZ) + 4;
         }
 
-        draw_cached_text(pixels, g_win_w, g_win_h,
+        draw_cached_text(canvas.pixels, canvas.w, canvas.h,
             PADDING, y, PANGRAM, TEXT_COLOR, s);
         y += lh;
 
-        draw_cached_text(pixels, g_win_w, g_win_h,
+        draw_cached_text(canvas.pixels, canvas.w, canvas.h,
             PADDING, y, UPPER, TEXT_COLOR, s);
         y += lh;
 
-        draw_cached_text(pixels, g_win_w, g_win_h,
+        draw_cached_text(canvas.pixels, canvas.w, canvas.h,
             PADDING, y, LOWER_NUM, TEXT_COLOR, s);
         y += lh;
 
         y += SECTION_GAP;
         if (y >= 0 && y < g_win_h) {
-            px_fill(pixels, g_win_w, g_win_h,
-                PADDING, y, g_win_w - 2 * PADDING, 1, SEPARATOR);
+            canvas.fill_rect(PADDING, y, g_win_w - 2 * PADDING, 1, SEPARATOR);
         }
         y += 1 + SECTION_GAP;
     }
@@ -312,8 +294,8 @@ static void render(uint32_t* pixels) {
         int thumb_h = (view_h * view_h) / g_content_h;
         if (thumb_h < 20) thumb_h = 20;
         int thumb_y = (g_scroll_y * (view_h - thumb_h)) / max_scroll;
-        px_fill(pixels, g_win_w, g_win_h, sb_x, 0, 4, view_h, SCROLLBAR_BG);
-        px_fill(pixels, g_win_w, g_win_h, sb_x, thumb_y, 4, thumb_h, SCROLLBAR_FG);
+        canvas.fill_rect(sb_x, 0, 4, view_h, SCROLLBAR_BG);
+        canvas.fill_rect(sb_x, thumb_y, 4, thumb_h, SCROLLBAR_FG);
     }
 }
 
@@ -378,20 +360,17 @@ extern "C" void _start() {
 
     g_content_h = calc_content_height();
 
-    // Create window
-    Montauk::WinCreateResult wres;
-    if (montauk::win_create(title, INIT_W, INIT_H, &wres) < 0 || wres.id < 0)
+    WsWindow win;
+    if (!win.create(title, INIT_W, INIT_H))
         montauk::exit(1);
 
-    int       win_id = wres.id;
-    uint32_t* pixels = (uint32_t*)(uintptr_t)wres.pixelVa;
-
-    render(pixels);
-    montauk::win_present(win_id);
+    Canvas canvas = win.canvas();
+    render(canvas);
+    win.present();
 
     while (true) {
         Montauk::WinEvent ev;
-        int r = montauk::win_poll(win_id, &ev);
+        int r = win.poll(&ev);
 
         if (r < 0) break;
 
@@ -403,12 +382,12 @@ extern "C" void _start() {
         if (ev.type == 3) break;
 
         if (ev.type == 2) {
-            g_win_w = ev.resize.w;
-            g_win_h = ev.resize.h;
-            pixels = (uint32_t*)(uintptr_t)montauk::win_resize(win_id, g_win_w, g_win_h);
+            g_win_w = win.width;
+            g_win_h = win.height;
             clamp_scroll();
-            render(pixels);
-            montauk::win_present(win_id);
+            canvas = win.canvas();
+            render(canvas);
+            win.present();
             continue;
         }
 
@@ -427,8 +406,9 @@ extern "C" void _start() {
 
             if (redraw) {
                 clamp_scroll();
-                render(pixels);
-                montauk::win_present(win_id);
+                canvas = win.canvas();
+                render(canvas);
+                win.present();
             }
             continue;
         }
@@ -437,13 +417,14 @@ extern "C" void _start() {
             if (ev.mouse.scroll != 0) {
                 g_scroll_y -= ev.mouse.scroll * SCROLL_STEP;
                 clamp_scroll();
-                render(pixels);
-                montauk::win_present(win_id);
+                canvas = win.canvas();
+                render(canvas);
+                win.present();
             }
             continue;
         }
     }
 
-    montauk::win_destroy(win_id);
+    win.destroy();
     montauk::exit(0);
 }

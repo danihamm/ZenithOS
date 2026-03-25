@@ -8,6 +8,7 @@
 #include <montauk/string.h>
 #include <montauk/heap.h>
 #include <gui/gui.hpp>
+#include <gui/standalone.hpp>
 #include <gui/truetype.hpp>
 
 extern "C" {
@@ -89,60 +90,6 @@ static int tb_zoom_in_x0, tb_zoom_in_x1;
 static int tb_fit_x0, tb_fit_x1;
 static int tb_actual_x0, tb_actual_x1;
 static int tb_open_x0, tb_open_x1;
-
-// ============================================================================
-// Helpers
-// ============================================================================
-
-static void px_fill(uint32_t* px, int bw, int bh,
-                    int x, int y, int w, int h, Color c) {
-    uint32_t v = c.to_pixel();
-    int x0 = x < 0 ? 0 : x,   y0 = y < 0 ? 0 : y;
-    int x1 = x + w > bw ? bw : x + w;
-    int y1 = y + h > bh ? bh : y + h;
-    for (int row = y0; row < y1; row++)
-        for (int col = x0; col < x1; col++)
-            px[row * bw + col] = v;
-}
-
-static void px_hline(uint32_t* px, int bw, int bh, int x, int y, int w, Color c) {
-    if (y < 0 || y >= bh) return;
-    uint32_t v = c.to_pixel();
-    int x0 = x < 0 ? 0 : x;
-    int x1 = x + w > bw ? bw : x + w;
-    for (int col = x0; col < x1; col++)
-        px[y * bw + col] = v;
-}
-
-static void px_vline(uint32_t* px, int bw, int bh, int x, int y, int h, Color c) {
-    if (x < 0 || x >= bw) return;
-    uint32_t v = c.to_pixel();
-    int y0 = y < 0 ? 0 : y;
-    int y1 = y + h > bh ? bh : y + h;
-    for (int row = y0; row < y1; row++)
-        px[row * bw + x] = v;
-}
-
-static void px_fill_rounded(uint32_t* px, int bw, int bh,
-                             int x, int y, int w, int h, int r, Color c) {
-    uint32_t v = c.to_pixel();
-    for (int row = 0; row < h; row++) {
-        int dy = y + row;
-        if (dy < 0 || dy >= bh) continue;
-        for (int col = 0; col < w; col++) {
-            int dx = x + col;
-            if (dx < 0 || dx >= bw) continue;
-            // Check corners
-            bool skip = false;
-            int cx, cy;
-            if (col < r && row < r) { cx = r - col - 1; cy = r - row - 1; if (cx*cx + cy*cy >= r*r) skip = true; }
-            else if (col >= w - r && row < r) { cx = col - (w - r); cy = r - row - 1; if (cx*cx + cy*cy >= r*r) skip = true; }
-            else if (col < r && row >= h - r) { cx = r - col - 1; cy = row - (h - r); if (cx*cx + cy*cy >= r*r) skip = true; }
-            else if (col >= w - r && row >= h - r) { cx = col - (w - r); cy = row - (h - r); if (cx*cx + cy*cy >= r*r) skip = true; }
-            if (!skip) px[dy * bw + dx] = v;
-        }
-    }
-}
 
 static const char* basename(const char* path) {
     const char* last = path;
@@ -313,12 +260,12 @@ static void zoom_actual() {
 // Rendering
 // ============================================================================
 
-static void render(uint32_t* pixels) {
+static void render(Canvas& canvas) {
     int vp_y0 = TOOLBAR_H;
     int vp_y1 = g_win_h - STATUS_BAR_H;
 
     // Fill viewport background
-    px_fill(pixels, g_win_w, g_win_h, 0, vp_y0, g_win_w, vp_y1 - vp_y0, BG_COLOR);
+    canvas.fill_rect(0, vp_y0, g_win_w, vp_y1 - vp_y0, BG_COLOR);
 
     // Draw scaled image
     if (g_image && g_load_ok) {
@@ -339,7 +286,7 @@ static void render(uint32_t* pixels) {
             if (src_y >= g_img_h) src_y = g_img_h - 1;
 
             const uint32_t* src_row = &g_image[src_y * g_img_w];
-            uint32_t* dst_row = &pixels[dy * g_win_w];
+            uint32_t* dst_row = &canvas.pixels[dy * g_win_w];
 
             for (int dx = draw_x0; dx < draw_x1; dx++) {
                 int src_x = (int)((dx - g_pan_x) * inv_zoom);
@@ -376,30 +323,29 @@ static void render(uint32_t* pixels) {
             }
         }
     } else if (!g_load_ok && g_font) {
-        g_font->draw_to_buffer(pixels, g_win_w, g_win_h,
-            20, vp_y0 + (vp_y1 - vp_y0) / 2 - 8, g_status, ERR_COLOR, 15);
+        draw_text(canvas, g_font, 20, vp_y0 + (vp_y1 - vp_y0) / 2 - 8, g_status, ERR_COLOR, 15);
     }
 
     // ---- Toolbar ----
-    px_fill(pixels, g_win_w, g_win_h, 0, 0, g_win_w, TOOLBAR_H, TOOLBAR_BG);
-    px_hline(pixels, g_win_w, g_win_h, 0, TOOLBAR_H - 1, g_win_w, GRID_COLOR);
+    canvas.fill_rect(0, 0, g_win_w, TOOLBAR_H, TOOLBAR_BG);
+    canvas.hline(0, TOOLBAR_H - 1, g_win_w, GRID_COLOR);
 
     int bx = 4;
     auto tb_btn = [&](int w, bool active, const char* label, int& x0_out, int& x1_out) {
         x0_out = bx;
         x1_out = bx + w;
         Color bg = active ? TB_BTN_ACTIVE : TB_BTN_BG;
-        px_fill_rounded(pixels, g_win_w, g_win_h, bx, TB_BTN_Y, w, TB_BTN_SIZE, TB_BTN_RAD, bg);
+        canvas.fill_rounded_rect(bx, TB_BTN_Y, w, TB_BTN_SIZE, TB_BTN_RAD, bg);
         if (g_font && label[0]) {
             int tw = g_font->measure_text(label, HEADER_FONT);
-            g_font->draw_to_buffer(pixels, g_win_w, g_win_h,
-                bx + (w - tw) / 2, TB_BTN_Y + (TB_BTN_SIZE - HEADER_FONT) / 2,
-                label, HEADER_TEXT, HEADER_FONT);
+            draw_text(canvas, g_font,
+                      bx + (w - tw) / 2, TB_BTN_Y + (TB_BTN_SIZE - HEADER_FONT) / 2,
+                      label, HEADER_TEXT, HEADER_FONT);
         }
         bx += w + 4;
     };
     auto tb_sep = [&]() {
-        px_vline(pixels, g_win_w, g_win_h, bx, 6, TOOLBAR_H - 12, TB_SEP_COLOR);
+        canvas.vline(bx, 6, TOOLBAR_H - 12, TB_SEP_COLOR);
         bx += 8;
     };
 
@@ -418,9 +364,8 @@ static void render(uint32_t* pixels) {
         snprintf(zoom_label, 16, "%d%%", pct);
         if (g_font) {
             int tw = g_font->measure_text(zoom_label, HEADER_FONT);
-            g_font->draw_to_buffer(pixels, g_win_w, g_win_h,
-                bx, TB_BTN_Y + (TB_BTN_SIZE - HEADER_FONT) / 2,
-                zoom_label, HEADER_TEXT, HEADER_FONT);
+            draw_text(canvas, g_font, bx, TB_BTN_Y + (TB_BTN_SIZE - HEADER_FONT) / 2,
+                      zoom_label, HEADER_TEXT, HEADER_FONT);
             bx += tw + 8;
         }
     }
@@ -433,18 +378,16 @@ static void render(uint32_t* pixels) {
 
     // ---- Status bar ----
     int sy = g_win_h - STATUS_BAR_H;
-    px_fill(pixels, g_win_w, g_win_h, 0, sy, g_win_w, STATUS_BAR_H, STATUS_BG);
+    canvas.fill_rect(0, sy, g_win_w, STATUS_BAR_H, STATUS_BG);
 
     if (g_font) {
         int sty = sy + (STATUS_BAR_H - HEADER_FONT) / 2;
 
         // Left: filename and dimensions
         if (g_load_ok && g_status[0]) {
-            g_font->draw_to_buffer(pixels, g_win_w, g_win_h, 8, sty,
-                g_status, STATUS_TEXT, HEADER_FONT);
+            draw_text(canvas, g_font, 8, sty, g_status, STATUS_TEXT, HEADER_FONT);
         } else if (!g_load_ok) {
-            g_font->draw_to_buffer(pixels, g_win_w, g_win_h, 8, sty,
-                "No image loaded", STATUS_TEXT, HEADER_FONT);
+            draw_text(canvas, g_font, 8, sty, "No image loaded", STATUS_TEXT, HEADER_FONT);
         }
 
         // Right: zoom level
@@ -453,8 +396,7 @@ static void render(uint32_t* pixels) {
             int pct = (int)(g_zoom * 100 + 0.5f);
             snprintf(right, 32, "%d%% ", pct);
             int rw = g_font->measure_text(right, HEADER_FONT);
-            g_font->draw_to_buffer(pixels, g_win_w, g_win_h,
-                g_win_w - rw - 8, sty, right, STATUS_TEXT, HEADER_FONT);
+            draw_text(canvas, g_font, g_win_w - rw - 8, sty, right, STATUS_TEXT, HEADER_FONT);
         }
     }
 }
@@ -528,13 +470,11 @@ extern "C" void _start() {
         }
     }
 
-    // Create window
-    Montauk::WinCreateResult wres;
-    if (montauk::win_create(title, INIT_W, INIT_H, &wres) < 0 || wres.id < 0)
+    WsWindow win;
+    if (!win.create(title, INIT_W, INIT_H))
         montauk::exit(1);
 
-    int       win_id = wres.id;
-    uint32_t* pixels = (uint32_t*)(uintptr_t)wres.pixelVa;
+    Canvas canvas = win.canvas();
 
     // Auto-fit on load if image is larger than viewport
     if (g_load_ok) {
@@ -545,13 +485,13 @@ extern "C" void _start() {
         }
     }
 
-    render(pixels);
-    montauk::win_present(win_id);
+    render(canvas);
+    win.present();
 
     // Event loop
     while (true) {
         Montauk::WinEvent ev;
-        int r = montauk::win_poll(win_id, &ev);
+        int r = win.poll(&ev);
 
         if (r < 0) break;
         if (r == 0) { montauk::sleep_ms(16); continue; }
@@ -560,12 +500,12 @@ extern "C" void _start() {
 
         // Resize
         if (ev.type == 2) {
-            g_win_w = ev.resize.w;
-            g_win_h = ev.resize.h;
-            pixels = (uint32_t*)(uintptr_t)montauk::win_resize(win_id, g_win_w, g_win_h);
+            g_win_w = win.width;
+            g_win_h = win.height;
             if (g_load_ok) clamp_pan();
-            render(pixels);
-            montauk::win_present(win_id);
+            canvas = win.canvas();
+            render(canvas);
+            win.present();
             continue;
         }
 
@@ -646,12 +586,13 @@ extern "C" void _start() {
         }
 
         if (redraw) {
-            render(pixels);
-            montauk::win_present(win_id);
+            canvas = win.canvas();
+            render(canvas);
+            win.present();
         }
     }
 
     if (g_image) montauk::mfree(g_image);
-    montauk::win_destroy(win_id);
+    win.destroy();
     montauk::exit(0);
 }

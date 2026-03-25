@@ -5,6 +5,7 @@
  */
 
 #include "disks.h"
+#include <gui/standalone.hpp>
 
 // ============================================================================
 // Global state definitions
@@ -341,16 +342,14 @@ extern "C" void _start() {
 
     disktool_refresh();
 
-    // Create window
-    Montauk::WinCreateResult wres;
-    if (montauk::win_create("Disks", INIT_W, INIT_H, &wres) < 0 || wres.id < 0)
+    WsWindow win;
+    if (!win.create("Disks", INIT_W, INIT_H))
         montauk::exit(1);
 
-    int win_id = wres.id;
-    uint32_t* pixels = (uint32_t*)(uintptr_t)wres.pixelVa;
+    uint32_t* pixels = win.pixels;
 
     render(pixels);
-    montauk::win_present(win_id);
+    win.present();
 
     while (true) {
         Montauk::WinEvent ev;
@@ -400,12 +399,12 @@ extern "C" void _start() {
         }
 
         // Poll main window
-        int r = montauk::win_poll(win_id, &ev);
+        int r = win.poll(&ev);
 
         if (r < 0) break;
         if (r == 0) {
             // Even with no main event, dialog may have triggered redraws
-            if (redraw_main) { render(pixels); montauk::win_present(win_id); }
+            if (redraw_main) { render(pixels); win.present(); }
             if (redraw_dlg) { render_format_window(); montauk::win_present(g_state.fmt_dlg.win_id); }
             if (redraw_np) { render_newpart_window(); montauk::win_present(g_state.np_dlg.win_id); }
             if (!redraw_main && !redraw_dlg && !redraw_np) montauk::sleep_ms(16);
@@ -416,9 +415,9 @@ extern "C" void _start() {
 
         // Resize
         if (ev.type == 2) {
-            g_win_w = ev.resize.w;
-            g_win_h = ev.resize.h;
-            pixels = (uint32_t*)(uintptr_t)montauk::win_resize(win_id, g_win_w, g_win_h);
+            g_win_w = win.width;
+            g_win_h = win.height;
+            pixels = win.pixels;
             redraw_main = true;
         }
 
@@ -448,13 +447,13 @@ extern "C" void _start() {
             }
         }
 
-        if (redraw_main) { render(pixels); montauk::win_present(win_id); }
+        if (redraw_main) { render(pixels); win.present(); }
         if (redraw_dlg) { render_format_window(); montauk::win_present(g_state.fmt_dlg.win_id); }
         if (redraw_np) { render_newpart_window(); montauk::win_present(g_state.np_dlg.win_id); }
     }
 
     close_newpart_dialog();
     close_format_dialog();
-    montauk::win_destroy(win_id);
+    win.destroy();
     montauk::exit(0);
 }

@@ -147,27 +147,23 @@ Events are delivered via `win_poll()` into a `WinEvent` struct:
 
 ### Drawing Helpers
 
-Standalone apps typically define local pixel-drawing helpers since they work with raw `uint32_t*` buffers:
+For new standalone apps, prefer the shared helpers in `#include <gui/standalone.hpp>`. It provides:
+
+- `gui::WsWindow` for `win_create()` / `win_poll()` / `win_resize()` / `win_present()`
+- `gui::Canvas` for drawing into the window buffer
+- immediate-mode helpers like `draw_text()`, `draw_button()`, and `fill_circle()`
+
+Older apps in the tree still define local `px_*` helpers, but new code should not need to.
 
 ```cpp
-static void px_fill(uint32_t* px, int bw, int bh,
-                    int x, int y, int w, int h, uint32_t color) {
-    for (int row = y; row < y + h && row < bh; row++)
-        for (int col = x; col < x + w && col < bw; col++)
-            px[row * bw + col] = color;
-}
+gui::WsWindow win;
+win.create("My App", 400, 300);
 
-static void px_hline(uint32_t* px, int bw, int bh,
-                     int x, int y, int w, uint32_t color) {
-    for (int col = x; col < x + w && col < bw; col++)
-        if (y >= 0 && y < bh) px[y * bw + col] = color;
-}
-
-static void px_text(uint32_t* px, int bw, int bh,
-                    int x, int y, const char* text, Color c, int size) {
-    if (g_font)
-        g_font->draw_to_buffer(px, bw, bh, x, y, text, c, size);
-}
+gui::Canvas c = win.canvas();
+c.fill(gui::colors::WHITE);
+draw_text(c, g_font, 20, 30, "Hello", gui::colors::TEXT_COLOR, 18);
+draw_button(c, g_font, 20, 60, 96, 28, "OK",
+            gui::colors::ACCENT, gui::colors::WHITE, 6, 16);
 ```
 
 ### Rounded Rectangles

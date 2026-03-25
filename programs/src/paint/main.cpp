@@ -5,6 +5,7 @@
  */
 
 #include "paint.h"
+#include <gui/standalone.hpp>
 
 // ============================================================================
 // Global state definitions
@@ -261,20 +262,18 @@ extern "C" void _start() {
     // Push initial undo state
     undo_push();
 
-    // Create window
-    Montauk::WinCreateResult wres;
-    if (montauk::win_create("Paint", INIT_W, INIT_H, &wres) < 0 || wres.id < 0)
+    WsWindow win;
+    if (!win.create("Paint", INIT_W, INIT_H))
         montauk::exit(1);
 
-    int win_id = wres.id;
-    uint32_t* pixels = (uint32_t*)(uintptr_t)wres.pixelVa;
+    uint32_t* pixels = win.pixels;
 
     render(pixels);
-    montauk::win_present(win_id);
+    win.present();
 
     while (true) {
         Montauk::WinEvent ev;
-        int r = montauk::win_poll(win_id, &ev);
+        int r = win.poll(&ev);
 
         if (r < 0) break;
 
@@ -288,12 +287,12 @@ extern "C" void _start() {
 
         // Resize
         if (ev.type == 2) {
-            g_win_w = ev.resize.w;
-            g_win_h = ev.resize.h;
-            pixels = (uint32_t*)(uintptr_t)montauk::win_resize(win_id, g_win_w, g_win_h);
+            g_win_w = win.width;
+            g_win_h = win.height;
+            pixels = win.pixels;
             clamp_scroll();
             render(pixels);
-            montauk::win_present(win_id);
+            win.present();
             continue;
         }
 
@@ -477,10 +476,10 @@ extern "C" void _start() {
 
         if (redraw) {
             render(pixels);
-            montauk::win_present(win_id);
+            win.present();
         }
     }
 
-    montauk::win_destroy(win_id);
+    win.destroy();
     montauk::exit(0);
 }

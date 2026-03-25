@@ -5,6 +5,7 @@
  */
 
 #include "installer.h"
+#include <gui/standalone.hpp>
 
 // ============================================================================
 // Global state definitions
@@ -21,6 +22,7 @@ TrueTypeFont* g_font = nullptr;
 uint32_t* g_pixels = nullptr;
 uint32_t* g_backbuf = nullptr;
 int g_win_id = -1;
+static WsWindow g_window;
 
 void apply_scale(int scale) {
     switch (scale) {
@@ -56,10 +58,10 @@ void add_log(const char* msg) {
 }
 
 void flush_ui() {
-    if (g_pixels && g_backbuf && g_win_id >= 0) {
+    if (g_pixels && g_backbuf && g_window.id >= 0) {
         render(g_backbuf);
         montauk::memcpy(g_pixels, g_backbuf, g_win_w * g_win_h * 4);
-        montauk::win_present(g_win_id);
+        g_window.present();
     }
 }
 
@@ -273,20 +275,16 @@ extern "C" void _start() {
 
     installer_refresh_disks();
 
-    // Create window
-    Montauk::WinCreateResult wres;
-    if (montauk::win_create("Install MontaukOS", INIT_W, INIT_H, &wres) < 0 || wres.id < 0)
+    if (!g_window.create("Install MontaukOS", INIT_W, INIT_H))
         montauk::exit(1);
 
-    int win_id = wres.id;
-    uint32_t* pixels = (uint32_t*)(uintptr_t)wres.pixelVa;
-    g_pixels = pixels;
-    g_win_id = win_id;
+    g_pixels = g_window.pixels;
+    g_win_id = g_window.id;
     g_backbuf = (uint32_t*)montauk::malloc(g_win_w * g_win_h * 4);
 
     render(g_backbuf);
-    montauk::memcpy(pixels, g_backbuf, g_win_w * g_win_h * 4);
-    montauk::win_present(win_id);
+    montauk::memcpy(g_pixels, g_backbuf, g_win_w * g_win_h * 4);
+    g_window.present();
 
     bool install_triggered = false;
 
@@ -294,7 +292,7 @@ extern "C" void _start() {
         Montauk::WinEvent ev;
         bool redraw = false;
 
-        int r = montauk::win_poll(win_id, &ev);
+        int r = g_window.poll(&ev);
         if (r < 0) break;
 
         if (r == 0) {
@@ -317,15 +315,14 @@ extern "C" void _start() {
         if (ev.type == 3) break;
 
         if (ev.type == 4) {
-            apply_scale(ev.scale.scale);
+            apply_scale(g_window.scale_factor);
             redraw = true;
         }
 
         if (ev.type == 2) {
-            g_win_w = ev.resize.w;
-            g_win_h = ev.resize.h;
-            pixels = (uint32_t*)(uintptr_t)montauk::win_resize(win_id, g_win_w, g_win_h);
-            g_pixels = pixels;
+            g_win_w = g_window.width;
+            g_win_h = g_window.height;
+            g_pixels = g_window.pixels;
             montauk::mfree(g_backbuf);
             g_backbuf = (uint32_t*)montauk::malloc(g_win_w * g_win_h * 4);
             redraw = true;
@@ -348,6 +345,6 @@ extern "C" void _start() {
         if (redraw) flush_ui();
     }
 
-    montauk::win_destroy(win_id);
+    g_window.destroy();
     montauk::exit(0);
 }

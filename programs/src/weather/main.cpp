@@ -10,6 +10,7 @@
 #include <montauk/string.h>
 #include <montauk/heap.h>
 #include <gui/gui.hpp>
+#include <gui/standalone.hpp>
 #include <gui/svg.hpp>
 #include <gui/truetype.hpp>
 #include <tls/tls.hpp>
@@ -74,101 +75,6 @@ static char     g_icon_name[64]  = {};
 static bool     g_tls_ready = false;
 static uint32_t g_server_ip = 0;
 static tls::TrustAnchors g_tas = {nullptr, 0, 0};
-
-// ============================================================================
-// Pixel buffer helpers
-// ============================================================================
-
-static void px_fill(uint32_t* px, int bw, int bh,
-                    int x, int y, int w, int h, Color c) {
-    uint32_t v = c.to_pixel();
-    int x0 = x < 0 ? 0 : x,   y0 = y < 0 ? 0 : y;
-    int x1 = x + w > bw ? bw : x + w;
-    int y1 = y + h > bh ? bh : y + h;
-    for (int row = y0; row < y1; row++)
-        for (int col = x0; col < x1; col++)
-            px[row * bw + col] = v;
-}
-
-static void px_hline(uint32_t* px, int bw, int bh, int x, int y, int len, Color c) {
-    if (y < 0 || y >= bh) return;
-    uint32_t v = c.to_pixel();
-    int x1 = x + len > bw ? bw : x + len;
-    for (int col = x < 0 ? 0 : x; col < x1; col++)
-        px[y * bw + col] = v;
-}
-
-// Integer square root (Newton's method).
-static int isqrt(int n) {
-    if (n <= 0) return 0;
-    int x = n, y = (x + 1) / 2;
-    while (y < x) { x = y; y = (x + n / x) / 2; }
-    return x;
-}
-
-// Fill a rounded rectangle directly onto the pixel buffer.
-static void px_fill_rounded(uint32_t* px, int bw, int bh,
-                              int x, int y, int w, int h, int r, Color c) {
-    if (r <= 0) { px_fill(px, bw, bh, x, y, w, h, c); return; }
-    if (r > w / 2) r = w / 2;
-    if (r > h / 2) r = h / 2;
-
-    uint32_t v = c.to_pixel();
-    // Corner arc centers
-    int cx_l = x + r;
-    int cx_r = x + w - 1 - r;
-
-    for (int row = y; row < y + h; row++) {
-        if (row < 0 || row >= bh) continue;
-
-        int left, right;
-        if (row < y + r) {
-            int dy = y + r - row;             // 1..r
-            int dx = isqrt(r * r - dy * dy);
-            left  = cx_l - dx;
-            right = cx_r + dx + 1;
-        } else if (row >= y + h - r) {
-            int dy = row - (y + h - 1 - r);  // 1..r
-            int dx = isqrt(r * r - dy * dy);
-            left  = cx_l - dx;
-            right = cx_r + dx + 1;
-        } else {
-            left  = x;
-            right = x + w;
-        }
-
-        if (left  < 0)   left  = 0;
-        if (right > bw)  right = bw;
-        for (int col = left; col < right; col++)
-            px[row * bw + col] = v;
-    }
-}
-
-// Alpha-composite an SvgIcon onto the pixel buffer.
-static void draw_icon(uint32_t* px, int bw, int bh,
-                      int dx, int dy, const SvgIcon& icon) {
-    if (!icon.pixels) return;
-    for (int row = 0; row < icon.height; row++) {
-        int ty = dy + row;
-        if (ty < 0 || ty >= bh) continue;
-        for (int col = 0; col < icon.width; col++) {
-            int tx = dx + col;
-            if (tx < 0 || tx >= bw) continue;
-            uint32_t s = icon.pixels[row * icon.width + col];
-            uint8_t sa = (s >> 24) & 0xFF;
-            if (sa == 0) continue;
-            if (sa == 255) { px[ty * bw + tx] = s; continue; }
-            uint8_t sr = (s >> 16) & 0xFF, sg = (s >> 8) & 0xFF, sb = s & 0xFF;
-            uint32_t d  = px[ty * bw + tx];
-            uint8_t dr = (d >> 16) & 0xFF, dg = (d >> 8) & 0xFF, db = d & 0xFF;
-            uint32_t inv = 255 - sa;
-            px[ty * bw + tx] = 0xFF000000u
-                | (((sr * sa + dr * inv) / 255u) << 16)
-                | (((sg * sa + dg * inv) / 255u) << 8)
-                |  ((sb * sa + db * inv) / 255u);
-        }
-    }
-}
 
 // ============================================================================
 // HTTP parsing
@@ -412,82 +318,64 @@ static constexpr Color WHITE_TEXT = Color::from_rgb(0xFF, 0xFF, 0xFF);
 // Rendering
 // ============================================================================
 
-static constexpr int BTN_W      = 110;
-static constexpr int BTN_H      = 28;
-static constexpr int BTN_RADIUS = 6;
+static constexpr int BTN_W              = 110;
+static constexpr int BTN_H              = 28;
+static constexpr int WEATHER_BTN_RADIUS = 6;
 
-static void render(uint32_t* pixels) {
+static void render(Canvas& canvas) {
     // ── Background ───────────────────────────────────────────────────────────
-    px_fill(pixels, g_win_w, g_win_h, 0, 0,
-            g_win_w, g_win_h - FOOTER_H, CONTENT_BG);
-    px_fill(pixels, g_win_w, g_win_h, 0, g_win_h - FOOTER_H,
-            g_win_w, FOOTER_H, FOOTER_BG);
+    canvas.fill_rect(0, 0, g_win_w, g_win_h - FOOTER_H, CONTENT_BG);
+    canvas.fill_rect(0, g_win_h - FOOTER_H, g_win_w, FOOTER_H, FOOTER_BG);
 
     // Divider between content and location strip
-    px_hline(pixels, g_win_w, g_win_h, 0, HEADER_H,           g_win_w, DIVIDER);
+    canvas.hline(0, HEADER_H, g_win_w, DIVIDER);
     // Divider above footer
-    px_hline(pixels, g_win_w, g_win_h, 0, g_win_h - FOOTER_H, g_win_w, DIVIDER);
+    canvas.hline(0, g_win_h - FOOTER_H, g_win_w, DIVIDER);
 
     if (!g_font) return;
 
     // ── Main content area (y=0..HEADER_H) ────────────────────────────────────
     if (g_phase == AppPhase::LOADING) {
-        g_font->draw_to_buffer(pixels, g_win_w, g_win_h,
-            20, HEADER_H / 2 - 9,
-            "Fetching weather data...", HINT_TEXT, 18);
+        draw_text(canvas, g_font, 20, HEADER_H / 2 - 9,
+                  "Fetching weather data...", HINT_TEXT, 18);
 
     } else if (g_phase == AppPhase::ERR) {
-        g_font->draw_to_buffer(pixels, g_win_w, g_win_h,
-            20, 20, g_status, ERR_TEXT, 15);
+        draw_text(canvas, g_font, 20, 20, g_status, ERR_TEXT, 15);
 
     } else if (g_phase == AppPhase::IDLE) {
-        g_font->draw_to_buffer(pixels, g_win_w, g_win_h,
-            20, HEADER_H / 2 - 9,
-            "Click Refresh to check weather.", HINT_TEXT, 18);
+        draw_text(canvas, g_font, 20, HEADER_H / 2 - 9,
+                  "Click Refresh to check weather.", HINT_TEXT, 18);
 
     } else {  // DONE
         // Weather icon
-        draw_icon(pixels, g_win_w, g_win_h, ICON_X, ICON_Y, g_icon);
+        draw_icon(canvas, ICON_X, ICON_Y, g_icon);
 
         // Temperature (large bold)
         TrueTypeFont* temp_font = g_font_bold ? g_font_bold : g_font;
-        temp_font->draw_to_buffer(pixels, g_win_w, g_win_h,
-            INFO_X, TEMP_Y, g_temp, DARK_TEXT, TEMP_SIZE);
+        draw_text(canvas, temp_font, INFO_X, TEMP_Y, g_temp, DARK_TEXT, TEMP_SIZE);
 
         // Weather description
-        g_font->draw_to_buffer(pixels, g_win_w, g_win_h,
-            INFO_X, DESC_Y, g_desc, DARK_TEXT, DESC_SIZE);
+        draw_text(canvas, g_font, INFO_X, DESC_Y, g_desc, DARK_TEXT, DESC_SIZE);
 
         // Feels like
-        g_font->draw_to_buffer(pixels, g_win_w, g_win_h,
-            INFO_X, FEELS_Y, g_feels, MID_TEXT, LABEL_SIZE);
+        draw_text(canvas, g_font, INFO_X, FEELS_Y, g_feels, MID_TEXT, LABEL_SIZE);
     }
 
     // ── Location strip (y=HEADER_H..g_win_h-FOOTER_H) ────────────────────────
     if (g_phase == AppPhase::DONE) {
-        g_font->draw_to_buffer(pixels, g_win_w, g_win_h,
-            20, HEADER_H + 14, g_location, DARK_TEXT, LABEL_SIZE);
+        draw_text(canvas, g_font, 20, HEADER_H + 14, g_location, DARK_TEXT, LABEL_SIZE);
     }
 
     // ── Refresh button (rounded, in footer) ───────────────────────────────────
     int btn_x = (g_win_w - BTN_W) / 2;
     int btn_y = g_win_h - FOOTER_H + (FOOTER_H - BTN_H) / 2;
 
-    px_fill_rounded(pixels, g_win_w, g_win_h,
-                    btn_x, btn_y, BTN_W, BTN_H, BTN_RADIUS, BTN_BG);
-
     if (g_phase == AppPhase::LOADING) {
-        const char* lbl = "Loading...";
-        int sw = g_font->measure_text(lbl, 14);
-        g_font->draw_to_buffer(pixels, g_win_w, g_win_h,
-            btn_x + (BTN_W - sw) / 2, btn_y + (BTN_H - 14) / 2,
-            lbl, WHITE_TEXT, 14);
+        draw_button(canvas, g_font, btn_x, btn_y, BTN_W, BTN_H,
+                    "Loading...", BTN_BG, WHITE_TEXT, WEATHER_BTN_RADIUS, 14);
     } else {
-        const char* lbl = "Refresh";
-        int sw = g_font->measure_text(lbl, 15);
-        g_font->draw_to_buffer(pixels, g_win_w, g_win_h,
-            btn_x + (BTN_W - sw) / 2, btn_y + (BTN_H - 15) / 2,
-            lbl, WHITE_TEXT, 15);
+        draw_button(canvas, g_font, btn_x, btn_y, BTN_W, BTN_H,
+                    "Refresh", BTN_BG, WHITE_TEXT, WEATHER_BTN_RADIUS, 15);
     }
 }
 
@@ -514,38 +402,43 @@ extern "C" void _start() {
 
     apply_scale(montauk::win_getscale());
 
-    // Create window
-    Montauk::WinCreateResult wres;
-    if (montauk::win_create("Weather", INIT_W, INIT_H, &wres) < 0 || wres.id < 0)
+    WsWindow win;
+    if (!win.create("Weather", INIT_W, INIT_H))
         montauk::exit(1);
 
-    int       win_id = wres.id;
-    uint32_t* pixels = (uint32_t*)(uintptr_t)wres.pixelVa;
+    Canvas canvas = win.canvas();
 
     // Initial fetch on startup
     g_phase = AppPhase::LOADING;
-    render(pixels);
-    montauk::win_present(win_id);
+    render(canvas);
+    win.present();
     do_fetch();
 
     // Event loop
     while (true) {
         Montauk::WinEvent ev;
-        int r = montauk::win_poll(win_id, &ev);
+        int r = win.poll(&ev);
 
         if (r < 0) break;
 
         if (r == 0) {
             montauk::sleep_ms(16);
-            render(pixels);
-            montauk::win_present(win_id);
+            canvas = win.canvas();
+            render(canvas);
+            win.present();
             continue;
         }
 
         if (ev.type == 3) break;  // close
 
         if (ev.type == 4) {
-            apply_scale(ev.scale.scale);
+            apply_scale(win.scale_factor);
+        }
+
+        if (ev.type == 2) {
+            g_win_w = win.width;
+            g_win_h = win.height;
+            canvas = win.canvas();
         }
 
         if (ev.type == 1) {
@@ -558,18 +451,20 @@ extern "C" void _start() {
                 if (mx >= btn_x && mx < btn_x + BTN_W &&
                     my >= btn_y && my < btn_y + BTN_H) {
                     g_phase = AppPhase::LOADING;
-                    render(pixels);
-                    montauk::win_present(win_id);
+                    canvas = win.canvas();
+                    render(canvas);
+                    win.present();
                     do_fetch();
                 }
             }
         }
 
-        render(pixels);
-        montauk::win_present(win_id);
+        canvas = win.canvas();
+        render(canvas);
+        win.present();
     }
 
     if (g_icon.pixels) svg_free(g_icon);
-    montauk::win_destroy(win_id);
+    win.destroy();
     montauk::exit(0);
 }

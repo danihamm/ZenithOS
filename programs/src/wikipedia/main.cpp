@@ -9,6 +9,7 @@
 #include <montauk/string.h>
 #include <montauk/heap.h>
 #include <gui/gui.hpp>
+#include <gui/standalone.hpp>
 #include <gui/truetype.hpp>
 #include <tls/tls.hpp>
 
@@ -80,48 +81,6 @@ static TrueTypeFont* g_font_serif = nullptr;  // NotoSerif SemiBold (headings)
 static bool          g_tls_ready  = false;
 static uint32_t      g_server_ip  = 0;
 static tls::TrustAnchors g_tas = {nullptr, 0, 0};
-
-// ============================================================================
-// Pixel buffer helpers
-// ============================================================================
-
-static void px_fill(uint32_t* px, int bw, int x, int y, int w, int h, Color c) {
-    uint32_t v = c.to_pixel();
-    int x0 = x < 0 ? 0 : x,  y0 = y < 0 ? 0 : y;
-    int x1 = x + w,           y1 = y + h;
-    if (x1 > bw) x1 = bw;
-    if (y1 > g_win_h) y1 = g_win_h;
-    for (int row = y0; row < y1; row++)
-        for (int col = x0; col < x1; col++)
-            px[row * bw + col] = v;
-}
-
-static void px_hline(uint32_t* px, int bw, int x, int y, int len, Color c) {
-    if (y < 0 || y >= g_win_h) return;
-    uint32_t v = c.to_pixel();
-    int x1 = x + len;
-    if (x < 0) x = 0;
-    if (x1 > bw) x1 = bw;
-    for (int col = x; col < x1; col++)
-        px[y * bw + col] = v;
-}
-
-static void px_vline(uint32_t* px, int bw, int x, int y, int len, Color c) {
-    if (x < 0 || x >= bw) return;
-    uint32_t v = c.to_pixel();
-    int y1 = y + len;
-    if (y < 0) y = 0;
-    if (y1 > g_win_h) y1 = g_win_h;
-    for (int row = y; row < y1; row++)
-        px[row * bw + x] = v;
-}
-
-static void px_rect_outline(uint32_t* px, int bw, int x, int y, int w, int h, Color c) {
-    px_hline(px, bw, x,         y,         w, c);
-    px_hline(px, bw, x,         y + h - 1, w, c);
-    px_vline(px, bw, x,         y,         h, c);
-    px_vline(px, bw, x + w - 1, y,         h, c);
-}
 
 // ============================================================================
 // UI scale
@@ -459,16 +418,16 @@ static void do_search(const char* query) {
 // Rendering
 // ============================================================================
 
-static void render(uint32_t* pixels) {
+static void render(Canvas& canvas) {
     static constexpr Color TOOLBAR_BG = Color::from_rgb(0xF5, 0xF5, 0xF5);
     static constexpr Color HINT_COLOR = Color::from_rgb(0x99, 0x99, 0x99);
 
     // Background
-    px_fill(pixels, g_win_w, 0, 0, g_win_w, g_win_h, WINDOW_BG);
+    canvas.fill(WINDOW_BG);
 
     // ---- Toolbar ----
-    px_fill(pixels, g_win_w, 0, 0, g_win_w, TOOLBAR_H, TOOLBAR_BG);
-    px_hline(pixels, g_win_w, 0, TOOLBAR_H, g_win_w, BORDER);
+    canvas.fill_rect(0, 0, g_win_w, TOOLBAR_H, TOOLBAR_BG);
+    canvas.hline(0, TOOLBAR_H, g_win_w, BORDER);
 
     // Search box geometry
     int sb_y = 8, sb_h = TOOLBAR_H - 16;
@@ -477,29 +436,28 @@ static void render(uint32_t* pixels) {
     int sb_w = g_win_w - sb_x - btn_gap - btn_w - 8;
     if (sb_w < 80) sb_w = 80;
 
-    px_fill(pixels, g_win_w, sb_x, sb_y, sb_w, sb_h, WHITE);
-    px_rect_outline(pixels, g_win_w, sb_x, sb_y, sb_w, sb_h, BORDER);
+    canvas.fill_rect(sb_x, sb_y, sb_w, sb_h, WHITE);
+    canvas.rect(sb_x, sb_y, sb_w, sb_h, BORDER);
 
     // Search box text + cursor
     if (g_font) {
         int ty = sb_y + (sb_h - FONT_SIZE) / 2;
-        g_font->draw_to_buffer(pixels, g_win_w, g_win_h,
-                               sb_x + 6, ty, g_query, TEXT_COLOR, FONT_SIZE);
+        draw_text(canvas, g_font, sb_x + 6, ty, g_query, TEXT_COLOR, FONT_SIZE);
         int qw = g_font->measure_text(g_query, FONT_SIZE);
         int cx = sb_x + 6 + qw + 1;
         if (cx < sb_x + sb_w - 4)
-            px_vline(pixels, g_win_w, cx, ty + 1, FONT_SIZE - 2, TEXT_COLOR);
+            canvas.vline(cx, ty + 1, FONT_SIZE - 2, TEXT_COLOR);
     }
 
     // Search button
     int btn_x = sb_x + sb_w + btn_gap;
-    px_fill(pixels, g_win_w, btn_x, sb_y, btn_w, sb_h, ACCENT);
+    canvas.fill_rect(btn_x, sb_y, btn_w, sb_h, ACCENT);
     if (g_font) {
         int stw = g_font->measure_text("Search", FONT_SIZE);
-        g_font->draw_to_buffer(pixels, g_win_w, g_win_h,
-                               btn_x + (btn_w - stw) / 2,
-                               sb_y + (sb_h - FONT_SIZE) / 2,
-                               "Search", WHITE, FONT_SIZE);
+        draw_text(canvas, g_font,
+                  btn_x + (btn_w - stw) / 2,
+                  sb_y + (sb_h - FONT_SIZE) / 2,
+                  "Search", WHITE, FONT_SIZE);
     }
 
     // ---- Content area ----
@@ -508,17 +466,14 @@ static void render(uint32_t* pixels) {
     if (!g_font) return;
 
     if (g_phase == AppPhase::IDLE) {
-        g_font->draw_to_buffer(pixels, g_win_w, g_win_h,
-            TEXT_PAD, cy + 16,
-            "Type a topic and press Enter or click Search.",
-            HINT_COLOR, FONT_SIZE);
+        draw_text(canvas, g_font, TEXT_PAD, cy + 16,
+                  "Type a topic and press Enter or click Search.",
+                  HINT_COLOR, FONT_SIZE);
     } else if (g_phase == AppPhase::LOADING) {
-        g_font->draw_to_buffer(pixels, g_win_w, g_win_h,
-            TEXT_PAD, cy + 16,
-            "Searching Wikipedia...", HINT_COLOR, FONT_SIZE);
+        draw_text(canvas, g_font, TEXT_PAD, cy + 16,
+                  "Searching Wikipedia...", HINT_COLOR, FONT_SIZE);
     } else if (g_phase == AppPhase::ERR) {
-        g_font->draw_to_buffer(pixels, g_win_w, g_win_h,
-            TEXT_PAD, cy + 16, g_status, CLOSE_BTN, FONT_SIZE);
+        draw_text(canvas, g_font, TEXT_PAD, cy + 16, g_status, CLOSE_BTN, FONT_SIZE);
     } else if (g_phase == AppPhase::DONE && g_line_count > 0) {
         int visible = ch / g_line_h;  // approximate using body line height
         int y       = cy + 8;
@@ -528,7 +483,7 @@ static void render(uint32_t* pixels) {
             int lh = g_font->get_line_height(l.font_size) + 4;
             if (y + lh > g_win_h) break;
             if (l.text[0] != '\0') {
-                l.font->draw_to_buffer(pixels, g_win_w, g_win_h,
+                l.font->draw_to_buffer(canvas.pixels, canvas.w, canvas.h,
                                        TEXT_PAD, y, l.text, l.color, l.font_size);
             }
             y += lh;
@@ -537,13 +492,12 @@ static void render(uint32_t* pixels) {
         // Scrollbar
         if (g_line_count > visible) {
             int sbx = g_win_w - SCROLLBAR_W;
-            px_fill(pixels, g_win_w, sbx, cy, SCROLLBAR_W, ch, SCROLLBAR_BG);
+            canvas.fill_rect(sbx, cy, SCROLLBAR_W, ch, SCROLLBAR_BG);
             int max_sc  = g_line_count - visible;
             int thumb_h = (visible * ch) / g_line_count;
             if (thumb_h < 20) thumb_h = 20;
             int thumb_y = cy + (g_scroll_y * (ch - thumb_h)) / (max_sc > 0 ? max_sc : 1);
-            px_fill(pixels, g_win_w, sbx + 2, thumb_y,
-                    SCROLLBAR_W - 4, thumb_h, SCROLLBAR_FG);
+            canvas.fill_rect(sbx + 2, thumb_y, SCROLLBAR_W - 4, thumb_h, SCROLLBAR_FG);
         }
     }
 }
@@ -576,30 +530,28 @@ extern "C" void _start() {
 
     apply_scale(montauk::win_getscale());
 
-    // Create window
-    Montauk::WinCreateResult wres;
-    if (montauk::win_create("Wikipedia", INIT_W, INIT_H, &wres) < 0 || wres.id < 0)
+    WsWindow win;
+    if (!win.create("Wikipedia", INIT_W, INIT_H))
         montauk::exit(1);
 
-    int      win_id = wres.id;
-    uint32_t* pixels = (uint32_t*)(uintptr_t)wres.pixelVa;
-
-    render(pixels);
-    montauk::win_present(win_id);
+    Canvas canvas = win.canvas();
+    render(canvas);
+    win.present();
 
     bool search_pending = false;
 
     while (true) {
         Montauk::WinEvent ev;
-        int r = montauk::win_poll(win_id, &ev);
+        int r = win.poll(&ev);
 
         if (r < 0) break;  // window closed / error
 
         if (r == 0) {
             // No event — idle at ~60 fps
             montauk::sleep_ms(16);
-            render(pixels);
-            montauk::win_present(win_id);
+            canvas = win.canvas();
+            render(canvas);
+            win.present();
             continue;
         }
 
@@ -607,24 +559,19 @@ extern "C" void _start() {
         if (ev.type == 3) break;  // close
 
         if (ev.type == 4) {
-            apply_scale(ev.scale.scale);
+            apply_scale(win.scale_factor);
             if (g_phase == AppPhase::DONE && g_line_count > 0) {
                 build_display_lines(g_title, g_extract_buf, g_extract_len);
             }
         }
 
         if (ev.type == 2) {
-            int new_w = ev.resize.w;
-            int new_h = ev.resize.h;
-            if (new_w > 0 && new_h > 0 && (new_w != g_win_w || new_h != g_win_h)) {
-                uint64_t new_va = montauk::win_resize(win_id, new_w, new_h);
-                if (new_va != 0) {
-                    pixels = (uint32_t*)(uintptr_t)new_va;
-                    g_win_w = new_w;
-                    g_win_h = new_h;
-                    if (g_phase == AppPhase::DONE && g_line_count > 0) {
-                        build_display_lines(g_title, g_extract_buf, g_extract_len);
-                    }
+            if (win.width > 0 && win.height > 0) {
+                g_win_w = win.width;
+                g_win_h = win.height;
+                canvas = win.canvas();
+                if (g_phase == AppPhase::DONE && g_line_count > 0) {
+                    build_display_lines(g_title, g_extract_buf, g_extract_len);
                 }
             }
 
@@ -684,15 +631,17 @@ extern "C" void _start() {
         if (search_pending && g_query[0] != '\0') {
             search_pending = false;
             g_phase = AppPhase::LOADING;
-            render(pixels);
-            montauk::win_present(win_id);
+            canvas = win.canvas();
+            render(canvas);
+            win.present();
             do_search(g_query);  // blocking
         }
 
-        render(pixels);
-        montauk::win_present(win_id);
+        canvas = win.canvas();
+        render(canvas);
+        win.present();
     }
 
-    montauk::win_destroy(win_id);
+    win.destroy();
     montauk::exit(0);
 }

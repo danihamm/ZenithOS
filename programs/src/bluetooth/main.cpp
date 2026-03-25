@@ -8,6 +8,7 @@
 #include <montauk/string.h>
 #include <montauk/heap.h>
 #include <gui/gui.hpp>
+#include <gui/standalone.hpp>
 #include <gui/truetype.hpp>
 
 extern "C" {
@@ -83,90 +84,6 @@ static int g_scroll = 0;
 // Status message
 static char g_status[80];
 static uint64_t g_status_time = 0;
-
-// ============================================================================
-// Pixel helpers
-// ============================================================================
-
-static void px_fill(uint32_t* px, int bw, int bh,
-                    int x, int y, int w, int h, Color c) {
-    uint32_t v = c.to_pixel();
-    int x0 = x < 0 ? 0 : x,   y0 = y < 0 ? 0 : y;
-    int x1 = x + w > bw ? bw : x + w;
-    int y1 = y + h > bh ? bh : y + h;
-    for (int row = y0; row < y1; row++)
-        for (int col = x0; col < x1; col++)
-            px[row * bw + col] = v;
-}
-
-static void px_fill_rounded(uint32_t* px, int bw, int bh,
-                             int x, int y, int w, int h, int r, Color c) {
-    uint32_t v = c.to_pixel();
-    for (int row = 0; row < h; row++) {
-        int dy = y + row;
-        if (dy < 0 || dy >= bh) continue;
-        for (int col = 0; col < w; col++) {
-            int dx = x + col;
-            if (dx < 0 || dx >= bw) continue;
-            bool skip = false;
-            int cx2, cy2;
-            if (col < r && row < r) { cx2 = r - col - 1; cy2 = r - row - 1; if (cx2*cx2 + cy2*cy2 >= r*r) skip = true; }
-            else if (col >= w - r && row < r) { cx2 = col - (w - r); cy2 = r - row - 1; if (cx2*cx2 + cy2*cy2 >= r*r) skip = true; }
-            else if (col < r && row >= h - r) { cx2 = r - col - 1; cy2 = row - (h - r); if (cx2*cx2 + cy2*cy2 >= r*r) skip = true; }
-            else if (col >= w - r && row >= h - r) { cx2 = col - (w - r); cy2 = row - (h - r); if (cx2*cx2 + cy2*cy2 >= r*r) skip = true; }
-            if (!skip) px[dy * bw + dx] = v;
-        }
-    }
-}
-
-static void px_hline(uint32_t* px, int bw, int bh, int x, int y, int w, Color c) {
-    if (y < 0 || y >= bh) return;
-    uint32_t v = c.to_pixel();
-    int x0 = x < 0 ? 0 : x;
-    int x1 = x + w > bw ? bw : x + w;
-    for (int col = x0; col < x1; col++)
-        px[y * bw + col] = v;
-}
-
-static void px_circle(uint32_t* px, int bw, int bh,
-                      int cx, int cy, int r, Color c) {
-    uint32_t v = c.to_pixel();
-    for (int dy = -r; dy <= r; dy++) {
-        int py = cy + dy;
-        if (py < 0 || py >= bh) continue;
-        for (int dx = -r; dx <= r; dx++) {
-            int ppx = cx + dx;
-            if (ppx < 0 || ppx >= bw) continue;
-            if (dx * dx + dy * dy <= r * r)
-                px[py * bw + ppx] = v;
-        }
-    }
-}
-
-static void px_text(uint32_t* px, int bw, int bh,
-                    int x, int y, const char* text, Color c, int size = FONT_SIZE) {
-    if (g_font)
-        g_font->draw_to_buffer(px, bw, bh, x, y, text, c, size);
-}
-
-static int text_w(const char* text, int size = FONT_SIZE) {
-    return g_font ? g_font->measure_text(text, size) : 0;
-}
-
-static int font_h(int size = FONT_SIZE) {
-    if (!g_font) return 14;
-    auto* cache = g_font->get_cache(size);
-    return cache->ascent - cache->descent;
-}
-
-static void px_button(uint32_t* px, int bw, int bh,
-                      int x, int y, int w, int h,
-                      const char* label, Color bg, Color fg, int r = BTN_RAD) {
-    px_fill_rounded(px, bw, bh, x, y, w, h, r, bg);
-    int tw = text_w(label, FONT_SIZE_SM);
-    int fh = font_h(FONT_SIZE_SM);
-    px_text(px, bw, bh, x + (w - tw) / 2, y + (h - fh) / 2 - 1, label, fg, FONT_SIZE_SM);
-}
 
 // ============================================================================
 // Bluetooth helpers
@@ -283,33 +200,33 @@ static const char* rssi_bar(int8_t rssi) {
 // Render
 // ============================================================================
 
-static void render(uint32_t* pixels) {
+static void render(Canvas& canvas) {
     int W = g_win_w;
     int H = g_win_h;
 
     // Background
-    px_fill(pixels, W, H, 0, 0, W, H, BG_COLOR);
+    canvas.fill(BG_COLOR);
 
     // Tab bar
     int tab_y = 0;
-    px_fill(pixels, W, H, 0, tab_y, W, TAB_H, TAB_BG);
-    px_hline(pixels, W, H, 0, tab_y + TAB_H - 1, W, BORDER);
+    canvas.fill_rect(0, tab_y, W, TAB_H, TAB_BG);
+    canvas.hline(0, tab_y + TAB_H - 1, W, BORDER);
 
     int tab_w = W / 2;
     const char* tab_labels[] = { "Devices", "Scan" };
     for (int i = 0; i < 2; i++) {
         // Active tab gets white background to merge with content area
         if (g_tab == i)
-            px_fill(pixels, W, H, i * tab_w, tab_y, tab_w, TAB_H, BG_COLOR);
+            canvas.fill_rect(i * tab_w, tab_y, tab_w, TAB_H, BG_COLOR);
 
         Color tc = (g_tab == i) ? TAB_ACTIVE : TAB_INACTIVE;
-        int tw = text_w(tab_labels[i], FONT_SIZE);
+        int tw = text_width(g_font, tab_labels[i], FONT_SIZE);
         int tx = i * tab_w + (tab_w - tw) / 2;
-        px_text(pixels, W, H, tx, tab_y + (TAB_H - font_h(FONT_SIZE)) / 2,
-                tab_labels[i], tc, FONT_SIZE);
+        draw_text(canvas, g_font, tx, tab_y + (TAB_H - text_height(g_font, FONT_SIZE)) / 2,
+                  tab_labels[i], tc, FONT_SIZE);
         // Active indicator underline
         if (g_tab == i) {
-            px_fill(pixels, W, H, i * tab_w + 4, tab_y + TAB_H - 3, tab_w - 8, 3, TAB_ACTIVE);
+            canvas.fill_rect(i * tab_w + 4, tab_y + TAB_H - 3, tab_w - 8, 3, TAB_ACTIVE);
         }
     }
 
@@ -323,9 +240,10 @@ static void render(uint32_t* pixels) {
         // Connected devices list
         if (g_device_count == 0) {
             const char* msg = "No connected devices";
-            int mw = text_w(msg, FONT_SIZE);
-            px_text(pixels, W, H, (W - mw) / 2, content_y + list_h / 2 - font_h(FONT_SIZE) / 2,
-                    msg, DIM_TEXT, FONT_SIZE);
+            int mw = text_width(g_font, msg, FONT_SIZE);
+            draw_text(canvas, g_font,
+                      (W - mw) / 2, content_y + list_h / 2 - text_height(g_font, FONT_SIZE) / 2,
+                      msg, DIM_TEXT, FONT_SIZE);
         } else {
             for (int i = 0; i < g_device_count; i++) {
                 int ry = content_y + i * ROW_H - g_scroll;
@@ -333,32 +251,31 @@ static void render(uint32_t* pixels) {
 
                 // Hover highlight
                 if (g_hover_row == i)
-                    px_fill(pixels, W, H, 0, ry, W, ROW_H, ROW_HOVER);
+                    canvas.fill_rect(0, ry, W, ROW_H, ROW_HOVER);
 
                 // Connected indicator dot
                 Color dot_c = g_devices[i].connected ? GREEN : DIM_TEXT;
-                px_circle(pixels, W, H, PAD + 6, ry + ROW_H / 2, 5, dot_c);
+                fill_circle(canvas, PAD + 6, ry + ROW_H / 2, 5, dot_c);
 
                 // Device name
-                px_text(pixels, W, H, PAD + 20, ry + 8,
-                        g_device_names[i], TEXT_COLOR, FONT_SIZE);
+                draw_text(canvas, g_font, PAD + 20, ry + 8, g_device_names[i], TEXT_COLOR, FONT_SIZE);
 
                 // Address below name
                 char addr_str[24];
                 format_addr(addr_str, sizeof(addr_str), g_devices[i].bdAddr);
-                px_text(pixels, W, H, PAD + 20, ry + 8 + font_h(FONT_SIZE) + 2,
-                        addr_str, DIM_TEXT, FONT_SIZE_SM);
+                draw_text(canvas, g_font, PAD + 20, ry + 8 + text_height(g_font, FONT_SIZE) + 2,
+                          addr_str, DIM_TEXT, FONT_SIZE_SM);
 
                 // Disconnect button
                 if (g_devices[i].connected) {
                     int bx = W - PAD - BTN_W;
                     int by = ry + (ROW_H - BTN_H) / 2;
-                    px_button(pixels, W, H, bx, by, BTN_W, BTN_H,
-                              "Disconnect", RED, WHITE);
+                    draw_button(canvas, g_font, bx, by, BTN_W, BTN_H,
+                                "Disconnect", RED, WHITE, BTN_RAD, FONT_SIZE_SM);
                 }
 
                 // Divider
-                px_hline(pixels, W, H, PAD, ry + ROW_H - 1, W - 2 * PAD, BORDER);
+                canvas.hline(PAD, ry + ROW_H - 1, W - 2 * PAD, BORDER);
             }
         }
     } else {
@@ -368,11 +285,11 @@ static void render(uint32_t* pixels) {
         int scan_btn_w = 100;
         int scan_btn_x = (W - scan_btn_w) / 2;
         if (g_scanning) {
-            px_button(pixels, W, H, scan_btn_x, scan_btn_y, scan_btn_w, BTN_H,
-                      "Scanning...", BORDER, DIM_TEXT);
+            draw_button(canvas, g_font, scan_btn_x, scan_btn_y, scan_btn_w, BTN_H,
+                        "Scanning...", BORDER, DIM_TEXT, BTN_RAD, FONT_SIZE_SM);
         } else {
-            px_button(pixels, W, H, scan_btn_x, scan_btn_y, scan_btn_w, BTN_H,
-                      "Scan", ACCENT, WHITE);
+            draw_button(canvas, g_font, scan_btn_x, scan_btn_y, scan_btn_w, BTN_H,
+                        "Scan", ACCENT, WHITE, BTN_RAD, FONT_SIZE_SM);
         }
 
         int list_top = scan_btn_y + BTN_H + 12;
@@ -380,9 +297,10 @@ static void render(uint32_t* pixels) {
 
         if (g_scan_count == 0 && !g_scanning) {
             const char* msg = "Press Scan to find devices";
-            int mw = text_w(msg, FONT_SIZE);
-            px_text(pixels, W, H, (W - mw) / 2, list_top + scan_list_h / 2 - font_h(FONT_SIZE) / 2,
-                    msg, DIM_TEXT, FONT_SIZE);
+            int mw = text_width(g_font, msg, FONT_SIZE);
+            draw_text(canvas, g_font,
+                      (W - mw) / 2, list_top + scan_list_h / 2 - text_height(g_font, FONT_SIZE) / 2,
+                      msg, DIM_TEXT, FONT_SIZE);
         } else {
             for (int i = 0; i < g_scan_count; i++) {
                 int ry = list_top + i * ROW_H - g_scroll;
@@ -390,16 +308,15 @@ static void render(uint32_t* pixels) {
 
                 // Hover highlight
                 if (g_hover_row == i)
-                    px_fill(pixels, W, H, 0, ry, W, ROW_H, ROW_HOVER);
+                    canvas.fill_rect(0, ry, W, ROW_H, ROW_HOVER);
 
                 // Device type indicator
                 const char* type_str = device_class_str(g_scan[i].classOfDevice);
-                px_circle(pixels, W, H, PAD + 6, ry + ROW_H / 2, 5, ACCENT);
+                fill_circle(canvas, PAD + 6, ry + ROW_H / 2, 5, ACCENT);
 
                 // Device name (or address if unnamed)
                 const char* display_name = g_scan[i].name[0] ? g_scan[i].name : "Unknown Device";
-                px_text(pixels, W, H, PAD + 20, ry + 4,
-                        display_name, TEXT_COLOR, FONT_SIZE);
+                draw_text(canvas, g_font, PAD + 20, ry + 4, display_name, TEXT_COLOR, FONT_SIZE);
 
                 // Type + signal below name
                 char detail[80];
@@ -407,35 +324,35 @@ static void render(uint32_t* pixels) {
                 format_addr(addr_str, sizeof(addr_str), g_scan[i].bdAddr);
                 snprintf(detail, sizeof(detail), "%s  |  %s  |  %s",
                          type_str, addr_str, rssi_bar(g_scan[i].rssi));
-                px_text(pixels, W, H, PAD + 20, ry + 4 + font_h(FONT_SIZE) + 2,
-                        detail, DIM_TEXT, FONT_SIZE_SM);
+                draw_text(canvas, g_font, PAD + 20, ry + 4 + text_height(g_font, FONT_SIZE) + 2,
+                          detail, DIM_TEXT, FONT_SIZE_SM);
 
                 // Connect/Disconnect button
                 bool conn = is_connected(g_scan[i].bdAddr);
                 int bx = W - PAD - BTN_W;
                 int by = ry + (ROW_H - BTN_H) / 2;
                 if (conn) {
-                    px_button(pixels, W, H, bx, by, BTN_W, BTN_H,
-                              "Disconnect", RED, WHITE);
+                    draw_button(canvas, g_font, bx, by, BTN_W, BTN_H,
+                                "Disconnect", RED, WHITE, BTN_RAD, FONT_SIZE_SM);
                 } else {
-                    px_button(pixels, W, H, bx, by, BTN_W, BTN_H,
-                              "Connect", ACCENT, WHITE);
+                    draw_button(canvas, g_font, bx, by, BTN_W, BTN_H,
+                                "Connect", ACCENT, WHITE, BTN_RAD, FONT_SIZE_SM);
                 }
 
                 // Divider
-                px_hline(pixels, W, H, PAD, ry + ROW_H - 1, W - 2 * PAD, BORDER);
+                canvas.hline(PAD, ry + ROW_H - 1, W - 2 * PAD, BORDER);
             }
         }
     }
 
     // Status bar
     int status_y = H - STATUS_H;
-    px_fill(pixels, W, H, 0, status_y, W, STATUS_H, TAB_BG);
-    px_hline(pixels, W, H, 0, status_y, W, BORDER);
+    canvas.fill_rect(0, status_y, W, STATUS_H, TAB_BG);
+    canvas.hline(0, status_y, W, BORDER);
 
     // Status bar content: adapter info on the left, status message on the right
     uint64_t now = montauk::get_milliseconds();
-    int sy = status_y + (STATUS_H - font_h(FONT_SIZE_SM)) / 2;
+    int sy = status_y + (STATUS_H - text_height(g_font, FONT_SIZE_SM)) / 2;
 
     if (g_adapter_ok) {
         char adapter_info[96];
@@ -444,15 +361,15 @@ static void render(uint32_t* pixels) {
         const char* name = g_adapter.name[0] ? g_adapter.name : "Adapter";
         snprintf(adapter_info, sizeof(adapter_info), "%s  |  %s  |  %d connected",
                  name, addr_str, g_device_count);
-        px_text(pixels, W, H, PAD, sy, adapter_info, DIM_TEXT, FONT_SIZE_SM);
+        draw_text(canvas, g_font, PAD, sy, adapter_info, DIM_TEXT, FONT_SIZE_SM);
     } else {
-        px_text(pixels, W, H, PAD, sy, "No adapter found", RED, FONT_SIZE_SM);
+        draw_text(canvas, g_font, PAD, sy, "No adapter found", RED, FONT_SIZE_SM);
     }
 
     // Temporary status message (right-aligned, fades after 5s)
     if (g_status[0] && (now - g_status_time) < 5000) {
-        int sw = text_w(g_status, FONT_SIZE_SM);
-        px_text(pixels, W, H, W - PAD - sw, sy, g_status, DIM_TEXT, FONT_SIZE_SM);
+        int sw = text_width(g_font, g_status, FONT_SIZE_SM);
+        draw_text(canvas, g_font, W - PAD - sw, sy, g_status, DIM_TEXT, FONT_SIZE_SM);
     }
 }
 
@@ -569,34 +486,34 @@ extern "C" void _start() {
     refresh_devices();
     g_status[0] = 0;
 
-    // Create window
-    Montauk::WinCreateResult wres;
-    if (montauk::win_create("Bluetooth", WIN_W, WIN_H, &wres) < 0 || wres.id < 0)
+    WsWindow win;
+    if (!win.create("Bluetooth", WIN_W, WIN_H))
         montauk::exit(1);
 
-    int win_id = wres.id;
-    uint32_t* pixels = (uint32_t*)(uintptr_t)wres.pixelVa;
+    Canvas canvas = win.canvas();
 
-    render(pixels);
-    montauk::win_present(win_id);
+    render(canvas);
+    win.present();
 
     // Periodic refresh timer
     uint64_t last_refresh = montauk::get_milliseconds();
 
     while (true) {
         Montauk::WinEvent ev;
-        int r = montauk::win_poll(win_id, &ev);
+        int r = win.poll(&ev);
 
         if (r < 0) break;
 
         // Handle pending scan (non-blocking: kick it off after render)
         if (g_scanning) {
-            render(pixels);
-            montauk::win_present(win_id);
+            canvas = win.canvas();
+            render(canvas);
+            win.present();
             finish_scan();
             refresh_devices();
-            render(pixels);
-            montauk::win_present(win_id);
+            canvas = win.canvas();
+            render(canvas);
+            win.present();
             continue;
         }
 
@@ -607,8 +524,9 @@ extern "C" void _start() {
                 refresh_adapter();
                 refresh_devices();
                 last_refresh = now;
-                render(pixels);
-                montauk::win_present(win_id);
+                canvas = win.canvas();
+                render(canvas);
+                win.present();
             }
             montauk::sleep_ms(16);
             continue;
@@ -620,9 +538,8 @@ extern "C" void _start() {
 
         // Resize
         if (ev.type == 2) {
-            g_win_w = ev.resize.w;
-            g_win_h = ev.resize.h;
-            pixels = (uint32_t*)(uintptr_t)montauk::win_resize(win_id, g_win_w, g_win_h);
+            g_win_w = win.width;
+            g_win_h = win.height;
             redraw = true;
         }
 
@@ -660,11 +577,12 @@ extern "C" void _start() {
         }
 
         if (redraw) {
-            render(pixels);
-            montauk::win_present(win_id);
+            canvas = win.canvas();
+            render(canvas);
+            win.present();
         }
     }
 
-    montauk::win_destroy(win_id);
+    win.destroy();
     montauk::exit(0);
 }

@@ -8,6 +8,7 @@
 #include <montauk/string.h>
 #include <montauk/heap.h>
 #include <gui/gui.hpp>
+#include <gui/standalone.hpp>
 #include <gui/truetype.hpp>
 
 extern "C" {
@@ -27,21 +28,17 @@ static constexpr int FONT_SIZE    = 16;
 static constexpr int FONT_SIZE_LG = 28;
 
 static constexpr int SLIDER_X     = 24;
-static constexpr int SLIDER_W     = WIN_W - 48;
 static constexpr int SLIDER_Y     = 78;
 static constexpr int SLIDER_H     = 8;
 static constexpr int KNOB_R       = 10;
 
 static constexpr int BTN_W        = 48;
 static constexpr int BTN_H        = 28;
-static constexpr int BTN_Y        = 118;
 static constexpr int BTN_RAD      = 6;
 
 static constexpr Color BG_COLOR     = Color::from_rgb(0xFF, 0xFF, 0xFF);
 static constexpr Color TEXT_COLOR   = Color::from_rgb(0x22, 0x22, 0x22);
-static constexpr Color DIM_TEXT     = Color::from_rgb(0x66, 0x66, 0x66);
 static constexpr Color ACCENT       = Color::from_rgb(0x36, 0x7B, 0xF0);
-static constexpr Color ACCENT_HOVER = Color::from_rgb(0x2A, 0x62, 0xC8);
 static constexpr Color TRACK_BG     = Color::from_rgb(0xDD, 0xDD, 0xDD);
 static constexpr Color WHITE        = Color::from_rgb(0xFF, 0xFF, 0xFF);
 static constexpr Color MUTE_COLOR   = Color::from_rgb(0xCC, 0x33, 0x33);
@@ -51,94 +48,12 @@ static constexpr Color MUTE_COLOR   = Color::from_rgb(0xCC, 0x33, 0x33);
 // ============================================================================
 
 static TrueTypeFont* g_font = nullptr;
+static int g_win_w = WIN_W;
+static int g_win_h = WIN_H;
 static int g_volume = 80;
 static bool g_muted = false;
 static int g_pre_mute_vol = 80;
 static bool g_dragging = false;
-
-// ============================================================================
-// Pixel helpers (same pattern as disks app)
-// ============================================================================
-
-static void px_fill(uint32_t* px, int bw, int bh,
-                    int x, int y, int w, int h, Color c) {
-    uint32_t v = c.to_pixel();
-    int x0 = x < 0 ? 0 : x,   y0 = y < 0 ? 0 : y;
-    int x1 = x + w > bw ? bw : x + w;
-    int y1 = y + h > bh ? bh : y + h;
-    for (int row = y0; row < y1; row++)
-        for (int col = x0; col < x1; col++)
-            px[row * bw + col] = v;
-}
-
-static void px_hline(uint32_t* px, int bw, int bh, int x, int y, int w, Color c) {
-    if (y < 0 || y >= bh) return;
-    uint32_t v = c.to_pixel();
-    int x0 = x < 0 ? 0 : x;
-    int x1 = x + w > bw ? bw : x + w;
-    for (int col = x0; col < x1; col++)
-        px[y * bw + col] = v;
-}
-
-static void px_fill_rounded(uint32_t* px, int bw, int bh,
-                             int x, int y, int w, int h, int r, Color c) {
-    uint32_t v = c.to_pixel();
-    for (int row = 0; row < h; row++) {
-        int dy = y + row;
-        if (dy < 0 || dy >= bh) continue;
-        for (int col = 0; col < w; col++) {
-            int dx = x + col;
-            if (dx < 0 || dx >= bw) continue;
-            bool skip = false;
-            int cx, cy;
-            if (col < r && row < r) { cx = r - col - 1; cy = r - row - 1; if (cx*cx + cy*cy >= r*r) skip = true; }
-            else if (col >= w - r && row < r) { cx = col - (w - r); cy = r - row - 1; if (cx*cx + cy*cy >= r*r) skip = true; }
-            else if (col < r && row >= h - r) { cx = r - col - 1; cy = row - (h - r); if (cx*cx + cy*cy >= r*r) skip = true; }
-            else if (col >= w - r && row >= h - r) { cx = col - (w - r); cy = row - (h - r); if (cx*cx + cy*cy >= r*r) skip = true; }
-            if (!skip) px[dy * bw + dx] = v;
-        }
-    }
-}
-
-static void px_circle(uint32_t* px, int bw, int bh,
-                      int cx, int cy, int r, Color c) {
-    uint32_t v = c.to_pixel();
-    for (int dy = -r; dy <= r; dy++) {
-        int py = cy + dy;
-        if (py < 0 || py >= bh) continue;
-        for (int dx = -r; dx <= r; dx++) {
-            int ppx = cx + dx;
-            if (ppx < 0 || ppx >= bw) continue;
-            if (dx * dx + dy * dy <= r * r)
-                px[py * bw + ppx] = v;
-        }
-    }
-}
-
-static void px_text(uint32_t* px, int bw, int bh,
-                    int x, int y, const char* text, Color c, int size = FONT_SIZE) {
-    if (g_font)
-        g_font->draw_to_buffer(px, bw, bh, x, y, text, c, size);
-}
-
-static int text_w(const char* text, int size = FONT_SIZE) {
-    return g_font ? g_font->measure_text(text, size) : 0;
-}
-
-static int font_h(int size = FONT_SIZE) {
-    if (!g_font) return 16;
-    auto* cache = g_font->get_cache(size);
-    return cache->ascent - cache->descent;
-}
-
-static void px_button(uint32_t* px, int bw, int bh,
-                      int x, int y, int w, int h,
-                      const char* label, Color bg, Color fg, int r) {
-    px_fill_rounded(px, bw, bh, x, y, w, h, r, bg);
-    int tw = text_w(label);
-    int fh = font_h();
-    px_text(px, bw, bh, x + (w - tw) / 2, y + (h - fh) / 2, label, fg);
-}
 
 // ============================================================================
 // Volume helpers
@@ -157,61 +72,79 @@ static void refresh_volume() {
 }
 
 // ============================================================================
+// Layout helpers
+// ============================================================================
+
+static int slider_w() {
+    return g_win_w - 48;
+}
+
+static int button_y() {
+    return g_win_h - BTN_H - 18;
+}
+
+static void get_button_rects(Rect* minus_btn, Rect* plus_btn, Rect* mute_btn) {
+    int total_btn_w = BTN_W * 2 + 60 + 12 * 2;
+    int bx = (g_win_w - total_btn_w) / 2;
+    int by = button_y();
+    if (minus_btn) *minus_btn = {bx, by, BTN_W, BTN_H};
+    bx += BTN_W + 12;
+    if (plus_btn) *plus_btn = {bx, by, BTN_W, BTN_H};
+    bx += BTN_W + 12;
+    if (mute_btn) *mute_btn = {bx, by, 60, BTN_H};
+}
+
+// ============================================================================
 // Render
 // ============================================================================
 
-static void render(uint32_t* pixels) {
-    int fh_lg = font_h(FONT_SIZE_LG);
+static void render(Canvas& canvas) {
+    int fh_lg = text_height(g_font, FONT_SIZE_LG);
+    int slider_fill_w = slider_w();
 
     // Background
-    px_fill(pixels, WIN_W, WIN_H, 0, 0, WIN_W, WIN_H, BG_COLOR);
+    canvas.fill(BG_COLOR);
 
     // Volume percentage (large, centered)
     char vol_str[8];
     snprintf(vol_str, sizeof(vol_str), "%d%%", g_muted ? 0 : g_volume);
-    int vw = text_w(vol_str, FONT_SIZE_LG);
+    int vw = text_width(g_font, vol_str, FONT_SIZE_LG);
     Color vol_color = g_muted ? MUTE_COLOR : ACCENT;
-    px_text(pixels, WIN_W, WIN_H, (WIN_W - vw) / 2, 20, vol_str, vol_color, FONT_SIZE_LG);
+    draw_text(canvas, g_font, (g_win_w - vw) / 2, 20, vol_str, vol_color, FONT_SIZE_LG);
 
     // "Muted" label
     if (g_muted) {
         const char* muted_label = "Muted";
-        int mw = text_w(muted_label);
-        px_text(pixels, WIN_W, WIN_H, (WIN_W - mw) / 2,
-                20 + fh_lg + 4, muted_label, MUTE_COLOR);
+        int mw = text_width(g_font, muted_label, FONT_SIZE);
+        draw_text(canvas, g_font, (g_win_w - mw) / 2,
+                  20 + fh_lg + 4, muted_label, MUTE_COLOR, FONT_SIZE);
     }
 
     // Slider track
-    px_fill_rounded(pixels, WIN_W, WIN_H, SLIDER_X, SLIDER_Y, SLIDER_W, SLIDER_H, 4, TRACK_BG);
+    canvas.fill_rounded_rect(SLIDER_X, SLIDER_Y, slider_fill_w, SLIDER_H, 4, TRACK_BG);
 
     // Filled portion
-    int display_vol = g_muted ? 0 : g_volume;
-    int fill_w = (display_vol * SLIDER_W) / 100;
+    int fill_w = ((g_muted ? 0 : g_volume) * slider_fill_w) / 100;
     if (fill_w > 0)
-        px_fill_rounded(pixels, WIN_W, WIN_H, SLIDER_X, SLIDER_Y, fill_w, SLIDER_H, 4, ACCENT);
+        canvas.fill_rounded_rect(SLIDER_X, SLIDER_Y, fill_w, SLIDER_H, 4, ACCENT);
 
     // Knob
     int knob_x = SLIDER_X + fill_w;
     int knob_y = SLIDER_Y + SLIDER_H / 2;
-    px_circle(pixels, WIN_W, WIN_H, knob_x, knob_y, KNOB_R, ACCENT);
-    px_circle(pixels, WIN_W, WIN_H, knob_x, knob_y, KNOB_R - 3, WHITE);
+    fill_circle(canvas, knob_x, knob_y, KNOB_R, ACCENT);
+    fill_circle(canvas, knob_x, knob_y, KNOB_R - 3, WHITE);
 
     // Buttons: [-] and [+] and [Mute]
-    int total_btn_w = BTN_W * 2 + 60 + 12 * 2;  // minus, plus, mute + gaps
-    int bx = (WIN_W - total_btn_w) / 2;
-
-    px_button(pixels, WIN_W, WIN_H, bx, BTN_Y, BTN_W, BTN_H,
-              "-", Color::from_rgb(0xE0, 0xE0, 0xE0), TEXT_COLOR, BTN_RAD);
-    bx += BTN_W + 12;
-
-    px_button(pixels, WIN_W, WIN_H, bx, BTN_Y, BTN_W, BTN_H,
-              "+", Color::from_rgb(0xE0, 0xE0, 0xE0), TEXT_COLOR, BTN_RAD);
-    bx += BTN_W + 12;
-
+    Rect minus_btn, plus_btn, mute_btn;
+    get_button_rects(&minus_btn, &plus_btn, &mute_btn);
+    draw_button(canvas, g_font, minus_btn.x, minus_btn.y, minus_btn.w, minus_btn.h,
+                "-", Color::from_rgb(0xE0, 0xE0, 0xE0), TEXT_COLOR, BTN_RAD, FONT_SIZE);
+    draw_button(canvas, g_font, plus_btn.x, plus_btn.y, plus_btn.w, plus_btn.h,
+                "+", Color::from_rgb(0xE0, 0xE0, 0xE0), TEXT_COLOR, BTN_RAD, FONT_SIZE);
     Color mute_bg = g_muted ? MUTE_COLOR : Color::from_rgb(0xE0, 0xE0, 0xE0);
     Color mute_fg = g_muted ? WHITE : TEXT_COLOR;
-    px_button(pixels, WIN_W, WIN_H, bx, BTN_Y, 60, BTN_H,
-              "Mute", mute_bg, mute_fg, BTN_RAD);
+    draw_button(canvas, g_font, mute_btn.x, mute_btn.y, mute_btn.w, mute_btn.h,
+                "Mute", mute_bg, mute_fg, BTN_RAD, FONT_SIZE);
 }
 
 // ============================================================================
@@ -219,7 +152,7 @@ static void render(uint32_t* pixels) {
 // ============================================================================
 
 static int vol_from_slider_x(int mx) {
-    int v = ((mx - SLIDER_X) * 100) / SLIDER_W;
+    int v = ((mx - SLIDER_X) * 100) / slider_w();
     if (v < 0) v = 0;
     if (v > 100) v = 100;
     return v;
@@ -228,7 +161,7 @@ static int vol_from_slider_x(int mx) {
 static bool handle_click(int mx, int my) {
     // Slider area (generous vertical hit zone)
     if (my >= SLIDER_Y - KNOB_R && my <= SLIDER_Y + SLIDER_H + KNOB_R &&
-        mx >= SLIDER_X - KNOB_R && mx <= SLIDER_X + SLIDER_W + KNOB_R) {
+        mx >= SLIDER_X - KNOB_R && mx <= SLIDER_X + slider_w() + KNOB_R) {
         g_muted = false;
         apply_volume(vol_from_slider_x(mx));
         g_dragging = true;
@@ -236,28 +169,27 @@ static bool handle_click(int mx, int my) {
     }
 
     // Buttons
-    int total_btn_w = BTN_W * 2 + 60 + 12 * 2;
-    int bx = (WIN_W - total_btn_w) / 2;
+    Rect minus_btn, plus_btn, mute_btn;
+    get_button_rects(&minus_btn, &plus_btn, &mute_btn);
 
-    if (my >= BTN_Y && my < BTN_Y + BTN_H) {
+    int by = button_y();
+    if (my >= by && my < by + BTN_H) {
         // [-] button
-        if (mx >= bx && mx < bx + BTN_W) {
+        if (minus_btn.contains(mx, my)) {
             g_muted = false;
             apply_volume(g_volume - 5);
             return true;
         }
-        bx += BTN_W + 12;
 
         // [+] button
-        if (mx >= bx && mx < bx + BTN_W) {
+        if (plus_btn.contains(mx, my)) {
             g_muted = false;
             apply_volume(g_volume + 5);
             return true;
         }
-        bx += BTN_W + 12;
 
         // [Mute] button
-        if (mx >= bx && mx < bx + 60) {
+        if (mute_btn.contains(mx, my)) {
             if (g_muted) {
                 g_muted = false;
                 apply_volume(g_pre_mute_vol);
@@ -291,19 +223,22 @@ extern "C" void _start() {
     refresh_volume();
 
     // Create window
-    Montauk::WinCreateResult wres;
-    if (montauk::win_create("Volume", WIN_W, WIN_H, &wres) < 0 || wres.id < 0)
+    WsWindow win;
+    if (!win.create("Volume", WIN_W, WIN_H))
         montauk::exit(1);
 
-    int win_id = wres.id;
-    uint32_t* pixels = (uint32_t*)(uintptr_t)wres.pixelVa;
+    g_win_w = win.width;
+    g_win_h = win.height;
 
-    render(pixels);
-    montauk::win_present(win_id);
+    {
+        Canvas canvas = win.canvas();
+        render(canvas);
+    }
+    win.present();
 
-    while (true) {
+    while (win.id >= 0 && !win.closed) {
         Montauk::WinEvent ev;
-        int r = montauk::win_poll(win_id, &ev);
+        int r = win.poll(&ev);
 
         if (r < 0) break;
         if (r == 0) { montauk::sleep_ms(16); continue; }
@@ -311,6 +246,11 @@ extern "C" void _start() {
         bool redraw = false;
 
         if (ev.type == 3) break; // close
+        if (ev.type == 2) {
+            g_win_w = win.width;
+            g_win_h = win.height;
+            redraw = true;
+        }
 
         // Keyboard
         if (ev.type == 0 && ev.key.pressed) {
@@ -358,11 +298,12 @@ extern "C" void _start() {
         }
 
         if (redraw) {
-            render(pixels);
-            montauk::win_present(win_id);
+            Canvas canvas = win.canvas();
+            render(canvas);
+            win.present();
         }
     }
 
-    montauk::win_destroy(win_id);
+    win.destroy();
     montauk::exit(0);
 }
