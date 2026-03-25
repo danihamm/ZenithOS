@@ -25,6 +25,7 @@ extern "C" void _start() {
         }
     } else {
         montauk::print("usage: rm [file]\n");
+        montauk::exit(-1);
     }
 
     montauk::exit(0);
