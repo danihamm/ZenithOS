@@ -11,21 +11,24 @@ extern "C" void _start() {
     char args[256];
     montauk::getargs((char *)&args, 256);
 
-    if (*args) {
-        const char* arg = montauk::skip_spaces((const char *)&args);
-        int fd = montauk::open(arg);
-        montauk::close(fd);
-
-        if (fd >= 0) { /* file already exists */
-            montauk::exit(0);
-        } else {
-            int fd = montauk::fcreate(arg);
-            montauk::close(fd);
-
-            montauk::exit(0);
-        }
-    } else {
+    const char* path = montauk::skip_spaces((const char *)&args);
+    if (*path == '\0') {
         montauk::print("usage: touch [filename]\n");
         montauk::exit(-1);
     }
+
+    int fd = montauk::open(path);
+    if (fd >= 0) {
+        montauk::close(fd);
+        montauk::exit(0);
+    }
+
+    fd = montauk::fcreate(path);
+    if (fd < 0) {
+        montauk::print("touch: failed to create file\n");
+        montauk::exit(-1);
+    }
+
+    montauk::close(fd);
+    montauk::exit(0);
 }

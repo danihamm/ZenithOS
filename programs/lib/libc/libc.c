@@ -13,6 +13,7 @@
 #include <stdlib.h>
 #include <math.h>
 #include <fcntl.h>
+#include <errno.h>
 #include <sys/stat.h>
 
 /* ========================================================================
@@ -96,6 +97,8 @@ static inline long _zos_syscall4(long nr, long a1, long a2, long a3, long a4) {
 #define SYS_FDELETE 77
 #define SYS_FMKDIR  78
 #define SYS_FRENAME 94
+#define SYS_GETCWD  95
+#define SYS_CHDIR   96
 
 /* ========================================================================
    errno
@@ -1393,6 +1396,30 @@ long lseek(int fd, long offset, int whence) {
     if (fd >= 0 && fd < _FD_POS_MAX)
         _fd_pos[fd] = newpos;
     return (long)newpos;
+}
+
+int chdir(const char *path) {
+    if (path == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+    if ((int)_zos_syscall1(SYS_CHDIR, (long)path) < 0) {
+        errno = ENOENT;
+        return -1;
+    }
+    return 0;
+}
+
+char *getcwd(char *buf, size_t size) {
+    if (buf == NULL || size == 0) {
+        errno = EINVAL;
+        return NULL;
+    }
+    if ((int)_zos_syscall2(SYS_GETCWD, (long)buf, (long)size) < 0) {
+        errno = ERANGE;
+        return NULL;
+    }
+    return buf;
 }
 
 /* ========================================================================

@@ -11,20 +11,14 @@ extern "C" void _start() {
     char args[256];
     montauk::getargs((char *)&args, 256);
 
-    if (*args) {
-        const char* arg = montauk::skip_spaces((const char *)&args);
-        
-        if (*arg != '\0') {
-            int fd = montauk::open(arg);
-            if (fd < 0) {
-                montauk::print("file not found\n");
-            } else {
-                montauk::close(fd);
-                montauk::fdelete(arg);
-            }
-        }
-    } else {
+    const char* path = montauk::skip_spaces((const char *)&args);
+    if (*path == '\0') {
         montauk::print("usage: rm [file]\n");
+        montauk::exit(-1);
+    }
+
+    if (montauk::fdelete(path) < 0) {
+        montauk::print("rm: failed to remove file\n");
         montauk::exit(-1);
     }
 

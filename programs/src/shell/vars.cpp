@@ -61,6 +61,7 @@ const char* var_get(const char* name) {
     if (streq(name, "USER")) return session_user[0] ? session_user : nullptr;
     if (streq(name, "HOME")) return session_home[0] ? session_home : nullptr;
     if (streq(name, "PWD")) {
+        sync_cwd();
         build_dir_path(cwd, synth, sizeof(synth));
         return synth;
     }

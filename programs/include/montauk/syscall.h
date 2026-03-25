@@ -120,6 +120,12 @@ namespace montauk {
     inline int spawn(const char* path, const char* args = nullptr) {
         return (int)syscall2(Montauk::SYS_SPAWN, (uint64_t)path, (uint64_t)args);
     }
+    inline int chdir(const char* path) {
+        return (int)syscall1(Montauk::SYS_CHDIR, (uint64_t)path);
+    }
+    inline int getcwd(char* buf, uint64_t maxLen) {
+        return (int)syscall2(Montauk::SYS_GETCWD, (uint64_t)buf, maxLen);
+    }
 
     // Console
     inline void print(const char* text) { syscall1(Montauk::SYS_PRINT, (uint64_t)text); }

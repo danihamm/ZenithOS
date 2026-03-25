@@ -12,10 +12,13 @@
 #include <Memory/HHDM.hpp>
 #include <Memory/Paging.hpp>
 #include <Libraries/Memory.hpp>
+#include "Path.hpp"
 
 namespace Montauk {
     static int Sys_Open(const char* path) {
-        return Fs::Vfs::VfsOpen(path);
+        char resolved[256];
+        if (!ResolveProcessPath(path, resolved, sizeof(resolved))) return -1;
+        return Fs::Vfs::VfsOpen(resolved);
     }
 
     static int Sys_Read(int handle, uint8_t* buffer, uint64_t offset, uint64_t size) {
@@ -31,11 +34,14 @@ namespace Montauk {
     }
 
     static int Sys_ReadDir(const char* path, const char** outNames, int maxEntries) {
+        char resolved[256];
+        if (!ResolveProcessPath(path, resolved, sizeof(resolved))) return -1;
+
         // Get entries from VFS into a kernel-local array
         const char* kernelNames[256];
         int max = maxEntries;
         if (max > 256) max = 256;
-        int count = Fs::Vfs::VfsReadDir(path, kernelNames, max);
+        int count = Fs::Vfs::VfsReadDir(resolved, kernelNames, max);
         if (count <= 0) return count;
 
         // Allocate a user-accessible page for string data via process heap
@@ -70,19 +76,29 @@ namespace Montauk {
     }
 
     static int Sys_FCreate(const char* path) {
-        return Fs::Vfs::VfsCreate(path);
+        char resolved[256];
+        if (!ResolveProcessPath(path, resolved, sizeof(resolved))) return -1;
+        return Fs::Vfs::VfsCreate(resolved);
     }
 
     static int Sys_FDelete(const char* path) {
-        return Fs::Vfs::VfsDelete(path);
+        char resolved[256];
+        if (!ResolveProcessPath(path, resolved, sizeof(resolved))) return -1;
+        return Fs::Vfs::VfsDelete(resolved);
     }
 
     static int Sys_FMkdir(const char* path) {
-        return Fs::Vfs::VfsMkdir(path);
+        char resolved[256];
+        if (!ResolveProcessPath(path, resolved, sizeof(resolved))) return -1;
+        return Fs::Vfs::VfsMkdir(resolved);
     }
 
     static int Sys_FRename(const char* oldPath, const char* newPath) {
-        return Fs::Vfs::VfsRename(oldPath, newPath);
+        char resolvedOld[256];
+        char resolvedNew[256];
+        if (!ResolveProcessPath(oldPath, resolvedOld, sizeof(resolvedOld))) return -1;
+        if (!ResolveProcessPath(newPath, resolvedNew, sizeof(resolvedNew))) return -1;
+        return Fs::Vfs::VfsRename(resolvedOld, resolvedNew);
     }
 
     static int Sys_DriveList(int* outDrives, int maxEntries) {

@@ -184,6 +184,8 @@ namespace Montauk {
 
     /* Filesystem.hpp */
     static constexpr uint64_t SYS_FRENAME       = 94;
+    static constexpr uint64_t SYS_GETCWD        = 95;
+    static constexpr uint64_t SYS_CHDIR         = 96;
 
     static constexpr int SOCK_TCP = 1;
     static constexpr int SOCK_UDP = 2;

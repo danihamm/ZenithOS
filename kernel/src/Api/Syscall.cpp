@@ -347,6 +347,12 @@ namespace Montauk {
             case SYS_GETUSER:
                 if (!ValidUserPtr(frame->arg1)) return -1;
                 return Sys_GetUser((char*)frame->arg1, frame->arg2);
+            case SYS_GETCWD:
+                if (!ValidUserPtr(frame->arg1)) return -1;
+                return Sys_GetCwd((char*)frame->arg1, frame->arg2);
+            case SYS_CHDIR:
+                if (!ValidUserPtr(frame->arg1)) return -1;
+                return Sys_Chdir((const char*)frame->arg1);
             default:
                 return -1;
         }

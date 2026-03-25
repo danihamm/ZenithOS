@@ -14,6 +14,28 @@ int last_exit = 0;
 char session_user[32] = "";
 char session_home[64] = "";
 
+void sync_cwd() {
+    char abs[128];
+    if (montauk::getcwd(abs, sizeof(abs)) < 0) {
+        current_drive = 0;
+        cwd[0] = '\0';
+        return;
+    }
+
+    int drive = parse_drive_prefix(abs);
+    if (drive < 0) {
+        current_drive = 0;
+        cwd[0] = '\0';
+        return;
+    }
+
+    current_drive = drive;
+    int plen = drive_prefix_len(abs);
+    const char* rel = abs + plen;
+    if (*rel == '/') rel++;
+    scopy(cwd, rel, sizeof(cwd));
+}
+
 // ---- Session info (read once at startup) ----
 
 void read_session() {
@@ -165,6 +187,7 @@ static int process_command(const char* line) {
     if (streq(cmd, "false")) { return 1; }
 
     if (streq(cmd, "pwd")) {
+        sync_cwd();
         char path[128];
         build_dir_path(cwd, path, sizeof(path));
         montauk::print(path);
@@ -202,6 +225,7 @@ static int process_command(const char* line) {
                 montauk::print(session_home);
                 montauk::putchar('\n');
             }
+            sync_cwd();
             char path[128];
             build_dir_path(cwd, path, sizeof(path));
             montauk::print("PWD=");
@@ -331,6 +355,7 @@ static constexpr uint8_t SC_RIGHT = 0x4D;
 // ---- Entry point ----
 
 extern "C" void _start() {
+    sync_cwd();
     read_session();
 
     montauk::print("\n");

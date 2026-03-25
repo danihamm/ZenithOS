@@ -91,6 +91,7 @@ namespace Sched {
             processTable[i].heapNext = 0;
             processTable[i].args[0] = '\0';
             processTable[i].user[0] = '\0';
+            processTable[i].cwd[0] = '\0';
             processTable[i].runningOnCpu = -1;
             processTable[i].killPending = false;
             processTable[i].waitingForPid = -1;
@@ -298,6 +299,23 @@ namespace Sched {
                 proc.user[0] = 's'; proc.user[1] = 'y'; proc.user[2] = 's';
                 proc.user[3] = 't'; proc.user[4] = 'e'; proc.user[5] = 'm';
                 proc.user[6] = '\0';
+            }
+        }
+
+        {
+            auto* cpu = Smp::GetCurrentCpuData();
+            int parentSlot = cpu->currentSlot;
+            if (parentSlot >= 0 && processTable[parentSlot].cwd[0]) {
+                int i = 0;
+                for (; i < 255 && processTable[parentSlot].cwd[i]; i++) {
+                    proc.cwd[i] = processTable[parentSlot].cwd[i];
+                }
+                proc.cwd[i] = '\0';
+            } else {
+                proc.cwd[0] = '0';
+                proc.cwd[1] = ':';
+                proc.cwd[2] = '/';
+                proc.cwd[3] = '\0';
             }
         }
 

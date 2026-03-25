@@ -11,9 +11,11 @@
 #include <Memory/Paging.hpp>
 #include <Memory/PageFrameAllocator.hpp>
 #include <Memory/HHDM.hpp>
+#include <Fs/Vfs.hpp>
 
 #include "Syscall.hpp"
 #include "WinServer.hpp"
+#include "Path.hpp"
 
 namespace Montauk {
     static void Sys_Exit(int exitCode) {
@@ -38,8 +40,11 @@ namespace Montauk {
     }
 
     static int Sys_Spawn(const char* path, const char* args) {
+        char resolved[256];
+        if (!ResolveProcessPath(path, resolved, sizeof(resolved))) return -1;
+
         auto* parent = Sched::GetCurrentProcessPtr();
-        int childPid = Sched::Spawn(path, args);
+        int childPid = Sched::Spawn(resolved, args);
         if (childPid < 0) return childPid;
 
             // Inherit I/O redirection: if the parent is redirected, the child
@@ -119,5 +124,47 @@ namespace Montauk {
             buf[i] = proc->user[i];
         buf[i] = '\0';
         return i;
+    }
+
+    static int Sys_GetCwd(char* buf, uint64_t maxLen) {
+        auto* proc = Sched::GetCurrentProcessPtr();
+        if (proc == nullptr || buf == nullptr || maxLen == 0) return -1;
+
+        const char* cwd = proc->cwd[0] ? proc->cwd : "0:/";
+        int i = 0;
+        for (; i < (int)maxLen - 1 && cwd[i]; i++) buf[i] = cwd[i];
+        buf[i] = '\0';
+        return i;
+    }
+
+    static int Sys_Chdir(const char* path) {
+        auto* proc = Sched::GetCurrentProcessPtr();
+        if (proc == nullptr || path == nullptr) return -1;
+
+        char resolved[256];
+        if (!ResolveProcessPath(path, resolved, sizeof(resolved))) return -1;
+
+        bool isDriveRoot = false;
+        {
+            int prefixLen = 0;
+            if (ParseDrivePrefix(resolved, &prefixLen) >= 0 &&
+                resolved[prefixLen] == '/' && resolved[prefixLen + 1] == '\0') {
+                isDriveRoot = true;
+            }
+        }
+
+        if (isDriveRoot) {
+            const char* entries[1];
+            if (Fs::Vfs::VfsReadDir(resolved, entries, 1) < 0) return -1;
+        } else {
+            int handle = Fs::Vfs::VfsOpen(resolved);
+            if (handle < 0) return -1;
+            Fs::Vfs::VfsClose(handle);
+        }
+
+        int i = 0;
+        for (; i < 255 && resolved[i]; i++) proc->cwd[i] = resolved[i];
+        proc->cwd[i] = '\0';
+        return 0;
     }
 };

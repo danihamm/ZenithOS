@@ -113,6 +113,7 @@ const char* var_user_value(int idx);
 // ---- Session (main.cpp) ----
 
 void read_session();
+void sync_cwd();
 
 // ---- Builtins (builtins.cpp) ----
 

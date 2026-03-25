@@ -97,6 +97,8 @@ extern "C" {
 #define MTK_SYS_AUDIOCTL        83
 #define MTK_SYS_SETTZ           90
 #define MTK_SYS_GETTZ           91
+#define MTK_SYS_GETCWD          95
+#define MTK_SYS_CHDIR           96
 
 #define MTK_SOCK_TCP 1
 #define MTK_SOCK_UDP 2
@@ -316,6 +318,14 @@ static inline int mtk_proclist(mtk_procinfo *buf, int max) {
 
 static inline int mtk_getargs(char *buf, unsigned long max_len) {
     return (int)_mtk_syscall2(MTK_SYS_GETARGS, (long)buf, (long)max_len);
+}
+
+static inline int mtk_chdir(const char *path) {
+    return (int)_mtk_syscall1(MTK_SYS_CHDIR, (long)path);
+}
+
+static inline int mtk_getcwd(char *buf, unsigned long max_len) {
+    return (int)_mtk_syscall2(MTK_SYS_GETCWD, (long)buf, (long)max_len);
 }
 
 /* ====================================================================

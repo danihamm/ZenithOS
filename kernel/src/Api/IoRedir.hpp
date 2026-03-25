@@ -11,11 +11,15 @@
 
 #include "Syscall.hpp"
 #include "Common.hpp"
+#include "Path.hpp"
 
 namespace Montauk {
 
     static int Sys_SpawnRedir(const char* path, const char* args) {
-        int childPid = Sched::Spawn(path, args);
+        char resolved[256];
+        if (!ResolveProcessPath(path, resolved, sizeof(resolved))) return -1;
+
+        int childPid = Sched::Spawn(resolved, args);
         if (childPid < 0) return -1;
 
         auto* child = Sched::GetProcessByPid(childPid);

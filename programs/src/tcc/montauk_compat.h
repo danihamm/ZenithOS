@@ -72,19 +72,8 @@ static inline int gettimeofday(struct timeval *tv, struct timezone *tz) {
     return 0;
 }
 
-/* ====================================================================
-   getcwd stub (for debug info)
-   ==================================================================== */
-
-static inline char *getcwd(char *buf, size_t size) {
-    if (buf && size > 4) {
-        buf[0] = '0';
-        buf[1] = ':';
-        buf[2] = '/';
-        buf[3] = '\0';
-    }
-    return buf;
-}
+/* getcwd is provided by libc now */
+char *getcwd(char *buf, size_t size);
 
 /* ====================================================================
    POSIX file access stubs

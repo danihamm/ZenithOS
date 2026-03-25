@@ -6,6 +6,21 @@
 
 #include "shell.h"
 
+static void print_ls_entry(const char* entry) {
+    int len = slen(entry);
+    bool hadTrailingSlash = len > 0 && entry[len - 1] == '/';
+
+    while (len > 0 && entry[len - 1] == '/') len--;
+
+    int base = 0;
+    for (int i = 0; i < len; i++) {
+        if (entry[i] == '/') base = i + 1;
+    }
+
+    for (int i = base; i < len; i++) montauk::putchar(entry[i]);
+    if (hadTrailingSlash) montauk::putchar('/');
+}
+
 // ---- help ----
 
 void cmd_help() {
@@ -67,28 +82,9 @@ void cmd_help() {
 void cmd_ls(const char* arg) {
     arg = skip_spaces(arg);
 
-    char dir[128];
-    int drive = current_drive;
-    if (*arg) {
-        if (has_drive_prefix(arg)) {
-            drive = parse_drive_prefix(arg);
-            int plen = drive_prefix_len(arg);
-            scopy(dir, arg + plen + 1, sizeof(dir));
-        } else if (arg[0] == '/') {
-            scopy(dir, arg + 1, sizeof(dir));
-        } else if (cwd[0]) {
-            scopy(dir, cwd, sizeof(dir));
-            scat(dir, "/", sizeof(dir));
-            scat(dir, arg, sizeof(dir));
-        } else {
-            scopy(dir, arg, sizeof(dir));
-        }
-    } else {
-        scopy(dir, cwd, sizeof(dir));
-    }
-
     char path[128];
-    build_drive_path(drive, dir, path, sizeof(path));
+    if (*arg) scopy(path, arg, sizeof(path));
+    else scopy(path, ".", sizeof(path));
 
     const char* entries[64];
     int count = montauk::readdir(path, entries, 64);
@@ -97,16 +93,9 @@ void cmd_ls(const char* arg) {
         return;
     }
 
-    int prefixLen = 0;
-    if (dir[0]) prefixLen = slen(dir) + 1;
-
     for (int i = 0; i < count; i++) {
         montauk::print("  ");
-        if (prefixLen > 0 && starts_with(entries[i], dir)) {
-            montauk::print(entries[i] + prefixLen);
-        } else {
-            montauk::print(entries[i]);
-        }
+        print_ls_entry(entries[i]);
         montauk::putchar('\n');
     }
 }
@@ -116,141 +105,30 @@ void cmd_ls(const char* arg) {
 bool switch_drive(int drive) {
     char path[8];
     build_drive_path(drive, "", path, sizeof(path));
-    const char* entries[1];
-    if (montauk::readdir(path, entries, 1) < 0) return false;
-    current_drive = drive;
-    cwd[0] = '\0';
+    if (montauk::chdir(path) < 0) return false;
+    sync_cwd();
     return true;
 }
 
 int cmd_cd(const char* arg) {
     arg = skip_spaces(arg);
 
-    // cd with no argument -> go to home directory (or root if no session)
-    if (*arg == '\0') {
-        if (session_home[0] && has_drive_prefix(session_home)) {
-            int drive = parse_drive_prefix(session_home);
-            int plen = drive_prefix_len(session_home);
-            const char* rel = session_home + plen;
-            if (*rel == '/') rel++;
-            current_drive = drive;
-            if (*rel) scopy(cwd, rel, sizeof(cwd));
-            else cwd[0] = '\0';
-        } else {
-            cwd[0] = '\0';
-        }
-        return 0;
-    }
-
-    // cd / -> go to root
-    if (streq(arg, "/")) {
-        cwd[0] = '\0';
-        return 0;
-    }
-
-    // Strip trailing slashes from argument
-    static char argBuf[128];
-    int aLen = 0;
-    while (arg[aLen] && aLen < 127) { argBuf[aLen] = arg[aLen]; aLen++; }
-    argBuf[aLen] = '\0';
-    while (aLen > 0 && argBuf[aLen - 1] == '/') argBuf[--aLen] = '\0';
-    arg = argBuf;
-
-    if (*arg == '\0') {
-        cwd[0] = '\0';
-        return 0;
-    }
-
-    // cd .. -> go up one level
-    if (streq(arg, "..")) {
-        int len = slen(cwd);
-        int last = -1;
-        for (int i = 0; i < len; i++) {
-            if (cwd[i] == '/') last = i;
-        }
-        if (last >= 0) {
-            cwd[last] = '\0';
-        } else {
-            cwd[0] = '\0';
-        }
-        return 0;
-    }
-
-    // cd /path -> absolute path from root
-    if (arg[0] == '/') {
-        arg++;
-        if (*arg == '\0') { cwd[0] = '\0'; return 0; }
-        char path[128];
-        build_dir_path(arg, path, sizeof(path));
-        const char* entries[1];
-        if (montauk::readdir(path, entries, 1) < 0) {
-            montauk::print("cd: no such directory: ");
-            montauk::print(arg);
-            montauk::putchar('\n');
-            return 1;
-        }
-        scopy(cwd, arg, sizeof(cwd));
-        return 0;
-    }
-
-    // cd N:/ or cd N:/path -> switch drive
-    if (has_drive_prefix(arg)) {
-        int drive = parse_drive_prefix(arg);
-        int plen = drive_prefix_len(arg);
-        const char* rel = arg + plen;
-        if (*rel == '/') rel++;
-
-        char rootPath[8];
-        build_drive_path(drive, "", rootPath, sizeof(rootPath));
-        const char* rootEntries[1];
-        if (montauk::readdir(rootPath, rootEntries, 1) < 0) {
-            montauk::print("cd: no such drive: ");
-            montauk::print(arg);
-            montauk::putchar('\n');
-            return 1;
-        }
-
-        if (*rel != '\0') {
-            char path[128];
-            build_drive_path(drive, rel, path, sizeof(path));
-            const char* entries[1];
-            if (montauk::readdir(path, entries, 1) < 0) {
-                montauk::print("cd: no such directory: ");
-                montauk::print(arg);
-                montauk::putchar('\n');
-                return 1;
-            }
-            current_drive = drive;
-            scopy(cwd, rel, sizeof(cwd));
-        } else {
-            current_drive = drive;
-            cwd[0] = '\0';
-        }
-        return 0;
-    }
-
-    // Relative path
     char target[128];
-    if (cwd[0]) {
-        scopy(target, cwd, sizeof(target));
-        scat(target, "/", sizeof(target));
-        scat(target, arg, sizeof(target));
+    if (*arg == '\0') {
+        if (session_home[0]) scopy(target, session_home, sizeof(target));
+        else scopy(target, "/", sizeof(target));
     } else {
         scopy(target, arg, sizeof(target));
     }
 
-    char path[128];
-    build_dir_path(target, path, sizeof(path));
-    const char* entries[1];
-    int count = montauk::readdir(path, entries, 1);
-    if (count < 0) {
+    if (montauk::chdir(target) < 0) {
         montauk::print("cd: no such directory: ");
-        montauk::print(arg);
+        montauk::print(target);
         montauk::putchar('\n');
         return 1;
     }
 
-    scopy(cwd, target, sizeof(cwd));
+    sync_cwd();
     return 0;
 }
 

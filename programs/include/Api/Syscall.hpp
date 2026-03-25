@@ -123,6 +123,9 @@ namespace Montauk {
     // User management
     static constexpr uint64_t SYS_SETUSER       = 92;
     static constexpr uint64_t SYS_GETUSER       = 93;
+    static constexpr uint64_t SYS_FRENAME       = 94;
+    static constexpr uint64_t SYS_GETCWD        = 95;
+    static constexpr uint64_t SYS_CHDIR         = 96;
 
     // Audio control commands (for SYS_AUDIOCTL)
     static constexpr int AUDIO_CTL_SET_VOLUME = 0;
