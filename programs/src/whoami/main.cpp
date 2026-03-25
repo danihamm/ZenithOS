@@ -7,7 +7,6 @@
 #include <montauk/syscall.h>
 #include <montauk/string.h>
 #include <montauk/heap.h>
-#include <montauk/config.h>
 
 /*
     Mar 24, 2026 - update to use getuser() syscall
