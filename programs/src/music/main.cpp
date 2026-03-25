@@ -18,6 +18,7 @@ extern "C" {
 }
 
 #include "minimp3.h"
+#include "visualizer.hpp"
 
 using namespace gui;
 
@@ -26,15 +27,19 @@ using namespace gui;
 // ============================================================================
 
 static constexpr int INIT_W         = 380;
-static constexpr int INIT_H         = 460;
+static constexpr int INIT_H         = 520;
 static constexpr int TOOLBAR_H      = 36;
+static constexpr int TOOL_ICON_W    = 38;
+static constexpr int TOOL_ICON_H    = 26;
+static constexpr int TOOL_ICON_GAP  = 8;
+static constexpr int TOOL_ICON_SIZE = 16;
 static constexpr int FONT_SIZE      = 18;
 static constexpr int FONT_SIZE_SM   = 16;
 static constexpr int FONT_SIZE_LG   = 20;
 
 static constexpr int LIST_TOP       = TOOLBAR_H;
 static constexpr int LIST_ITEM_H    = 32;
-static constexpr int INFO_H         = 64;
+static constexpr int INFO_H         = 56;
 static constexpr int PROGRESS_H     = 24;
 static constexpr int TRANSPORT_H    = 44;
 
@@ -66,10 +71,18 @@ static constexpr Color STOP_COLOR     = Color::from_rgb(0xCC, 0x33, 0x33);
 // ============================================================================
 
 enum class PlayState { Stopped, Playing, Paused };
+enum class RepeatMode { Off, All, One };
 
 struct FileEntry {
     char name[128];
     bool is_mp3;  // true = mp3, false = wav
+};
+
+struct Mp3Frame {
+    uint64_t samples_before;
+    uint32_t offset;
+    uint16_t sample_count;
+    uint16_t reserved;
 };
 
 struct PlayerState {
@@ -91,6 +104,10 @@ struct PlayerState {
     // Playback
     PlayState play_state;
     int current_track;    // index into files[], -1 if none
+    bool show_visualizer;
+    bool shuffle_enabled;
+    RepeatMode repeat_mode;
+    uint32_t rng_state;
 
     // Audio handle
     int audio_handle;
@@ -102,6 +119,10 @@ struct PlayerState {
     // MP3 decoder
     mp3dec_t mp3dec;
     uint64_t mp3_offset;     // current read position in file_data
+    Mp3Frame* mp3_frames;
+    int mp3_frame_count;
+    int mp3_frame_cap;
+    uint64_t mp3_seek_discard_samples;
     int sample_rate;
     int channels;
 
@@ -131,6 +152,16 @@ struct PlayerState {
     SvgIcon ico_play_w;
     SvgIcon ico_pause_w;
     SvgIcon ico_stop_w;
+    SvgIcon ico_shuffle;
+    SvgIcon ico_shuffle_w;
+    SvgIcon ico_repeat_all;
+    SvgIcon ico_repeat_all_w;
+    SvgIcon ico_repeat_one;
+    SvgIcon ico_repeat_one_w;
+    SvgIcon ico_visualizer;
+    SvgIcon ico_visualizer_w;
+
+    music_visualizer::State visualizer;
 };
 
 static PlayerState g;
@@ -258,11 +289,12 @@ static int font_h(int size = FONT_SIZE) {
 
 static void px_button(uint32_t* px, int bw, int bh,
                       int x, int y, int w, int h,
-                      const char* label, Color bg, Color fg, int r) {
+                      const char* label, Color bg, Color fg, int r,
+                      int size = FONT_SIZE) {
     px_fill_rounded(px, bw, bh, x, y, w, h, r, bg);
-    int tw = text_w(label);
-    int fh = font_h();
-    px_text(px, bw, bh, x + (w - tw) / 2, y + (h - fh) / 2, label, fg);
+    int tw = text_w(label, size);
+    int fh = font_h(size);
+    px_text(px, bw, bh, x + (w - tw) / 2, y + (h - fh) / 2, label, fg, size);
 }
 
 static void px_icon_button(uint32_t* px, int bw, int bh,
@@ -291,6 +323,47 @@ static bool str_ends_with(const char* s, const char* suffix) {
         if (a != b) return false;
     }
     return true;
+}
+
+static const char* repeat_mode_label() {
+    switch (g.repeat_mode) {
+        case RepeatMode::All: return "Rpt All";
+        case RepeatMode::One: return "Rpt 1";
+        default: return "Rpt Off";
+    }
+}
+
+static void cycle_repeat_mode() {
+    switch (g.repeat_mode) {
+        case RepeatMode::Off: g.repeat_mode = RepeatMode::All; break;
+        case RepeatMode::All: g.repeat_mode = RepeatMode::One; break;
+        case RepeatMode::One: g.repeat_mode = RepeatMode::Off; break;
+    }
+}
+
+static uint32_t next_random_u32() {
+    if (g.rng_state == 0) g.rng_state = 0xA341316Cu;
+    uint32_t x = g.rng_state;
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
+    g.rng_state = x;
+    return x;
+}
+
+static Rect repeat_button_rect() {
+    int y = (TOOLBAR_H - TOOL_ICON_H) / 2;
+    return {g.win_w - 12 - TOOL_ICON_W, y, TOOL_ICON_W, TOOL_ICON_H};
+}
+
+static Rect shuffle_button_rect() {
+    Rect repeat = repeat_button_rect();
+    return {repeat.x - TOOL_ICON_GAP - TOOL_ICON_W, repeat.y, TOOL_ICON_W, TOOL_ICON_H};
+}
+
+static Rect visualizer_button_rect() {
+    Rect shuffle = shuffle_button_rect();
+    return {shuffle.x - TOOL_ICON_GAP - TOOL_ICON_W, shuffle.y, TOOL_ICON_W, TOOL_ICON_H};
 }
 
 // ============================================================================
@@ -362,6 +435,7 @@ static bool parse_wav(const uint8_t* data, uint64_t size) {
         } else if (chunk->id == 0x61746164) { // "data"
             if (!fmt) return false;
             if (fmt->audio_format != 1) return false; // PCM only
+            if (fmt->bits_per_sample != 16) return false; // 16-bit PCM only
             g.sample_rate = fmt->sample_rate;
             g.channels = fmt->channels;
             g.wav_data_offset = chunk_data;
@@ -383,48 +457,119 @@ static bool parse_wav(const uint8_t* data, uint64_t size) {
 // MP3 helpers
 // ============================================================================
 
-static bool scan_mp3_info() {
-    // Scan through the file to estimate total duration
-    mp3dec_t tmp;
-    mp3dec_init(&tmp);
+static void free_mp3_index() {
+    if (g.mp3_frames) {
+        montauk::mfree(g.mp3_frames);
+        g.mp3_frames = nullptr;
+    }
+    g.mp3_frame_count = 0;
+    g.mp3_frame_cap = 0;
+    g.mp3_seek_discard_samples = 0;
+}
 
-    uint64_t offset = 0;
+static bool push_mp3_frame(uint32_t offset, uint64_t samples_before, uint16_t sample_count) {
+    if (g.mp3_frame_count >= g.mp3_frame_cap) {
+        int new_cap = g.mp3_frame_cap ? g.mp3_frame_cap * 2 : 1024;
+        auto* new_frames = (Mp3Frame*)montauk::realloc(g.mp3_frames,
+                            (uint64_t)new_cap * sizeof(Mp3Frame));
+        if (!new_frames) return false;
+        g.mp3_frames = new_frames;
+        g.mp3_frame_cap = new_cap;
+    }
+
+    Mp3Frame& frame = g.mp3_frames[g.mp3_frame_count++];
+    frame.samples_before = samples_before;
+    frame.offset = offset;
+    frame.sample_count = sample_count;
+    frame.reserved = 0;
+    return true;
+}
+
+static bool build_mp3_index(uint64_t start_offset) {
+    free_mp3_index();
     g.total_samples = 0;
     g.sample_rate = 0;
     g.channels = 0;
 
-    // Skip ID3v2 tag if present
-    if (g.file_size >= 10 && g.file_data[0] == 'I' && g.file_data[1] == 'D' && g.file_data[2] == '3') {
-        uint64_t tag_size = ((uint64_t)(g.file_data[6] & 0x7F) << 21) |
-                            ((uint64_t)(g.file_data[7] & 0x7F) << 14) |
-                            ((uint64_t)(g.file_data[8] & 0x7F) << 7)  |
-                            ((uint64_t)(g.file_data[9] & 0x7F));
-        offset = tag_size + 10;
+    mp3dec_t scan_dec;
+    mp3dec_init(&scan_dec);
+
+    uint64_t offset = start_offset;
+    while (offset < g.file_size) {
+        mp3dec_frame_info_t info = {};
+        int samples = mp3dec_decode_frame(&scan_dec,
+                                          g.file_data + offset,
+                                          (int)(g.file_size - offset),
+                                          nullptr, &info);
+        if (info.frame_bytes <= 0) break;
+
+        if (samples > 0 && info.hz > 0 && info.channels > 0) {
+            uint32_t frame_offset = (uint32_t)(offset + (uint64_t)info.frame_offset);
+            if (!push_mp3_frame(frame_offset, g.total_samples, (uint16_t)samples)) {
+                free_mp3_index();
+                return false;
+            }
+            if (g.sample_rate == 0) {
+                g.sample_rate = info.hz;
+                g.channels = info.channels;
+            }
+            g.total_samples += (uint64_t)samples;
+        }
+
+        offset += (uint64_t)info.frame_bytes;
     }
 
-    // Quick scan: decode first frame for format, then estimate from bitrate
-    mp3dec_frame_info_t info;
-    int16_t pcm_tmp[MINIMP3_MAX_SAMPLES_PER_FRAME];
-    int samples = mp3dec_decode_frame(&tmp, g.file_data + offset,
-                                       (int)(g.file_size - offset), pcm_tmp, &info);
-    if (samples <= 0 || info.hz == 0) return false;
-
-    g.sample_rate = info.hz;
-    g.channels = info.channels;
-
-    // Estimate total samples from file size and bitrate
-    if (info.bitrate_kbps > 0) {
-        uint64_t audio_bytes = g.file_size - offset;
-        // duration_sec = audio_bytes * 8 / (bitrate_kbps * 1000)
-        // total_samples = duration_sec * sample_rate
-        g.total_samples = (audio_bytes * 8 * (uint64_t)g.sample_rate) /
-                          ((uint64_t)info.bitrate_kbps * 1000);
-    } else {
-        // VBR with no bitrate info — rough estimate
-        g.total_samples = g.file_size / 4 * (uint64_t)g.sample_rate / 11025;
+    if (g.mp3_frame_count <= 0 || g.sample_rate <= 0 || g.channels <= 0) {
+        free_mp3_index();
+        return false;
     }
 
+    g.mp3_offset = g.mp3_frames[0].offset;
     return true;
+}
+
+static int pick_shuffled_track(int current) {
+    if (g.file_count <= 1) return current >= 0 ? current : 0;
+    int pick = (int)(next_random_u32() % (uint32_t)g.file_count);
+    if (pick == current) {
+        pick = (pick + 1 + (int)(next_random_u32() % (uint32_t)(g.file_count - 1))) % g.file_count;
+    }
+    return pick;
+}
+
+static void seek_to_samples(uint64_t target_samples) {
+    if (g.play_state == PlayState::Stopped || g.total_samples == 0) return;
+    if (target_samples > g.total_samples) target_samples = g.total_samples;
+
+    g.pcm_buf_len = 0;
+    g.pcm_buf_pos = 0;
+
+    if (g.current_track >= 0 && g.files[g.current_track].is_mp3) {
+        if (g.mp3_frame_count <= 0) return;
+        int lo = 0;
+        int hi = g.mp3_frame_count - 1;
+        int best = 0;
+        while (lo <= hi) {
+            int mid = lo + (hi - lo) / 2;
+            if (g.mp3_frames[mid].samples_before <= target_samples) {
+                best = mid;
+                lo = mid + 1;
+            } else {
+                hi = mid - 1;
+            }
+        }
+
+        const Mp3Frame& frame = g.mp3_frames[best];
+        g.mp3_offset = frame.offset;
+        g.played_samples = frame.samples_before;
+        g.mp3_seek_discard_samples = target_samples - frame.samples_before;
+        mp3dec_init(&g.mp3dec);
+    } else {
+        int bytes_per_frame = 2 * g.channels;
+        g.wav_pos = target_samples * (uint64_t)bytes_per_frame;
+        if (g.wav_pos > g.wav_data_size) g.wav_pos = g.wav_data_size;
+        g.played_samples = target_samples;
+    }
 }
 
 // ============================================================================
@@ -440,6 +585,8 @@ static void stop_playback() {
         montauk::mfree(g.file_data);
         g.file_data = nullptr;
     }
+    free_mp3_index();
+    music_visualizer::reset(g.visualizer);
     g.play_state = PlayState::Stopped;
     g.played_samples = 0;
     g.pcm_buf_len = 0;
@@ -503,7 +650,7 @@ static bool start_track(int index) {
                                   ((uint64_t)(g.file_data[9] & 0x7F)));
         }
 
-        if (!scan_mp3_info()) {
+        if (!build_mp3_index(g.mp3_offset)) {
             montauk::mfree(g.file_data);
             g.file_data = nullptr;
             return false;
@@ -519,6 +666,7 @@ static bool start_track(int index) {
     // Open audio device
     g.audio_handle = montauk::audio_open(g.sample_rate, g.channels, 16);
     if (g.audio_handle < 0) {
+        free_mp3_index();
         montauk::mfree(g.file_data);
         g.file_data = nullptr;
         return false;
@@ -529,6 +677,8 @@ static bool start_track(int index) {
     g.played_samples = 0;
     g.pcm_buf_len = 0;
     g.pcm_buf_pos = 0;
+    g.mp3_seek_discard_samples = 0;
+    music_visualizer::reset(g.visualizer);
 
     return true;
 }
@@ -543,10 +693,26 @@ static void toggle_pause() {
     }
 }
 
-static void next_track() {
-    if (g.file_count == 0) return;
-    int next = (g.current_track + 1) % g.file_count;
-    start_track(next);
+static bool next_track(bool auto_advanced = false) {
+    if (g.file_count == 0) return false;
+    if (g.current_track < 0) return start_track(0);
+
+    if (auto_advanced && g.repeat_mode == RepeatMode::One) {
+        return start_track(g.current_track);
+    }
+
+    int next = -1;
+    if (g.shuffle_enabled) {
+        next = pick_shuffled_track(g.current_track);
+    } else if (g.current_track + 1 < g.file_count) {
+        next = g.current_track + 1;
+    } else if (g.repeat_mode == RepeatMode::All) {
+        next = 0;
+    }
+
+    if (next >= 0) return start_track(next);
+    stop_playback();
+    return false;
 }
 
 static void prev_track() {
@@ -594,11 +760,11 @@ static void feed_audio() {
             // MP3 decode
             if (g.mp3_offset >= g.file_size) {
                 // End of file — advance to next track
-                next_track();
+                next_track(true);
                 return;
             }
 
-            mp3dec_frame_info_t info;
+            mp3dec_frame_info_t info = {};
             int samples = mp3dec_decode_frame(&g.mp3dec,
                                                g.file_data + g.mp3_offset,
                                                (int)(g.file_size - g.mp3_offset),
@@ -607,17 +773,33 @@ static void feed_audio() {
                 g.mp3_offset += info.frame_bytes;
             } else {
                 // Can't decode — end
-                next_track();
+                next_track(true);
                 return;
             }
 
             if (samples > 0) {
+                if (g.mp3_seek_discard_samples > 0) {
+                    uint64_t discard = g.mp3_seek_discard_samples;
+                    if (discard > (uint64_t)samples) discard = (uint64_t)samples;
+                    g.pcm_buf_pos = (int)(discard * (uint64_t)info.channels);
+                    g.played_samples += discard;
+                    g.mp3_seek_discard_samples -= discard;
+                    samples -= (int)discard;
+                }
                 g.pcm_buf_len = samples * info.channels;
+                if (g.pcm_buf_len > 0) {
+                    music_visualizer::feed_pcm(g.visualizer,
+                                               g.pcm_buf + g.pcm_buf_pos,
+                                               g.pcm_buf_len / info.channels,
+                                               info.channels);
+                } else {
+                    g.pcm_buf_pos = 0;
+                }
             }
         } else {
             // WAV decode — just copy PCM data
             if (g.wav_pos >= g.wav_data_size) {
-                next_track();
+                next_track(true);
                 return;
             }
 
@@ -628,6 +810,12 @@ static void feed_audio() {
             memcpy(g.pcm_buf, g.file_data + g.wav_data_offset + g.wav_pos, to_copy);
             g.wav_pos += to_copy;
             g.pcm_buf_len = (int)(to_copy / 2); // 16-bit samples
+            if (g.channels > 0 && g.pcm_buf_len > 0) {
+                music_visualizer::feed_pcm(g.visualizer,
+                                           g.pcm_buf,
+                                           g.pcm_buf_len / g.channels,
+                                           g.channels);
+            }
         }
     }
 }
@@ -648,6 +836,20 @@ static void format_time(char* buf, int buf_size, uint64_t samples, int rate) {
 // Render
 // ============================================================================
 
+static int list_bottom() {
+    return g.win_h - INFO_H - PROGRESS_H - TRANSPORT_H;
+}
+
+static int visible_items() {
+    int count = (list_bottom() - LIST_TOP) / LIST_ITEM_H;
+    return count > 0 ? count : 0;
+}
+
+static Rect content_panel_rect() {
+    int y = list_bottom() + 1;
+    return {0, LIST_TOP, g.win_w, y - LIST_TOP};
+}
+
 static void render(uint32_t* pixels) {
     int W = g.win_w, H = g.win_h;
     int fh = font_h();
@@ -659,79 +861,96 @@ static void render(uint32_t* pixels) {
     // Toolbar
     px_fill(pixels, W, H, 0, 0, W, TOOLBAR_H, TOOLBAR_BG);
     px_hline(pixels, W, H, 0, TOOLBAR_H - 1, W, BORDER_COLOR);
+    Rect visualizer_rect = visualizer_button_rect();
+    Rect shuffle_rect = shuffle_button_rect();
+    Rect repeat_rect = repeat_button_rect();
+    px_icon_button(pixels, W, H, visualizer_rect.x, visualizer_rect.y,
+                   visualizer_rect.w, visualizer_rect.h,
+                   g.show_visualizer ? g.ico_visualizer_w : g.ico_visualizer,
+                   g.show_visualizer ? ACCENT : BTN_BG, 6);
+    px_icon_button(pixels, W, H, shuffle_rect.x, shuffle_rect.y, shuffle_rect.w, shuffle_rect.h,
+                   g.shuffle_enabled ? g.ico_shuffle_w : g.ico_shuffle,
+                   g.shuffle_enabled ? ACCENT : BTN_BG, 6);
+    Color repeat_bg = (g.repeat_mode == RepeatMode::Off) ? BTN_BG : ACCENT;
+    px_icon_button(pixels, W, H, repeat_rect.x, repeat_rect.y, repeat_rect.w, repeat_rect.h,
+                   (g.repeat_mode == RepeatMode::One) ? g.ico_repeat_one_w :
+                   (g.repeat_mode == RepeatMode::All) ? g.ico_repeat_all_w :
+                                                        g.ico_repeat_all,
+                   repeat_bg, 6);
+
     // Directory path in toolbar
     {
         const char* display_dir = g.dir_path;
         int dw = text_w(display_dir, FONT_SIZE_SM);
-        int max_dir_w = W - 24;
-        if (dw > max_dir_w) {
+        int max_dir_w = visualizer_rect.x - 20;
+        int dir_len = montauk::slen(g.dir_path);
+        if (dw > max_dir_w && dir_len > 20) {
             display_dir = g.dir_path + montauk::slen(g.dir_path) - 20;
         }
         px_text(pixels, W, H, 12,
-                (TOOLBAR_H - fh) / 2, display_dir, TEXT_COLOR);
+                (TOOLBAR_H - font_h(FONT_SIZE_SM)) / 2, display_dir, TEXT_COLOR, FONT_SIZE_SM);
     }
 
-    // ---- File list ----
-    int list_bottom = H - INFO_H - PROGRESS_H - TRANSPORT_H;
-    int visible_items = (list_bottom - LIST_TOP) / LIST_ITEM_H;
+    Rect content_panel = content_panel_rect();
+    int list_end = list_bottom();
+    int visible_count = visible_items();
+    px_hline(pixels, W, H, 0, list_end, W, BORDER_COLOR);
 
-    px_hline(pixels, W, H, 0, list_bottom, W, BORDER_COLOR);
+    if (!g.show_visualizer) {
+        for (int i = 0; i < visible_count && (i + g.scroll_y) < g.file_count; i++) {
+            int idx = i + g.scroll_y;
+            int iy = LIST_TOP + i * LIST_ITEM_H;
 
-    for (int i = 0; i < visible_items && (i + g.scroll_y) < g.file_count; i++) {
-        int idx = i + g.scroll_y;
-        int iy = LIST_TOP + i * LIST_ITEM_H;
+            Color bg = BG_COLOR;
+            if (idx == g.current_track && g.play_state != PlayState::Stopped)
+                bg = LIST_PLAYING;
+            else if (idx == g.hovered_item)
+                bg = LIST_HOVER;
 
-        // Highlight
-        Color bg = BG_COLOR;
-        if (idx == g.current_track && g.play_state != PlayState::Stopped)
-            bg = LIST_PLAYING;
-        else if (idx == g.hovered_item)
-            bg = LIST_HOVER;
+            if (bg.r != BG_COLOR.r || bg.g != BG_COLOR.g || bg.b != BG_COLOR.b)
+                px_fill(pixels, W, H, 0, iy, W, LIST_ITEM_H, bg);
 
-        if (bg.r != BG_COLOR.r || bg.g != BG_COLOR.g || bg.b != BG_COLOR.b)
-            px_fill(pixels, W, H, 0, iy, W, LIST_ITEM_H, bg);
+            if (idx == g.current_track && g.play_state == PlayState::Playing) {
+                px_triangle_right(pixels, W, H, 8, iy + 8, 8, 12, ACCENT);
+            } else if (idx == g.current_track && g.play_state == PlayState::Paused) {
+                px_fill(pixels, W, H, 8, iy + 8, 3, 12, ACCENT);
+                px_fill(pixels, W, H, 13, iy + 8, 3, 12, ACCENT);
+            }
 
-        // Playing indicator
-        if (idx == g.current_track && g.play_state == PlayState::Playing) {
-            px_triangle_right(pixels, W, H, 8, iy + 8, 8, 12, ACCENT);
-        } else if (idx == g.current_track && g.play_state == PlayState::Paused) {
-            // Pause bars
-            px_fill(pixels, W, H, 8, iy + 8, 3, 12, ACCENT);
-            px_fill(pixels, W, H, 13, iy + 8, 3, 12, ACCENT);
+            Color name_color = (idx == g.current_track && g.play_state != PlayState::Stopped)
+                                ? ACCENT_DARK : TEXT_COLOR;
+            px_text(pixels, W, H, 24, iy + (LIST_ITEM_H - fh_sm) / 2,
+                    g.files[idx].name, name_color, FONT_SIZE_SM);
+
+            const char* tag = g.files[idx].is_mp3 ? "MP3" : "WAV";
+            int tw = text_w(tag, FONT_SIZE_SM);
+            px_text(pixels, W, H, W - tw - 12, iy + (LIST_ITEM_H - fh_sm) / 2,
+                    tag, DIM_TEXT, FONT_SIZE_SM);
         }
 
-        // File name
-        Color name_color = (idx == g.current_track && g.play_state != PlayState::Stopped)
-                            ? ACCENT_DARK : TEXT_COLOR;
-        px_text(pixels, W, H, 24, iy + (LIST_ITEM_H - fh_sm) / 2,
-                g.files[idx].name, name_color, FONT_SIZE_SM);
+        if (g.file_count > visible_count && visible_count > 0) {
+            int list_h = list_end - LIST_TOP;
+            int sb_h = (visible_count * list_h) / g.file_count;
+            if (sb_h < 20) sb_h = 20;
+            int sb_y = LIST_TOP + (g.scroll_y * (list_h - sb_h)) / (g.file_count - visible_count);
+            px_fill_rounded(pixels, W, H, W - 6, sb_y, 4, sb_h, 2, TRACK_BG);
+        }
 
-        // Format tag
-        const char* tag = g.files[idx].is_mp3 ? "MP3" : "WAV";
-        int tw = text_w(tag, FONT_SIZE_SM);
-        px_text(pixels, W, H, W - tw - 12, iy + (LIST_ITEM_H - fh_sm) / 2,
-                tag, DIM_TEXT, FONT_SIZE_SM);
-    }
-
-    // Scrollbar
-    if (g.file_count > visible_items && visible_items > 0) {
-        int list_h = list_bottom - LIST_TOP;
-        int sb_h = (visible_items * list_h) / g.file_count;
-        if (sb_h < 20) sb_h = 20;
-        int sb_y = LIST_TOP + (g.scroll_y * (list_h - sb_h)) / (g.file_count - visible_items);
-        px_fill_rounded(pixels, W, H, W - 6, sb_y, 4, sb_h, 2, TRACK_BG);
-    }
-
-    // Empty state
-    if (g.file_count == 0) {
-        const char* msg = "No audio files found";
-        int mw = text_w(msg);
-        int cy = LIST_TOP + (list_bottom - LIST_TOP) / 2 - fh / 2;
-        px_text(pixels, W, H, (W - mw) / 2, cy, msg, DIM_TEXT);
+        if (g.file_count == 0) {
+            const char* msg = "No audio files found";
+            int mw = text_w(msg);
+            int cy = LIST_TOP + (list_end - LIST_TOP) / 2 - fh / 2;
+            px_text(pixels, W, H, (W - mw) / 2, cy, msg, DIM_TEXT);
+        }
+    } else {
+        px_fill(pixels, W, H, content_panel.x, content_panel.y, content_panel.w, content_panel.h, TOOLBAR_BG);
+        Rect viz_rect = {12, content_panel.y + 12, W - 24, content_panel.h - 24};
+        music_visualizer::render(pixels, W, H, viz_rect, g.visualizer,
+                                 ACCENT, ACCENT_DARK, TRACK_BG, BORDER_COLOR);
     }
 
     // ---- Now Playing info ----
-    int info_y = list_bottom + 1;
+    int info_y = list_end + 1;
     px_fill(pixels, W, H, 0, info_y, W, INFO_H, TOOLBAR_BG);
     px_hline(pixels, W, H, 0, info_y + INFO_H - 1, W, BORDER_COLOR);
 
@@ -814,23 +1033,33 @@ static void render(uint32_t* pixels) {
 // Hit testing
 // ============================================================================
 
-static int list_bottom() {
-    return g.win_h - INFO_H - PROGRESS_H - TRANSPORT_H;
-}
-
-static int visible_items() {
-    return (list_bottom() - LIST_TOP) / LIST_ITEM_H;
-}
-
 static bool handle_click(int mx, int my) {
     int W = g.win_w;
     int lb = list_bottom();
+    Rect visualizer_rect = visualizer_button_rect();
+    Rect shuffle_rect = shuffle_button_rect();
+    Rect repeat_rect = repeat_button_rect();
     int info_y = lb + 1;
     int prog_y = info_y + INFO_H;
     int trans_y = prog_y + PROGRESS_H;
 
+    if (visualizer_rect.contains(mx, my)) {
+        g.show_visualizer = !g.show_visualizer;
+        return true;
+    }
+
+    if (shuffle_rect.contains(mx, my)) {
+        g.shuffle_enabled = !g.shuffle_enabled;
+        return true;
+    }
+
+    if (repeat_rect.contains(mx, my)) {
+        cycle_repeat_mode();
+        return true;
+    }
+
     // File list click
-    if (my >= LIST_TOP && my < lb && mx >= 0 && mx < W) {
+    if (!g.show_visualizer && my >= LIST_TOP && my < lb && mx >= 0 && mx < W) {
         int idx = (my - LIST_TOP) / LIST_ITEM_H + g.scroll_y;
         if (idx >= 0 && idx < g.file_count) {
             start_track(idx);
@@ -845,27 +1074,8 @@ static bool handle_click(int mx, int my) {
             int rel = mx - bar_x;
             if (rel < 0) rel = 0;
             if (rel > bar_w) rel = bar_w;
-            // Seek: restart track and skip ahead
-            // For simplicity, we estimate the file offset from the progress ratio
             uint64_t target_samples = (uint64_t)rel * g.total_samples / bar_w;
-
-            if (g.current_track >= 0 && g.files[g.current_track].is_mp3) {
-                // MP3 seek: estimate byte offset from ratio
-                uint64_t target_offset = (g.file_size * rel) / bar_w;
-                g.mp3_offset = target_offset;
-                g.played_samples = target_samples;
-                g.pcm_buf_len = 0;
-                g.pcm_buf_pos = 0;
-                mp3dec_init(&g.mp3dec); // reset decoder for clean seek
-            } else {
-                // WAV seek: direct offset
-                int bytes_per_sample = 2 * g.channels;
-                g.wav_pos = target_samples * bytes_per_sample;
-                if (g.wav_pos > g.wav_data_size) g.wav_pos = g.wav_data_size;
-                g.played_samples = target_samples;
-                g.pcm_buf_len = 0;
-                g.pcm_buf_pos = 0;
-            }
+            seek_to_samples(target_samples);
             g.dragging_progress = true;
             return true;
         }
@@ -901,7 +1111,7 @@ static bool handle_click(int mx, int my) {
             bx += btn_w + gap;
 
             // Next
-            if (mx >= bx && mx < bx + btn_w) { next_track(); return true; }
+            if (mx >= bx && mx < bx + btn_w) { next_track(false); return true; }
         }
     }
 
@@ -921,6 +1131,10 @@ extern "C" void _start() {
     g.current_track = -1;
     g.play_state = PlayState::Stopped;
     g.hovered_item = -1;
+    g.show_visualizer = false;
+    g.repeat_mode = RepeatMode::Off;
+    g.rng_state = (uint32_t)montauk::get_milliseconds() ^ 0xC0DEFACEu;
+    music_visualizer::reset(g.visualizer);
 
     // Parse arguments: accept a directory path or a file path
     // Helper: set dir_path to current user's home via session config
@@ -994,6 +1208,14 @@ extern "C" void _start() {
         g.ico_play_w  = svg_load("0:/icons/media-play.svg",    16, 16, WHITE);
         g.ico_pause_w = svg_load("0:/icons/media-pause.svg",   16, 16, WHITE);
         g.ico_stop_w  = svg_load("0:/icons/media-stop.svg",    16, 16, WHITE);
+        g.ico_visualizer = svg_load("0:/icons/view-media-equalizer.svg", TOOL_ICON_SIZE, TOOL_ICON_SIZE, ic_color);
+        g.ico_visualizer_w = svg_load("0:/icons/view-media-equalizer.svg", TOOL_ICON_SIZE, TOOL_ICON_SIZE, WHITE);
+        g.ico_shuffle = svg_load("0:/icons/media-playlist-shuffle.svg", TOOL_ICON_SIZE, TOOL_ICON_SIZE, ic_color);
+        g.ico_shuffle_w = svg_load("0:/icons/media-playlist-shuffle.svg", TOOL_ICON_SIZE, TOOL_ICON_SIZE, WHITE);
+        g.ico_repeat_all = svg_load("0:/icons/media-playlist-repeat.svg", TOOL_ICON_SIZE, TOOL_ICON_SIZE, ic_color);
+        g.ico_repeat_all_w = svg_load("0:/icons/media-playlist-repeat.svg", TOOL_ICON_SIZE, TOOL_ICON_SIZE, WHITE);
+        g.ico_repeat_one = svg_load("0:/icons/media-playlist-repeat-song.svg", TOOL_ICON_SIZE, TOOL_ICON_SIZE, ic_color);
+        g.ico_repeat_one_w = svg_load("0:/icons/media-playlist-repeat-song.svg", TOOL_ICON_SIZE, TOOL_ICON_SIZE, WHITE);
     }
 
     // Scan for audio files
@@ -1053,8 +1275,20 @@ extern "C" void _start() {
                     stop_playback();
                     redraw = true;
                 }
+                if (ev.key.ascii == 'h' || ev.key.ascii == 'H') {
+                    g.shuffle_enabled = !g.shuffle_enabled;
+                    redraw = true;
+                }
+                if (ev.key.ascii == 'r' || ev.key.ascii == 'R') {
+                    cycle_repeat_mode();
+                    redraw = true;
+                }
+                if (ev.key.ascii == 'v' || ev.key.ascii == 'V') {
+                    g.show_visualizer = !g.show_visualizer;
+                    redraw = true;
+                }
                 if (ev.key.scancode == 0x4D) { // Right arrow
-                    next_track();
+                    next_track(false);
                     redraw = true;
                 }
                 if (ev.key.scancode == 0x4B) { // Left arrow
@@ -1084,26 +1318,13 @@ extern "C" void _start() {
                     if (rel < 0) rel = 0;
                     if (rel > bar_w) rel = bar_w;
                     uint64_t target_samples = (uint64_t)rel * g.total_samples / bar_w;
-
-                    if (g.current_track >= 0 && g.files[g.current_track].is_mp3) {
-                        uint64_t target_offset = (g.file_size * rel) / bar_w;
-                        g.mp3_offset = target_offset;
-                        g.played_samples = target_samples;
-                        g.pcm_buf_len = 0;
-                        mp3dec_init(&g.mp3dec);
-                    } else {
-                        int bytes_per_sample = 2 * g.channels;
-                        g.wav_pos = target_samples * bytes_per_sample;
-                        if (g.wav_pos > g.wav_data_size) g.wav_pos = g.wav_data_size;
-                        g.played_samples = target_samples;
-                        g.pcm_buf_len = 0;
-                    }
+                    seek_to_samples(target_samples);
                     redraw = true;
                 }
 
                 // Hover tracking for file list
                 int lb = list_bottom();
-                if (ev.mouse.y >= LIST_TOP && ev.mouse.y < lb) {
+                if (!g.show_visualizer && ev.mouse.y >= LIST_TOP && ev.mouse.y < lb) {
                     int new_hover = (ev.mouse.y - LIST_TOP) / LIST_ITEM_H + g.scroll_y;
                     if (new_hover >= g.file_count) new_hover = -1;
                     if (new_hover != g.hovered_item) {
@@ -1116,7 +1337,7 @@ extern "C" void _start() {
                 }
 
                 // Scroll
-                if (ev.mouse.scroll != 0) {
+                if (!g.show_visualizer && ev.mouse.scroll != 0) {
                     g.scroll_y -= ev.mouse.scroll * 2;
                     int max_scroll = g.file_count - visible_items();
                     if (max_scroll < 0) max_scroll = 0;
@@ -1142,11 +1363,12 @@ extern "C" void _start() {
 
         // Periodic redraw while playing (update time display)
         uint64_t now = montauk::get_milliseconds();
-        if (g.play_state == PlayState::Playing && now - last_render >= 250) {
+        if (g.play_state == PlayState::Playing && now - last_render >= 50) {
             redraw = true;
         }
 
         if (redraw) {
+            music_visualizer::tick(g.visualizer);
             render(pixels);
             montauk::win_present(win_id);
             last_render = now;

@@ -7,6 +7,7 @@
 #pragma once
 #include <cstdint>
 #include <montauk/syscall.h>
+#include <montauk/string.h>
 #include "gui/gui.hpp"
 
 namespace gui {
@@ -182,13 +183,11 @@ public:
 
     inline void flip() {
         // Copy back buffer to hardware framebuffer, row by row (pitch may differ)
-        int row_pixels = fb_width;
+        uint64_t row_bytes = (uint64_t)fb_width * sizeof(uint32_t);
         for (int y = 0; y < fb_height; y++) {
-            uint32_t* src = (uint32_t*)((uint8_t*)back_buf + y * fb_pitch);
-            uint32_t* dst = (uint32_t*)((uint8_t*)hw_fb + y * fb_pitch);
-            for (int x = 0; x < row_pixels; x++) {
-                dst[x] = src[x];
-            }
+            void* src = (void*)((uint8_t*)back_buf + y * fb_pitch);
+            void* dst = (void*)((uint8_t*)hw_fb + y * fb_pitch);
+            montauk::memcpy(dst, src, row_bytes);
         }
     }
 };

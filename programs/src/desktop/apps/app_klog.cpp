@@ -145,6 +145,7 @@ static void klog_on_poll(Window* win) {
 
     klog->last_len = n;
     if (n > 0) klog->last_tail_byte = klog->klog_buf[n - 1];
+    win->dirty = true;
 }
 
 static void klog_on_close(Window* win) {

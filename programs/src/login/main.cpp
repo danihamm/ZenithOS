@@ -801,22 +801,41 @@ extern "C" void _start() {
     }
 
     // Main loop
+    bool first_frame = true;
     for (;;) {
+        bool mouse_changed = false;
+        bool key_changed = false;
+
         // Poll mouse
+        int prev_mouse_x = ls->mouse.x;
+        int prev_mouse_y = ls->mouse.y;
+        uint8_t prev_mouse_buttons = ls->mouse.buttons;
         ls->prev_buttons = ls->mouse.buttons;
         montauk::mouse_state(&ls->mouse);
+        mouse_changed = ls->mouse.x != prev_mouse_x
+                     || ls->mouse.y != prev_mouse_y
+                     || ls->mouse.buttons != prev_mouse_buttons
+                     || ls->mouse.scrollDelta != 0;
 
         // Poll keyboard
         while (montauk::is_key_available()) {
             Montauk::KeyEvent key;
             montauk::getkey(&key);
             handle_key(ls, key);
+            key_changed = true;
         }
 
         // Handle mouse
-        handle_mouse(ls);
+        if (mouse_changed) {
+            handle_mouse(ls);
+        }
 
-        // Draw
-        draw_login_screen(ls);
+        if (first_frame || mouse_changed || key_changed) {
+            draw_login_screen(ls);
+            first_frame = false;
+            montauk::sleep_ms(4);
+        } else {
+            montauk::sleep_ms(16);
+        }
     }
 }

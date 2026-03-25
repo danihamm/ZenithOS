@@ -354,7 +354,38 @@ void gui::desktop_init(DesktopState* ds) {
 // External Window Polling
 // ============================================================================
 
-void desktop_poll_external_windows(DesktopState* ds) {
+static uint64_t desktop_clock_token() {
+    Montauk::DateTime dt;
+    montauk::gettime(&dt);
+    return ((uint64_t)dt.Year << 32)
+         | ((uint64_t)dt.Month << 24)
+         | ((uint64_t)dt.Day << 16)
+         | ((uint64_t)dt.Hour << 8)
+         | (uint64_t)dt.Minute;
+}
+
+static bool desktop_has_visible_dirty_window(const DesktopState* ds) {
+    for (int i = 0; i < ds->window_count; i++) {
+        const Window& win = ds->windows[i];
+        if (win.state == WIN_CLOSED || win.state == WIN_MINIMIZED) continue;
+        if (win.dirty) return true;
+    }
+    return false;
+}
+
+static void desktop_clear_window_dirty(DesktopState* ds) {
+    for (int i = 0; i < ds->window_count; i++) {
+        ds->windows[i].dirty = false;
+    }
+}
+
+static bool desktop_panel_refresh_due(const DesktopState* ds, uint64_t now) {
+    if (ds->screen_locked) return false;
+    return (now - ds->net_cfg_last_poll > 5000) || (now - ds->vol_last_poll > 5000);
+}
+
+bool desktop_poll_external_windows(DesktopState* ds) {
+    bool changed = false;
     Montauk::WinInfo extWins[8];
     int extCount = montauk::win_enumerate(extWins, 8);
 
@@ -370,6 +401,12 @@ void desktop_poll_external_windows(DesktopState* ds) {
                 // Update dirty flag and cursor
                 if (extWins[e].dirty) {
                     ds->windows[i].dirty = true;
+                    if (ds->windows[i].state != WIN_MINIMIZED && ds->windows[i].state != WIN_CLOSED) {
+                        changed = true;
+                    }
+                }
+                if (ds->windows[i].ext_cursor != extWins[e].cursor) {
+                    changed = true;
                 }
                 ds->windows[i].ext_cursor = extWins[e].cursor;
                 // Always verify mapping is current. If a window slot was
@@ -383,6 +420,7 @@ void desktop_poll_external_windows(DesktopState* ds) {
                     ds->windows[i].content_h = extWins[e].height;
                     ds->windows[i].dirty = true;
                     montauk::strncpy(ds->windows[i].title, extWins[e].title, MAX_TITLE_LEN);
+                    changed = true;
                     // Clear from closing list if the slot was reused
                     for (int c = 0; c < ds->closing_ext_count; c++) {
                         if (ds->closing_ext_ids[c] == extId) {
@@ -449,6 +487,7 @@ void desktop_poll_external_windows(DesktopState* ds) {
             }
             ds->focused_window = idx;
             ds->window_count++;
+            changed = true;
         }
     }
 
@@ -469,6 +508,7 @@ void desktop_poll_external_windows(DesktopState* ds) {
             // Window gone — remove without freeing content (shared memory)
             ds->windows[i].content = nullptr; // prevent free
             gui::desktop_close_window(ds, i);
+            changed = true;
         }
     }
 
@@ -482,6 +522,8 @@ void desktop_poll_external_windows(DesktopState* ds) {
             ds->closing_ext_ids[c] = ds->closing_ext_ids[--ds->closing_ext_count];
         }
     }
+
+    return changed;
 }
 
 // ============================================================================
@@ -489,20 +531,37 @@ void desktop_poll_external_windows(DesktopState* ds) {
 // ============================================================================
 
 void gui::desktop_run(DesktopState* ds) {
+    uint64_t lastClockToken = 0;
+    bool firstFrame = true;
+
     for (;;) {
+        bool mouseChanged = false;
+        bool keyboardChanged = false;
+        bool sceneChanged = false;
+
         // Poll mouse state
+        int prevMouseX = ds->mouse.x;
+        int prevMouseY = ds->mouse.y;
+        uint8_t prevMouseButtons = ds->mouse.buttons;
         ds->prev_buttons = ds->mouse.buttons;
         montauk::mouse_state(&ds->mouse);
+        mouseChanged = ds->mouse.x != prevMouseX
+                    || ds->mouse.y != prevMouseY
+                    || ds->mouse.buttons != prevMouseButtons
+                    || ds->mouse.scrollDelta != 0;
+        sceneChanged |= mouseChanged;
 
         // Poll keyboard events
         while (montauk::is_key_available()) {
             Montauk::KeyEvent key;
             montauk::getkey(&key);
             desktop_handle_keyboard(ds, key);
+            keyboardChanged = true;
         }
+        sceneChanged |= keyboardChanged;
 
         // Poll external windows (discover new, remove dead, update dirty)
-        desktop_poll_external_windows(ds);
+        sceneChanged |= desktop_poll_external_windows(ds);
 
         if (!ds->screen_locked) {
             // Poll windows that have a poll callback
@@ -516,20 +575,35 @@ void gui::desktop_run(DesktopState* ds) {
         }
 
         // Handle mouse events
-        desktop_handle_mouse(ds);
-
-        if (!ds->screen_locked) {
-            // Re-poll external windows so that any killed during mouse/key
-            // handling are removed before we touch their pixel buffers.
-            desktop_poll_external_windows(ds);
+        if (mouseChanged) {
+            desktop_handle_mouse(ds);
         }
 
-        // Compose and present
-        desktop_compose(ds);
-        ds->fb.flip();
+        if (!ds->screen_locked && (mouseChanged || keyboardChanged)) {
+            // Re-poll external windows so that any killed during mouse/key
+            // handling are removed before we touch their pixel buffers.
+            sceneChanged |= desktop_poll_external_windows(ds);
+        }
 
-        // Yield to scheduler without artificial frame cap
-        montauk::sleep_ms(1);
+        uint64_t now = montauk::get_milliseconds();
+        sceneChanged |= desktop_panel_refresh_due(ds, now);
+
+        uint64_t clockToken = desktop_clock_token();
+        if (clockToken != lastClockToken) {
+            lastClockToken = clockToken;
+            sceneChanged = true;
+        }
+
+        sceneChanged |= desktop_has_visible_dirty_window(ds);
+
+        if (firstFrame || sceneChanged) {
+            desktop_compose(ds);
+            ds->fb.flip();
+            desktop_clear_window_dirty(ds);
+            firstFrame = false;
+        }
+
+        montauk::sleep_ms(sceneChanged ? 4 : 16);
     }
 }
 

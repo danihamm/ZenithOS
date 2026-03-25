@@ -311,11 +311,16 @@ static void terminal_on_poll(Window* win) {
         if (!terminal_poll(tts->tabs[i])) {
             // This tab's shell exited
             term_close_tab(tts, win, i);
+            win->dirty = true;
             // term_close_tab may have closed the window (last tab).
             // desktop_close_window calls on_close which nulls app_data
             // before the window slot is recycled, so win is still valid here.
             if (!win->app_data) return;
         }
+    }
+
+    if (tts->tab_count > 0 && tts->tabs[tts->active_tab]->dirty) {
+        win->dirty = true;
     }
 }
 

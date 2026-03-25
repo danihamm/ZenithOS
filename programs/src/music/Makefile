@@ -64,7 +64,7 @@ LDFLAGS := \
 
 # ---- Source files ----
 
-SRCS := main.cpp minimp3_impl.cpp stb_truetype_impl.cpp
+SRCS := main.cpp visualizer.cpp minimp3_impl.cpp stb_truetype_impl.cpp
 OBJS := $(addprefix $(OBJDIR)/,$(SRCS:.cpp=.o))
 
 # ---- Target ----

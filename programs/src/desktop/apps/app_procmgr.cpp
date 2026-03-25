@@ -54,6 +54,8 @@ static void procmgr_on_poll(Window* win) {
             }
         }
     }
+
+    win->dirty = true;
 }
 
 static void procmgr_on_draw(Window* win, Framebuffer& fb) {
