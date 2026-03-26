@@ -1,0 +1,8 @@
+[app]
+name = "Word Processor"
+binary = "wordprocessor.elf"
+icon = "wordprocessor.svg"
+
+[menu]
+category = "Applications"
+visible = false

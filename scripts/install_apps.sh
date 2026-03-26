@@ -17,6 +17,7 @@ ICON_SRC="$PROJECT_ROOT/programs/gui/icons/Flat-Remix-Blue-Light-darkPanel"
 APPS=(
     "doom|apps/scalable/doom.svg"
     "spreadsheet|mimetypes/scalable/spreadsheet.svg"
+    "wordprocessor|apps/scalable/libreoffice6.0-writer.svg"
     "weather|apps/scalable/weather-widget.svg"
     "wikipedia|apps/scalable/web-browser.svg"
     "imageviewer|apps/scalable/utilities-terminal.svg"
