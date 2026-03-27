@@ -5,39 +5,22 @@
 */
 
 #include <montauk/syscall.h>
+#include <montauk/string.h>
 
 extern "C" void _start() {
     char args[256];
     int len = montauk::getargs(args, sizeof(args));
+    const char* path = montauk::skip_spaces(args);
 
-    if (len <= 0 || args[0] == '\0') {
+    if (len <= 0 || *path == '\0') {
         montauk::print("Usage: cat <filename>\n");
         montauk::exit(1);
     }
 
-    // Build VFS path. If the path already starts with "<digit>:", use as-is.
-    // Otherwise, prefix "0:/" to it.
-    char path[256];
-    bool hasPrefix = false;
-    if (args[0] >= '0' && args[0] <= '9' && args[1] == ':') {
-        hasPrefix = true;
-    }
-
-    int i = 0;
-    if (!hasPrefix) {
-        path[0] = '0'; path[1] = ':'; path[2] = '/';
-        i = 3;
-    }
-    int j = 0;
-    while (args[j] && i < 255) {
-        path[i++] = args[j++];
-    }
-    path[i] = '\0';
-
     int handle = montauk::open(path);
     if (handle < 0) {
         montauk::print("cat: cannot open '");
-        montauk::print(args);
+        montauk::print(path);
         montauk::print("'\n");
         montauk::exit(1);
     }
