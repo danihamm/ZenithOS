@@ -1,10 +1,21 @@
 #include "visualizer.hpp"
 
+#include <gui/stb_math.h>
+
 namespace music_visualizer {
 
 using namespace gui;
 
-static constexpr int SLICE_FRAMES = 256;
+static constexpr int ANALYSIS_HOP = 256;
+static constexpr double PI = 3.14159265358979323846;
+static constexpr double REFERENCE_MAGNITUDE = (double)ANALYSIS_SIZE * 32767.0 * 0.17;
+static constexpr double PROBE_FREQS[BAND_COUNT] = {
+    60.0, 76.49, 97.52, 124.33, 158.51, 202.09, 257.64, 328.47,
+    418.76, 533.88, 680.64, 867.76, 1106.3, 1410.43, 1798.16, 2292.48,
+    2922.68, 3726.13, 4750.46, 6056.37, 7721.28, 9843.88, 12549.98, 16000.0
+};
+static constexpr double PROBE_SPREADS[PROBE_COUNT] = {0.82, 1.0, 1.22};
+static constexpr double PROBE_WEIGHTS[PROBE_COUNT] = {0.65, 1.0, 0.65};
 
 static void px_fill(uint32_t* px, int bw, int bh,
                     int x, int y, int w, int h, Color c) {
@@ -32,6 +43,33 @@ static void px_hline(uint32_t* px, int bw, int bh,
     }
 }
 
+static void px_fill_rounded(uint32_t* px, int bw, int bh,
+                            int x, int y, int w, int h, int r, Color c) {
+    if (w <= 0 || h <= 0) return;
+    if (r < 0) r = 0;
+    int max_r = gui_min(w / 2, h / 2);
+    if (r > max_r) r = max_r;
+
+    uint32_t v = c.to_pixel();
+    for (int row = 0; row < h; row++) {
+        int dy = y + row;
+        if (dy < 0 || dy >= bh) continue;
+        for (int col = 0; col < w; col++) {
+            int dx = x + col;
+            if (dx < 0 || dx >= bw) continue;
+
+            bool skip = false;
+            int cx = 0, cy = 0;
+            if      (col < r      && row < r)      { cx = r - col - 1; cy = r - row - 1; skip = (cx * cx + cy * cy >= r * r); }
+            else if (col >= w - r && row < r)      { cx = col - (w - r); cy = r - row - 1; skip = (cx * cx + cy * cy >= r * r); }
+            else if (col < r      && row >= h - r) { cx = r - col - 1; cy = row - (h - r); skip = (cx * cx + cy * cy >= r * r); }
+            else if (col >= w - r && row >= h - r) { cx = col - (w - r); cy = row - (h - r); skip = (cx * cx + cy * cy >= r * r); }
+
+            if (!skip) px[dy * bw + dx] = v;
+        }
+    }
+}
+
 static Color mix_color(Color a, Color b, int t) {
     t = gui_clamp(t, 0, 255);
     int inv_t = 255 - t;
@@ -43,94 +81,160 @@ static Color mix_color(Color a, Color b, int t) {
     };
 }
 
-static int ordered_index(const State& state, int order) {
-    if (state.history_count < WAVE_HISTORY) return order;
-    int idx = state.write_pos + order;
-    if (idx >= WAVE_HISTORY) idx -= WAVE_HISTORY;
-    return idx;
+static double fast_sin(double x) {
+    return stb_cos((PI * 0.5) - x);
 }
 
-static void clear_accumulator(State& state) {
-    state.accum_frames = 0;
-    state.accum_abs_sum = 0;
-    state.accum_min = 32767;
-    state.accum_max = -32768;
-}
+static void prepare_analysis(State& state, int sample_rate) {
+    if (sample_rate <= 0 || state.sample_rate == sample_rate) return;
 
-static void push_slice(State& state, int min_sample, int max_sample, int avg_abs) {
-    if (min_sample > max_sample) return;
+    state.sample_rate = sample_rate;
+    state.ring_pos = 0;
+    state.ring_fill = 0;
+    state.samples_since_analyze = 0;
 
-    int idx = state.write_pos;
-    state.min_samples[idx] = (int16_t)min_sample;
-    state.max_samples[idx] = (int16_t)max_sample;
-
-    int scaled_energy = (avg_abs * 100) / 32768;
-    scaled_energy = (scaled_energy * 3) / 2;
-    if (scaled_energy > 100) scaled_energy = 100;
-    state.energy[idx] = (uint8_t)scaled_energy;
-
-    state.write_pos++;
-    if (state.write_pos >= WAVE_HISTORY) state.write_pos = 0;
-    if (state.history_count < WAVE_HISTORY) state.history_count++;
-}
-
-static void sample_history(const State& state, int column, int total_columns,
-                           int& min_sample, int& max_sample, int& energy) {
-    if (state.history_count <= 0) {
-        min_sample = 0;
-        max_sample = 0;
-        energy = 0;
-        return;
+    for (int i = 0; i < ANALYSIS_SIZE; i++) {
+        state.ring[i] = 0;
+        state.window[i] = 0.5 - 0.5 * stb_cos((2.0 * PI * (double)i) / (double)(ANALYSIS_SIZE - 1));
     }
 
-    if (state.history_count == 1 || total_columns <= 1) {
-        int idx = ordered_index(state, state.history_count - 1);
-        min_sample = state.min_samples[idx];
-        max_sample = state.max_samples[idx];
-        energy = state.energy[idx];
-        return;
+    double max_freq = (double)sample_rate * 0.45;
+    if (max_freq < 90.0) max_freq = 90.0;
+
+    for (int band = 0; band < BAND_COUNT; band++) {
+        for (int probe = 0; probe < PROBE_COUNT; probe++) {
+            double freq = PROBE_FREQS[band] * PROBE_SPREADS[probe];
+            if (freq > max_freq) freq = max_freq;
+            if (freq < 40.0) freq = 40.0;
+
+            double omega = (2.0 * PI * freq) / (double)sample_rate;
+            double cosine = stb_cos(omega);
+            state.probes[band][probe].cosine = cosine;
+            state.probes[band][probe].sine = fast_sin(omega);
+            state.probes[band][probe].coeff = 2.0 * cosine;
+        }
+    }
+}
+
+static double run_goertzel(const State& state, const Probe& probe) {
+    double q1 = 0.0;
+    double q2 = 0.0;
+    int pos = state.ring_pos;
+
+    for (int i = 0; i < ANALYSIS_SIZE; i++) {
+        double sample = (double)state.ring[pos] * state.window[i];
+        double q0 = probe.coeff * q1 - q2 + sample;
+        q2 = q1;
+        q1 = q0;
+
+        pos++;
+        if (pos >= ANALYSIS_SIZE) pos = 0;
     }
 
-    int denom = total_columns - 1;
-    int max_order = state.history_count - 1;
-    int scaled = column * max_order * 256;
-    int base = scaled / denom;
-    int frac = base & 0xFF;
-    int order0 = base >> 8;
-    int order1 = order0 < max_order ? order0 + 1 : order0;
+    double real = q1 - q2 * probe.cosine;
+    double imag = q2 * probe.sine;
+    return stb_sqrt(real * real + imag * imag);
+}
 
-    int idx0 = ordered_index(state, order0);
-    int idx1 = ordered_index(state, order1);
+static void analyze_window(State& state) {
+    if (state.ring_fill < ANALYSIS_SIZE || state.sample_rate <= 0) return;
 
-    int min0 = state.min_samples[idx0];
-    int min1 = state.min_samples[idx1];
-    int max0 = state.max_samples[idx0];
-    int max1 = state.max_samples[idx1];
-    int e0 = state.energy[idx0];
-    int e1 = state.energy[idx1];
+    double raw[BAND_COUNT] = {};
 
-    min_sample = (min0 * (256 - frac) + min1 * frac) / 256;
-    max_sample = (max0 * (256 - frac) + max1 * frac) / 256;
-    energy = (e0 * (256 - frac) + e1 * frac) / 256;
+    for (int band = 0; band < BAND_COUNT; band++) {
+        double weighted = 0.0;
+        double weight_sum = 0.0;
+
+        for (int probe = 0; probe < PROBE_COUNT; probe++) {
+            double magnitude = run_goertzel(state, state.probes[band][probe]);
+            weighted += magnitude * PROBE_WEIGHTS[probe];
+            weight_sum += PROBE_WEIGHTS[probe];
+        }
+
+        if (weight_sum > 0.0) weighted /= weight_sum;
+
+        double normalized = weighted / REFERENCE_MAGNITUDE;
+        if (normalized < 0.0) normalized = 0.0;
+
+        double display = 100.0 * stb_sqrt(normalized);
+        double t = (double)band / (double)(BAND_COUNT - 1);
+        double contour = 1.16 + (1.0 - t) * 0.30 + t * t * 0.08;
+        display *= contour;
+
+        if (display < 3.0) display = 0.0;
+        if (display > 100.0) display = 100.0;
+        raw[band] = display;
+    }
+
+    for (int band = 0; band < BAND_COUNT; band++) {
+        double prev = raw[band > 0 ? band - 1 : band];
+        double cur  = raw[band];
+        double next = raw[band + 1 < BAND_COUNT ? band + 1 : band];
+        double smooth = prev * 0.22 + cur * 0.56 + next * 0.22;
+        int target = gui_clamp((int)(smooth + 0.5), 0, 100);
+
+        int current = state.levels[band];
+        if (target >= current) current += ((target - current) * 3 + 3) / 4;
+        else current -= ((current - target) + 2) / 3;
+
+        current = gui_clamp(current, 0, 100);
+        state.levels[band] = (uint8_t)current;
+
+        if (state.levels[band] > state.peaks[band]) {
+            state.peaks[band] = state.levels[band];
+            state.peak_hold[band] = 0;
+        }
+    }
 }
 
 void reset(State& state) {
-    for (int i = 0; i < WAVE_HISTORY; i++) {
-        state.min_samples[i] = 0;
-        state.max_samples[i] = 0;
-        state.energy[i] = 0;
+    for (int i = 0; i < BAND_COUNT; i++) {
+        state.levels[i] = 0;
+        state.peaks[i] = 0;
+        state.peak_hold[i] = 0;
     }
-    state.write_pos = 0;
-    state.history_count = 0;
-    clear_accumulator(state);
+
+    state.sample_rate = 0;
+    state.ring_pos = 0;
+    state.ring_fill = 0;
+    state.samples_since_analyze = 0;
+
+    for (int i = 0; i < ANALYSIS_SIZE; i++) {
+        state.ring[i] = 0;
+        state.window[i] = 0.0;
+    }
+
+    for (int band = 0; band < BAND_COUNT; band++) {
+        for (int probe = 0; probe < PROBE_COUNT; probe++) {
+            state.probes[band][probe].coeff = 0.0;
+            state.probes[band][probe].cosine = 0.0;
+            state.probes[band][probe].sine = 0.0;
+        }
+    }
 }
 
 void tick(State& state) {
-    (void)state;
+    for (int i = 0; i < BAND_COUNT; i++) {
+        if (state.levels[i] > 0)
+            state.levels[i] = state.levels[i] > 1 ? (uint8_t)(state.levels[i] - 1) : 0;
+
+        if (state.peak_hold[i] < 10) {
+            state.peak_hold[i]++;
+        } else if (state.peaks[i] > 0) {
+            state.peaks[i] = state.peaks[i] > 1 ? (uint8_t)(state.peaks[i] - 1) : 0;
+        }
+
+        if (state.peaks[i] < state.levels[i]) {
+            state.peaks[i] = state.levels[i];
+            state.peak_hold[i] = 0;
+        }
+    }
 }
 
-void feed_pcm(State& state, const int16_t* pcm, int frames, int channels) {
-    if (!pcm || frames <= 0 || channels <= 0) return;
+void feed_pcm(State& state, const int16_t* pcm, int frames, int channels, int sample_rate) {
+    if (!pcm || frames <= 0 || channels <= 0 || sample_rate <= 0) return;
+
+    prepare_analysis(state, sample_rate);
 
     for (int i = 0; i < frames; i++) {
         int mono = 0;
@@ -139,20 +243,15 @@ void feed_pcm(State& state, const int16_t* pcm, int frames, int channels) {
         }
         mono /= channels;
 
-        if (mono < state.accum_min) state.accum_min = mono;
-        if (mono > state.accum_max) state.accum_max = mono;
+        state.ring[state.ring_pos] = (int16_t)mono;
+        state.ring_pos++;
+        if (state.ring_pos >= ANALYSIS_SIZE) state.ring_pos = 0;
+        if (state.ring_fill < ANALYSIS_SIZE) state.ring_fill++;
 
-        int abs_mono = mono;
-        if (abs_mono < 0) {
-            abs_mono = abs_mono == -32768 ? 32768 : -abs_mono;
-        }
-        state.accum_abs_sum += abs_mono;
-        state.accum_frames++;
-
-        if (state.accum_frames >= SLICE_FRAMES) {
-            int avg_abs = state.accum_abs_sum / state.accum_frames;
-            push_slice(state, state.accum_min, state.accum_max, avg_abs);
-            clear_accumulator(state);
+        state.samples_since_analyze++;
+        if (state.samples_since_analyze >= ANALYSIS_HOP && state.ring_fill >= ANALYSIS_SIZE) {
+            analyze_window(state);
+            state.samples_since_analyze = 0;
         }
     }
 }
@@ -163,63 +262,95 @@ void render(uint32_t* pixels, int bw, int bh, const Rect& rect,
     if (!pixels || rect.w <= 0 || rect.h <= 0) return;
 
     Color panel_bg = Color::from_rgb(0xFA, 0xFB, 0xFD);
-    Color guide = mix_color(panel_bg, track_bg, 144);
-    Color guide_faint = mix_color(panel_bg, track_bg, 72);
-    Color inner_base = mix_color(Color::from_rgb(0xE9, 0xF2, 0xFF), accent, 64);
-    Color outer_base = mix_color(track_bg, accent_dark, 72);
+    Color guide = mix_color(panel_bg, track_bg, 84);
+    Color guide_strong = mix_color(panel_bg, track_bg, 114);
+    Color shelf = mix_color(panel_bg, track_bg, 126);
+    Color accent_light = mix_color(accent, Color::from_rgb(0xFF, 0xFF, 0xFF), 96);
+    Color peak_base = mix_color(Color::from_rgb(0xFF, 0xFF, 0xFF), accent, 88);
 
     px_fill(pixels, bw, bh, rect.x, rect.y, rect.w, rect.h, panel_bg);
     px_hline(pixels, bw, bh, rect.x, rect.y, rect.w, border);
     px_hline(pixels, bw, bh, rect.x, rect.y + rect.h - 1, rect.w, border);
 
-    int inner_x = rect.x + 10;
-    int inner_y = rect.y + 8;
-    int inner_w = rect.w - 20;
-    int inner_h = rect.h - 16;
+    int inner_x = rect.x + 12;
+    int inner_y = rect.y + 10;
+    int inner_w = rect.w - 24;
+    int inner_h = rect.h - 20;
     if (inner_w <= 0 || inner_h <= 0) return;
 
-    int center_y = inner_y + inner_h / 2;
-    int amplitude = inner_h / 2 - 10;
-    if (amplitude < 12) amplitude = 12;
+    int gap = inner_w > 340 ? 4 : 3;
+    int bar_w = (inner_w - gap * (BAND_COUNT - 1)) / BAND_COUNT;
+    if (bar_w < 5) {
+        gap = 2;
+        bar_w = (inner_w - gap * (BAND_COUNT - 1)) / BAND_COUNT;
+    }
+    if (bar_w < 3) bar_w = 3;
 
-    px_hline(pixels, bw, bh, inner_x, center_y, inner_w, guide);
-    px_hline(pixels, bw, bh, inner_x, center_y - amplitude / 2, inner_w, guide_faint);
-    px_hline(pixels, bw, bh, inner_x, center_y + amplitude / 2, inner_w, guide_faint);
+    int total_w = bar_w * BAND_COUNT + gap * (BAND_COUNT - 1);
+    int start_x = inner_x + (inner_w - total_w) / 2;
+    int track_y = inner_y + 2;
+    int track_h = inner_h - 12;
+    if (track_h < 18) track_h = inner_h;
+    int track_bottom = track_y + track_h;
 
-    if (state.history_count <= 0) return;
+    px_hline(pixels, bw, bh, inner_x, track_y + track_h / 4, inner_w, guide);
+    px_hline(pixels, bw, bh, inner_x, track_y + track_h / 2, inner_w, guide_strong);
+    px_hline(pixels, bw, bh, inner_x, track_y + (track_h * 3) / 4, inner_w, guide);
+    px_fill_rounded(pixels, bw, bh, inner_x, track_bottom + 4, inner_w, 4, 2, shelf);
 
-    for (int col = 0; col < inner_w; col++) {
-        int min_sample, max_sample, energy;
-        sample_history(state, col, inner_w, min_sample, max_sample, energy);
+    int radius = gui_clamp(bar_w / 2, 2, 5);
 
-        int top = center_y - (max_sample * amplitude) / 32768;
-        int bottom = center_y - (min_sample * amplitude) / 32768;
-        if (top > bottom) {
-            int swap = top;
-            top = bottom;
-            bottom = swap;
+    for (int i = 0; i < BAND_COUNT; i++) {
+        int x = start_x + i * (bar_w + gap);
+        int y = track_y;
+
+        Color capsule_bg = mix_color(panel_bg, track_bg, 96 + ((i & 1) ? 8 : 0));
+        px_fill_rounded(pixels, bw, bh, x, y, bar_w, track_h, radius, capsule_bg);
+
+        if (bar_w > 5) {
+            Color step_color = mix_color(panel_bg, track_bg, 132);
+            for (int step = 1; step < 5; step++) {
+                int sy = y + (track_h * step) / 5;
+                px_fill(pixels, bw, bh, x + 1, sy, bar_w - 2, 1, step_color);
+            }
         }
 
-        int pad = 1 + energy / 28;
-        top -= pad;
-        bottom += pad;
+        int fill_h = (state.levels[i] * (track_h - 2)) / 100;
+        if (fill_h < 0) fill_h = 0;
+        if (fill_h > 0 && fill_h < 4) fill_h = 4;
+        if (fill_h > track_h) fill_h = track_h;
 
-        top = gui_clamp(top, inner_y, inner_y + inner_h - 1);
-        bottom = gui_clamp(bottom, inner_y, inner_y + inner_h - 1);
-        if (bottom < top) bottom = top;
+        if (fill_h > 0) {
+            int fill_y = y + track_h - fill_h;
+            int blend_t = 36 + (i * 160) / (BAND_COUNT - 1);
+            Color outer = mix_color(accent_dark, accent, blend_t);
+            Color inner = mix_color(outer, accent_light, 104);
+            Color gloss = mix_color(inner, Color::from_rgb(0xFF, 0xFF, 0xFF), 92);
 
-        int outer_t = 48 + (col * 160) / (inner_w > 1 ? (inner_w - 1) : 1);
-        int inner_t = 80 + (col * 175) / (inner_w > 1 ? (inner_w - 1) : 1);
-        Color outer = mix_color(outer_base, accent_dark, outer_t);
-        Color inner = mix_color(inner_base, accent, inner_t);
+            px_fill_rounded(pixels, bw, bh, x, fill_y, bar_w, fill_h, radius, outer);
 
-        int x = inner_x + col;
-        px_fill(pixels, bw, bh, x, top, 1, bottom - top + 1, outer);
+            if (bar_w > 3 && fill_h > 3) {
+                int inner_r = gui_clamp(radius - 1, 1, 4);
+                px_fill_rounded(pixels, bw, bh, x + 1, fill_y + 1, bar_w - 2, fill_h - 2, inner_r, inner);
+            }
 
-        int inner_top = top + 1;
-        int inner_bottom = bottom - 1;
-        if (inner_bottom >= inner_top) {
-            px_fill(pixels, bw, bh, x, inner_top, 1, inner_bottom - inner_top + 1, inner);
+            int gloss_h = fill_h / 4;
+            if (gloss_h < 2) gloss_h = 2;
+            if (gloss_h > 6) gloss_h = 6;
+            if (bar_w > 2 && fill_h > 2) {
+                px_fill_rounded(pixels, bw, bh, x + 1, fill_y + 1, bar_w - 2,
+                                gloss_h, gui_clamp(radius - 1, 1, 4), gloss);
+            }
+        }
+
+        int peak_h = (state.peaks[i] * (track_h - 2)) / 100;
+        if (peak_h > 0) {
+            int peak_y = y + track_h - peak_h - 2;
+            if (peak_y < y + 1) peak_y = y + 1;
+            Color peak_color = mix_color(peak_base, accent_light, 64 + (i * 72) / (BAND_COUNT - 1));
+            int peak_w = bar_w > 4 ? bar_w - 2 : bar_w;
+            int peak_x = bar_w > 4 ? x + 1 : x;
+            px_fill_rounded(pixels, bw, bh, peak_x, peak_y, peak_w, 3, 1, peak_color);
         }
     }
 }

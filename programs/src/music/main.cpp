@@ -964,7 +964,8 @@ static void feed_audio() {
                     music_visualizer::feed_pcm(g.visualizer,
                                                g.pcm_buf + g.pcm_buf_pos,
                                                g.pcm_buf_len / info.channels,
-                                               info.channels);
+                                               info.channels,
+                                               info.hz);
                 } else {
                     g.pcm_buf_pos = 0;
                 }
@@ -987,7 +988,8 @@ static void feed_audio() {
                 music_visualizer::feed_pcm(g.visualizer,
                                            g.pcm_buf,
                                            g.pcm_buf_len / g.channels,
-                                           g.channels);
+                                           g.channels,
+                                           g.sample_rate);
             }
         }
     }
