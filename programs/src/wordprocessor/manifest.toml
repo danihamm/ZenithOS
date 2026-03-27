@@ -5,4 +5,4 @@ icon = "wordprocessor.svg"
 
 [menu]
 category = "Applications"
-visible = false
+visible = true

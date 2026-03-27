@@ -355,7 +355,6 @@ void gui::desktop_handle_mouse(DesktopState* ds) {
                             case 11: open_settings(ds); break;
                             case 12: open_reboot_dialog(ds); break;
                             case 14: open_shutdown_dialog(ds); break;
-                            case 15: open_wordprocessor(ds); break;
                             case 16: montauk::exit(0); break;  // Log Out
                             case 17: lock_screen(ds); break;   // Lock Screen
                             case 18: open_sleep_dialog(ds); break; // Sleep

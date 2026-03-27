@@ -117,7 +117,6 @@ static const EmbeddedAppDef embedded_apps[] = {
     { "Terminal",        0,  0 },
     { "Files",           1,  0 },
     { "Text Editor",     4,  0 },
-    { "Word Processor", 15,  0 },
     { "Calculator",      3,  0 },
     { "System Info",     2,  2 },
     { "Kernel Log",      5,  2 },
@@ -138,7 +137,6 @@ static SvgIcon* icon_for_embedded(DesktopState* ds, int app_id) {
     case 5:  return &ds->icon_terminal;    // Kernel Log uses terminal icon
     case 6:  return &ds->icon_procmgr;
     case 7:  return &ds->icon_mandelbrot;
-    case 15: return &ds->icon_texteditor;  // Word Processor uses text editor icon
     default: return nullptr;
     }
 }
