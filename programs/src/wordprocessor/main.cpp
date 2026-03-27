@@ -13,6 +13,15 @@ WordProcessorState g_wp = {};
 WPFontTable g_wp_fonts = { {{nullptr}}, false };
 SvgIcon g_icon_folder = {};
 SvgIcon g_icon_save = {};
+SvgIcon g_icon_undo = {};
+SvgIcon g_icon_redo = {};
+SvgIcon g_icon_align_left = {};
+SvgIcon g_icon_align_center = {};
+SvgIcon g_icon_align_right = {};
+SvgIcon g_icon_list_bullet = {};
+SvgIcon g_icon_list_number = {};
+SvgIcon g_icon_indent_less = {};
+SvgIcon g_icon_indent_more = {};
 TrueTypeFont* g_ui_font = nullptr;
 TrueTypeFont* g_ui_bold = nullptr;
 
@@ -22,12 +31,39 @@ void wp_load_icons() {
         g_icon_folder = svg_load("0:/icons/folder.svg", 16, 16, def_color);
     if (!g_icon_save.pixels)
         g_icon_save = svg_load("0:/icons/document-save-symbolic.svg", 16, 16, def_color);
+    if (!g_icon_undo.pixels)
+        g_icon_undo = svg_load("0:/icons/edit-undo-symbolic.svg", 16, 16, def_color);
+    if (!g_icon_redo.pixels)
+        g_icon_redo = svg_load("0:/icons/edit-redo-symbolic.svg", 16, 16, def_color);
+    if (!g_icon_align_left.pixels)
+        g_icon_align_left = svg_load("0:/icons/format-justify-left-symbolic.svg", 16, 16, def_color);
+    if (!g_icon_align_center.pixels)
+        g_icon_align_center = svg_load("0:/icons/format-justify-center-symbolic.svg", 16, 16, def_color);
+    if (!g_icon_align_right.pixels)
+        g_icon_align_right = svg_load("0:/icons/format-justify-right-symbolic.svg", 16, 16, def_color);
+    if (!g_icon_list_bullet.pixels)
+        g_icon_list_bullet = svg_load("0:/icons/view-list-bullet-symbolic.svg", 16, 16, def_color);
+    if (!g_icon_list_number.pixels)
+        g_icon_list_number = svg_load("0:/icons/view-list-ordered-symbolic.svg", 16, 16, def_color);
+    if (!g_icon_indent_less.pixels)
+        g_icon_indent_less = svg_load("0:/icons/format-indent-less-symbolic.svg", 16, 16, def_color);
+    if (!g_icon_indent_more.pixels)
+        g_icon_indent_more = svg_load("0:/icons/format-indent-more-symbolic.svg", 16, 16, def_color);
 }
 
 void wp_cleanup_state() {
     wp_free_document(&g_wp);
     if (g_icon_folder.pixels) svg_free(g_icon_folder);
     if (g_icon_save.pixels) svg_free(g_icon_save);
+    if (g_icon_undo.pixels) svg_free(g_icon_undo);
+    if (g_icon_redo.pixels) svg_free(g_icon_redo);
+    if (g_icon_align_left.pixels) svg_free(g_icon_align_left);
+    if (g_icon_align_center.pixels) svg_free(g_icon_align_center);
+    if (g_icon_align_right.pixels) svg_free(g_icon_align_right);
+    if (g_icon_list_bullet.pixels) svg_free(g_icon_list_bullet);
+    if (g_icon_list_number.pixels) svg_free(g_icon_list_number);
+    if (g_icon_indent_less.pixels) svg_free(g_icon_indent_less);
+    if (g_icon_indent_more.pixels) svg_free(g_icon_indent_more);
 }
 
 extern "C" void _start() {

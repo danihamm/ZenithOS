@@ -31,7 +31,34 @@ static constexpr int WP_MARGIN         = 16;
 static constexpr int WP_MAX_RUNS       = 1024;
 static constexpr int WP_MAX_TEXT       = 262144;
 static constexpr int WP_MAX_WRAP_LINES = 4096;
+static constexpr int WP_MAX_PARAGRAPHS = 4096;
 static constexpr int WP_DEFAULT_SIZE   = 18;
+static constexpr int WP_UNDO_MAX       = 24;
+static constexpr int WP_PARA_STEP      = 12;
+static constexpr int WP_SPACE_STEP     = 6;
+static constexpr int WP_LIST_LEFT      = 28;
+static constexpr int WP_LIST_HANGING   = -18;
+static constexpr int WP_LIST_MARKER_W  = 20;
+static constexpr int WP_BTN_OPEN_X     = 4;
+static constexpr int WP_BTN_SAVE_X     = 32;
+static constexpr int WP_BTN_UNDO_X     = 66;
+static constexpr int WP_BTN_REDO_X     = 94;
+static constexpr int WP_BTN_BOLD_X     = 128;
+static constexpr int WP_BTN_ITALIC_X   = 156;
+static constexpr int WP_FONT_DD_X      = 188;
+static constexpr int WP_FONT_DD_W      = 84;
+static constexpr int WP_SIZE_DD_X      = 278;
+static constexpr int WP_SIZE_DD_W      = 40;
+static constexpr int WP_BTN_ALIGN_L_X  = 330;
+static constexpr int WP_BTN_ALIGN_C_X  = 358;
+static constexpr int WP_BTN_ALIGN_R_X  = 386;
+static constexpr int WP_BTN_BULLET_X   = 418;
+static constexpr int WP_BTN_NUMBER_X   = 446;
+static constexpr int WP_BTN_OUTDENT_X  = 482;
+static constexpr int WP_BTN_INDENT_X   = 510;
+static constexpr int WP_LINE_DD_X      = 544;
+static constexpr int WP_LINE_DD_W      = 56;
+static constexpr int WP_BTN_SECTION_X  = 608;
 
 static constexpr int FONT_ROBOTO    = 0;
 static constexpr int FONT_NOTOSERIF = 1;
@@ -49,6 +76,20 @@ inline constexpr const char* WP_FONT_NAMES[FONT_COUNT] = {
 
 inline constexpr int WP_SIZE_OPTIONS[] = { 12, 14, 16, 18, 20, 24, 28, 36 };
 static constexpr int WP_SIZE_OPTION_COUNT = 8;
+inline constexpr int WP_LINE_SPACING_OPTIONS[] = { 100, 125, 150, 200 };
+static constexpr int WP_LINE_SPACING_OPTION_COUNT = 4;
+
+enum ParagraphAlign : uint8_t {
+    PARA_ALIGN_LEFT = 0,
+    PARA_ALIGN_CENTER = 1,
+    PARA_ALIGN_RIGHT = 2,
+};
+
+enum ParagraphListType : uint8_t {
+    PARA_LIST_NONE = 0,
+    PARA_LIST_BULLET = 1,
+    PARA_LIST_NUMBER = 2,
+};
 
 struct WPFontTable {
     TrueTypeFont* fonts[FONT_COUNT][4];
@@ -71,6 +112,32 @@ struct WrapLine {
     int y;
     int height;
     int baseline;
+    int x;
+    int width;
+    int paragraph_idx;
+    int list_number;
+    bool first_in_paragraph;
+};
+
+struct ParagraphStyle {
+    uint8_t align;
+    uint8_t list_type;
+    uint8_t line_spacing;
+    uint8_t _pad;
+    int16_t left_indent;
+    int16_t first_line_indent;
+    int16_t space_before;
+    int16_t space_after;
+};
+
+struct UndoSnapshot {
+    uint8_t* data;
+    int size;
+    int cursor_abs;
+    int sel_anchor;
+    int sel_end;
+    bool has_selection;
+    bool modified;
 };
 
 inline bool wp_left_held(uint8_t buttons) {
@@ -189,8 +256,12 @@ struct WordProcessorState {
 
     WrapLine* wrap_lines;
     int wrap_line_count;
+    int wrap_line_cap;
     bool wrap_dirty;
     int last_wrap_width;
+
+    ParagraphStyle paragraphs[WP_MAX_PARAGRAPHS];
+    int paragraph_count;
 
     bool modified;
     char filepath[256];
@@ -204,6 +275,11 @@ struct WordProcessorState {
 
     bool font_dropdown_open;
     bool size_dropdown_open;
+    bool line_spacing_dropdown_open;
+
+    UndoSnapshot undo[WP_UNDO_MAX];
+    int undo_count;
+    int undo_pos;
 };
 
 extern int g_win_w;
@@ -213,11 +289,21 @@ extern WordProcessorState g_wp;
 extern WPFontTable g_wp_fonts;
 extern SvgIcon g_icon_folder;
 extern SvgIcon g_icon_save;
+extern SvgIcon g_icon_undo;
+extern SvgIcon g_icon_redo;
+extern SvgIcon g_icon_align_left;
+extern SvgIcon g_icon_align_center;
+extern SvgIcon g_icon_align_right;
+extern SvgIcon g_icon_list_bullet;
+extern SvgIcon g_icon_list_number;
+extern SvgIcon g_icon_indent_less;
+extern SvgIcon g_icon_indent_more;
 extern TrueTypeFont* g_ui_font;
 extern TrueTypeFont* g_ui_bold;
 
 void wp_load_fonts();
 void wp_load_icons();
+void wp_init_paragraph_style(ParagraphStyle* para);
 void wp_init_empty_document(WordProcessorState* wp);
 void wp_free_document(WordProcessorState* wp);
 void wp_cleanup_state();
@@ -227,6 +313,8 @@ TrueTypeFont* wp_get_font(int font_id, uint8_t flags);
 int  wp_abs_pos(WordProcessorState* wp, int run, int offset);
 void wp_pos_to_run(WordProcessorState* wp, int abs_pos, int* out_run, int* out_offset);
 char wp_char_at(WordProcessorState* wp, int abs_pos);
+int  wp_find_paragraph_at(WordProcessorState* wp, int abs_pos);
+void wp_selected_paragraph_range(WordProcessorState* wp, int* out_start_para, int* out_end_para);
 
 void wp_insert_char(WordProcessorState* wp, char c);
 void wp_delete_char(WordProcessorState* wp);
@@ -242,6 +330,14 @@ void wp_sel_range(WordProcessorState* wp, int* out_start, int* out_end);
 void wp_start_selection(WordProcessorState* wp);
 void wp_update_selection_to_cursor(WordProcessorState* wp);
 void wp_apply_style_to_selection(WordProcessorState* wp, int mode, int value);
+void wp_apply_alignment(WordProcessorState* wp, uint8_t align);
+void wp_adjust_paragraph_indent(WordProcessorState* wp, int delta);
+void wp_adjust_paragraph_first_line_indent(WordProcessorState* wp, int delta);
+void wp_adjust_paragraph_spacing_before(WordProcessorState* wp, int delta);
+void wp_adjust_paragraph_spacing_after(WordProcessorState* wp, int delta);
+void wp_cycle_line_spacing(WordProcessorState* wp);
+void wp_set_line_spacing(WordProcessorState* wp, int value);
+void wp_toggle_list(WordProcessorState* wp, uint8_t list_type);
 void wp_delete_selection(WordProcessorState* wp);
 
 void wp_recompute_wrap(WordProcessorState* wp, int content_w);
@@ -253,6 +349,12 @@ void wp_set_filepath(WordProcessorState* wp, const char* path);
 void wp_open_save_pathbar(WordProcessorState* wp);
 void wp_save_file(WordProcessorState* wp);
 void wp_load_file(WordProcessorState* wp, const char* path);
+
+void wp_history_reset(WordProcessorState* wp);
+void wp_history_checkpoint(WordProcessorState* wp);
+void wp_history_mark_saved(WordProcessorState* wp);
+bool wp_undo(WordProcessorState* wp);
+bool wp_redo(WordProcessorState* wp);
 
 void wp_render();
 void wp_handle_mouse(const Montauk::WinEvent& ev);

@@ -27,9 +27,14 @@ static void wp_commit_pathbar(WordProcessorState* wp) {
     wp->show_pathbar = false;
 }
 
+static void wp_close_dropdowns(WordProcessorState* wp) {
+    wp->font_dropdown_open = false;
+    wp->size_dropdown_open = false;
+    wp->line_spacing_dropdown_open = false;
+}
+
 static int wp_hit_test_text(WordProcessorState* wp, int local_x, int local_y, int edit_y) {
     int click_y = local_y - edit_y + wp->scrollbar.scroll_offset;
-    int click_x = local_x - WP_MARGIN;
 
     int target_line = wp->wrap_line_count - 1;
     for (int i = 0; i < wp->wrap_line_count; i++) {
@@ -41,11 +46,14 @@ static int wp_hit_test_text(WordProcessorState* wp, int local_x, int local_y, in
     }
 
     WrapLine* wl = &wp->wrap_lines[target_line];
+    int click_x = local_x - wl->x;
     int ri = wl->run_idx;
     int ro = wl->run_offset;
     int chars_left = wl->char_count;
     int x = 0;
     int best_abs = wp_wrap_line_start(wp, target_line);
+
+    if (click_x <= 0) return best_abs;
 
     while (chars_left > 0 && ri < wp->run_count) {
         StyledRun* r = &wp->runs[ri];
@@ -92,7 +100,7 @@ void wp_handle_mouse(const Montauk::WinEvent& ev) {
     wp->scrollbar.handle_mouse(local_x, local_y, ev.mouse.buttons, ev.mouse.prev_buttons, ev.mouse.scroll);
 
     if (wp->font_dropdown_open && wp_left_pressed(ev.mouse.buttons, ev.mouse.prev_buttons)) {
-        int dx = 128;
+        int dx = WP_FONT_DD_X;
         int dy = WP_TOOLBAR_H;
         int dh = FONT_COUNT * 26 + 4;
         if (local_x >= dx && local_x < dx + 110 && local_y >= dy && local_y < dy + dh) {
@@ -100,6 +108,7 @@ void wp_handle_mouse(const Montauk::WinEvent& ev) {
             if (idx >= 0 && idx < FONT_COUNT) {
                 if (wp->has_selection) wp_apply_style_to_selection(wp, 0, idx);
                 wp->cur_font_id = (uint8_t)idx;
+                if (wp->has_selection) wp_history_checkpoint(wp);
             }
         }
         wp->font_dropdown_open = false;
@@ -107,7 +116,7 @@ void wp_handle_mouse(const Montauk::WinEvent& ev) {
     }
 
     if (wp->size_dropdown_open && wp_left_pressed(ev.mouse.buttons, ev.mouse.prev_buttons)) {
-        int dx = 224;
+        int dx = WP_SIZE_DD_X;
         int dy = WP_TOOLBAR_H;
         int dh = WP_SIZE_OPTION_COUNT * 26 + 4;
         if (local_x >= dx && local_x < dx + 56 && local_y >= dy && local_y < dy + dh) {
@@ -116,43 +125,123 @@ void wp_handle_mouse(const Montauk::WinEvent& ev) {
                 if (wp->has_selection) wp_apply_style_to_selection(wp, 1, WP_SIZE_OPTIONS[idx]);
                 wp->cur_size = (uint8_t)WP_SIZE_OPTIONS[idx];
                 wp->wrap_dirty = true;
+                if (wp->has_selection) wp_history_checkpoint(wp);
             }
         }
         wp->size_dropdown_open = false;
         return;
     }
 
+    if (wp->line_spacing_dropdown_open && wp_left_pressed(ev.mouse.buttons, ev.mouse.prev_buttons)) {
+        int dx = WP_LINE_DD_X;
+        int dy = WP_TOOLBAR_H;
+        int dh = WP_LINE_SPACING_OPTION_COUNT * 26 + 4;
+        if (local_x >= dx && local_x < dx + 64 && local_y >= dy && local_y < dy + dh) {
+            int idx = (local_y - dy - 2) / 26;
+            if (idx >= 0 && idx < WP_LINE_SPACING_OPTION_COUNT) {
+                wp_set_line_spacing(wp, WP_LINE_SPACING_OPTIONS[idx]);
+                wp_history_checkpoint(wp);
+            }
+        }
+        wp->line_spacing_dropdown_open = false;
+        return;
+    }
+
     if (wp_left_pressed(ev.mouse.buttons, ev.mouse.prev_buttons) && local_y < WP_TOOLBAR_H) {
-        if (local_x >= 4 && local_x < 28 && local_y >= 6 && local_y < 30) {
+        if (local_x >= WP_BTN_OPEN_X && local_x < WP_BTN_OPEN_X + 24 && local_y >= 6 && local_y < 30) {
             wp_open_pathbar_for_open(wp);
             return;
         }
-        if (local_x >= 32 && local_x < 56 && local_y >= 6 && local_y < 30) {
+        if (local_x >= WP_BTN_SAVE_X && local_x < WP_BTN_SAVE_X + 24 && local_y >= 6 && local_y < 30) {
             wp_save_file(wp);
             return;
         }
-        if (local_x >= 66 && local_x < 90 && local_y >= 6 && local_y < 30) {
+        if (local_x >= WP_BTN_UNDO_X && local_x < WP_BTN_UNDO_X + 24 && local_y >= 6 && local_y < 30) {
+            wp_close_dropdowns(wp);
+            wp_undo(wp);
+            return;
+        }
+        if (local_x >= WP_BTN_REDO_X && local_x < WP_BTN_REDO_X + 24 && local_y >= 6 && local_y < 30) {
+            wp_close_dropdowns(wp);
+            wp_redo(wp);
+            return;
+        }
+        if (local_x >= WP_BTN_BOLD_X && local_x < WP_BTN_BOLD_X + 24 && local_y >= 6 && local_y < 30) {
             if (wp->has_selection) wp_apply_style_to_selection(wp, 2, 0);
             wp->cur_flags ^= STYLE_BOLD;
+            if (wp->has_selection) wp_history_checkpoint(wp);
             return;
         }
-        if (local_x >= 94 && local_x < 118 && local_y >= 6 && local_y < 30) {
+        if (local_x >= WP_BTN_ITALIC_X && local_x < WP_BTN_ITALIC_X + 24 && local_y >= 6 && local_y < 30) {
             if (wp->has_selection) wp_apply_style_to_selection(wp, 3, 0);
             wp->cur_flags ^= STYLE_ITALIC;
+            if (wp->has_selection) wp_history_checkpoint(wp);
             return;
         }
-        if (local_x >= 128 && local_x < 218 && local_y >= 6 && local_y < 30) {
+        if (local_x >= WP_FONT_DD_X && local_x < WP_FONT_DD_X + WP_FONT_DD_W && local_y >= 6 && local_y < 30) {
             wp->font_dropdown_open = !wp->font_dropdown_open;
+            wp->size_dropdown_open = false;
+            wp->line_spacing_dropdown_open = false;
+            return;
+        }
+        if (local_x >= WP_SIZE_DD_X && local_x < WP_SIZE_DD_X + WP_SIZE_DD_W && local_y >= 6 && local_y < 30) {
+            wp->size_dropdown_open = !wp->size_dropdown_open;
+            wp->font_dropdown_open = false;
+            wp->line_spacing_dropdown_open = false;
+            return;
+        }
+        if (local_x >= WP_BTN_ALIGN_L_X && local_x < WP_BTN_ALIGN_L_X + 24 && local_y >= 6 && local_y < 30) {
+            wp_close_dropdowns(wp);
+            wp_apply_alignment(wp, PARA_ALIGN_LEFT);
+            wp_history_checkpoint(wp);
+            return;
+        }
+        if (local_x >= WP_BTN_ALIGN_C_X && local_x < WP_BTN_ALIGN_C_X + 24 && local_y >= 6 && local_y < 30) {
+            wp_close_dropdowns(wp);
+            wp_apply_alignment(wp, PARA_ALIGN_CENTER);
+            wp_history_checkpoint(wp);
+            return;
+        }
+        if (local_x >= WP_BTN_ALIGN_R_X && local_x < WP_BTN_ALIGN_R_X + 24 && local_y >= 6 && local_y < 30) {
+            wp_close_dropdowns(wp);
+            wp_apply_alignment(wp, PARA_ALIGN_RIGHT);
+            wp_history_checkpoint(wp);
+            return;
+        }
+        if (local_x >= WP_BTN_BULLET_X && local_x < WP_BTN_BULLET_X + 24 && local_y >= 6 && local_y < 30) {
+            wp_close_dropdowns(wp);
+            wp_toggle_list(wp, PARA_LIST_BULLET);
+            wp_history_checkpoint(wp);
+            return;
+        }
+        if (local_x >= WP_BTN_NUMBER_X && local_x < WP_BTN_NUMBER_X + 24 && local_y >= 6 && local_y < 30) {
+            wp_close_dropdowns(wp);
+            wp_toggle_list(wp, PARA_LIST_NUMBER);
+            wp_history_checkpoint(wp);
+            return;
+        }
+        if (local_x >= WP_BTN_OUTDENT_X && local_x < WP_BTN_OUTDENT_X + 24 && local_y >= 6 && local_y < 30) {
+            wp_close_dropdowns(wp);
+            wp_adjust_paragraph_indent(wp, -WP_PARA_STEP);
+            wp_history_checkpoint(wp);
+            return;
+        }
+        if (local_x >= WP_BTN_INDENT_X && local_x < WP_BTN_INDENT_X + 24 && local_y >= 6 && local_y < 30) {
+            wp_close_dropdowns(wp);
+            wp_adjust_paragraph_indent(wp, WP_PARA_STEP);
+            wp_history_checkpoint(wp);
+            return;
+        }
+        if (local_x >= WP_LINE_DD_X && local_x < WP_LINE_DD_X + WP_LINE_DD_W && local_y >= 6 && local_y < 30) {
+            wp->line_spacing_dropdown_open = !wp->line_spacing_dropdown_open;
+            wp->font_dropdown_open = false;
             wp->size_dropdown_open = false;
             return;
         }
-        if (local_x >= 224 && local_x < 268 && local_y >= 6 && local_y < 30) {
-            wp->size_dropdown_open = !wp->size_dropdown_open;
-            wp->font_dropdown_open = false;
-            return;
-        }
-        if (local_x >= 278 && local_x < 302 && local_y >= 6 && local_y < 30) {
+        if (local_x >= WP_BTN_SECTION_X && local_x < WP_BTN_SECTION_X + 24 && local_y >= 6 && local_y < 30) {
+            wp_close_dropdowns(wp);
             wp_insert_char(wp, (char)0xA7);
+            wp_history_checkpoint(wp);
             return;
         }
         return;
@@ -174,8 +263,7 @@ void wp_handle_mouse(const Montauk::WinEvent& ev) {
 
     if (wp_left_pressed(ev.mouse.buttons, ev.mouse.prev_buttons) &&
         local_y >= edit_y && local_y < edit_y + text_area_h) {
-        wp->font_dropdown_open = false;
-        wp->size_dropdown_open = false;
+        wp_close_dropdowns(wp);
 
         int abs = wp_hit_test_text(wp, local_x, local_y, edit_y);
         wp_pos_to_run(wp, abs, &wp->cursor_run, &wp->cursor_offset);
@@ -249,8 +337,7 @@ void wp_handle_key(const Montauk::KeyEvent& key) {
         return;
     }
 
-    wp->font_dropdown_open = false;
-    wp->size_dropdown_open = false;
+    wp_close_dropdowns(wp);
     wp_recompute_wrap(wp, g_win_w);
 
     if (key.ctrl && (key.ascii == 's' || key.ascii == 'S')) {
@@ -261,14 +348,114 @@ void wp_handle_key(const Montauk::KeyEvent& key) {
         wp_open_pathbar_for_open(wp);
         return;
     }
-    if (key.ctrl && (key.ascii == 'b' || key.ascii == 'B')) {
-        if (wp->has_selection) wp_apply_style_to_selection(wp, 2, 0);
-        wp->cur_flags ^= STYLE_BOLD;
+
+    if (key.ctrl && !key.alt &&
+        (key.ascii == 'z' || key.ascii == 'Z')) {
+        if (key.shift) wp_redo(wp);
+        else wp_undo(wp);
         return;
     }
-    if (key.ctrl && (key.ascii == 'i' || key.ascii == 'I')) {
+    if (key.ctrl && !key.alt && (key.ascii == 'y' || key.ascii == 'Y')) {
+        wp_redo(wp);
+        return;
+    }
+
+    if (key.ctrl && key.alt && (key.ascii == 'b' || key.ascii == 'B')) {
+        wp_toggle_list(wp, PARA_LIST_BULLET);
+        wp_history_checkpoint(wp);
+        return;
+    }
+    if (key.ctrl && key.alt && (key.ascii == 'n' || key.ascii == 'N')) {
+        wp_toggle_list(wp, PARA_LIST_NUMBER);
+        wp_history_checkpoint(wp);
+        return;
+    }
+
+    if (key.ctrl && !key.alt && (key.ascii == 'l' || key.ascii == 'L')) {
+        wp_apply_alignment(wp, PARA_ALIGN_LEFT);
+        wp_history_checkpoint(wp);
+        return;
+    }
+    if (key.ctrl && !key.alt && (key.ascii == 'e' || key.ascii == 'E')) {
+        wp_apply_alignment(wp, PARA_ALIGN_CENTER);
+        wp_history_checkpoint(wp);
+        return;
+    }
+    if (key.ctrl && !key.alt && (key.ascii == 'r' || key.ascii == 'R')) {
+        wp_apply_alignment(wp, PARA_ALIGN_RIGHT);
+        wp_history_checkpoint(wp);
+        return;
+    }
+
+    if (key.ctrl && !key.alt && (key.ascii == '1')) {
+        wp_set_line_spacing(wp, 100);
+        wp_history_checkpoint(wp);
+        return;
+    }
+    if (key.ctrl && !key.alt && (key.ascii == '2')) {
+        wp_set_line_spacing(wp, 125);
+        wp_history_checkpoint(wp);
+        return;
+    }
+    if (key.ctrl && !key.alt && (key.ascii == '3')) {
+        wp_set_line_spacing(wp, 150);
+        wp_history_checkpoint(wp);
+        return;
+    }
+    if (key.ctrl && !key.alt && (key.ascii == '4')) {
+        wp_set_line_spacing(wp, 200);
+        wp_history_checkpoint(wp);
+        return;
+    }
+
+    if (key.ctrl && !key.alt && (key.ascii == '[' || key.ascii == '{')) {
+        if (key.shift || key.ascii == '{')
+            wp_adjust_paragraph_first_line_indent(wp, -WP_PARA_STEP);
+        else
+            wp_adjust_paragraph_indent(wp, -WP_PARA_STEP);
+        wp_history_checkpoint(wp);
+        return;
+    }
+    if (key.ctrl && !key.alt && (key.ascii == ']' || key.ascii == '}')) {
+        if (key.shift || key.ascii == '}')
+            wp_adjust_paragraph_first_line_indent(wp, WP_PARA_STEP);
+        else
+            wp_adjust_paragraph_indent(wp, WP_PARA_STEP);
+        wp_history_checkpoint(wp);
+        return;
+    }
+
+    if (key.ctrl && key.alt && key.scancode == 0x48) {
+        wp_adjust_paragraph_spacing_before(wp, -WP_SPACE_STEP);
+        wp_history_checkpoint(wp);
+        return;
+    }
+    if (key.ctrl && key.alt && key.scancode == 0x50) {
+        wp_adjust_paragraph_spacing_before(wp, WP_SPACE_STEP);
+        wp_history_checkpoint(wp);
+        return;
+    }
+    if (key.ctrl && key.shift && key.scancode == 0x48) {
+        wp_adjust_paragraph_spacing_after(wp, -WP_SPACE_STEP);
+        wp_history_checkpoint(wp);
+        return;
+    }
+    if (key.ctrl && key.shift && key.scancode == 0x50) {
+        wp_adjust_paragraph_spacing_after(wp, WP_SPACE_STEP);
+        wp_history_checkpoint(wp);
+        return;
+    }
+
+    if (key.ctrl && !key.alt && (key.ascii == 'b' || key.ascii == 'B')) {
+        if (wp->has_selection) wp_apply_style_to_selection(wp, 2, 0);
+        wp->cur_flags ^= STYLE_BOLD;
+        if (wp->has_selection) wp_history_checkpoint(wp);
+        return;
+    }
+    if (key.ctrl && !key.alt && (key.ascii == 'i' || key.ascii == 'I')) {
         if (wp->has_selection) wp_apply_style_to_selection(wp, 3, 0);
         wp->cur_flags ^= STYLE_ITALIC;
+        if (wp->has_selection) wp_history_checkpoint(wp);
         return;
     }
 
@@ -350,29 +537,34 @@ void wp_handle_key(const Montauk::KeyEvent& key) {
     if (key.scancode == 0x53) {
         if (wp->has_selection) wp_delete_selection(wp);
         else wp_delete_char(wp);
+        wp_history_checkpoint(wp);
         return;
     }
 
     if (key.ascii == '\b' || key.scancode == 0x0E) {
         if (wp->has_selection) wp_delete_selection(wp);
         else wp_backspace(wp);
+        wp_history_checkpoint(wp);
         return;
     }
 
     if (key.ascii == '\n' || key.ascii == '\r') {
         if (wp->has_selection) wp_delete_selection(wp);
         wp_insert_char(wp, '\n');
+        wp_history_checkpoint(wp);
         return;
     }
 
     if (key.ascii == '\t') {
         if (wp->has_selection) wp_delete_selection(wp);
         for (int i = 0; i < 4; i++) wp_insert_char(wp, ' ');
+        wp_history_checkpoint(wp);
         return;
     }
 
     if (key.ascii >= 32 && key.ascii < 127) {
         if (wp->has_selection) wp_delete_selection(wp);
         wp_insert_char(wp, key.ascii);
+        wp_history_checkpoint(wp);
     }
 }

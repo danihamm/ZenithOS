@@ -169,6 +169,8 @@ struct TrueTypeFont {
 
         if (g->width > 0 && g->height > 0) {
             g->bitmap = (uint8_t*)montauk::malloc(g->width * g->height);
+            if (!g->bitmap)
+                return g;
             stbtt_MakeCodepointBitmap(&info, g->bitmap, g->width, g->height,
                                       g->width, gc->scale, gc->scale, codepoint);
         }

@@ -24,6 +24,68 @@ static void wp_draw_ui_button(Canvas& c, int x, int y, int w, int h,
     draw_text(c, g_ui_font, x + (w - tw) / 2, y + (h - th) / 2, label, fg, fonts::UI_SIZE);
 }
 
+static void wp_draw_ui_icon_button(Canvas& c, int x, int y, int w, int h,
+                                   const SvgIcon& icon, const char* fallback,
+                                   Color bg, Color fg, int radius = 3) {
+    c.fill_rounded_rect(x, y, w, h, radius, bg);
+    if (icon.pixels) {
+        c.icon(x + (w - icon.width) / 2, y + (h - icon.height) / 2, icon);
+        return;
+    }
+    wp_draw_ui_button(c, x, y, w, h, fallback, bg, fg, radius);
+}
+
+static ParagraphStyle* wp_current_paragraph_style(WordProcessorState* wp) {
+    if (wp->paragraph_count <= 0) {
+        static ParagraphStyle fallback = { PARA_ALIGN_LEFT, PARA_LIST_NONE, 100, 0, 0, 0, 0, 0 };
+        return &fallback;
+    }
+    int para = wp_find_paragraph_at(wp, wp_abs_pos(wp, wp->cursor_run, wp->cursor_offset));
+    if (para < 0) para = 0;
+    if (para >= wp->paragraph_count) para = wp->paragraph_count - 1;
+    return &wp->paragraphs[para];
+}
+
+static const char* wp_align_label(uint8_t align) {
+    switch (align) {
+    case PARA_ALIGN_CENTER: return "Center";
+    case PARA_ALIGN_RIGHT: return "Right";
+    default: return "Left";
+    }
+}
+
+static const char* wp_list_label(uint8_t list_type) {
+    switch (list_type) {
+    case PARA_LIST_BULLET: return "Bullets";
+    case PARA_LIST_NUMBER: return "Numbers";
+    default: return "Plain";
+    }
+}
+
+static void wp_draw_list_marker(Canvas& c, WordProcessorState* wp, WrapLine* wl, int py) {
+    if (!wl->first_in_paragraph || wl->paragraph_idx < 0 || wl->paragraph_idx >= wp->paragraph_count)
+        return;
+
+    ParagraphStyle* para = &wp->paragraphs[wl->paragraph_idx];
+    if (para->list_type == PARA_LIST_NONE) return;
+
+    int marker_x = WP_MARGIN + para->left_indent + para->first_line_indent;
+    if (marker_x < 4) marker_x = 4;
+
+    if (para->list_type == PARA_LIST_BULLET) {
+        fill_circle(c, marker_x + 7, py + wl->height / 2, 3, colors::TEXT_COLOR);
+        return;
+    }
+
+    char label[16];
+    snprintf(label, sizeof(label), "%d.", wl->list_number > 0 ? wl->list_number : 1);
+    if (wp->run_count <= 0) return;
+    StyledRun* run = &wp->runs[wl->run_idx < wp->run_count ? wl->run_idx : 0];
+    TrueTypeFont* font = wp_get_font(run->font_id, run->flags);
+    int top_y = py + (wl->height - run->size) / 2;
+    draw_text(c, font ? font : g_ui_font, marker_x, top_y, label, colors::TEXT_COLOR, run->size);
+}
+
 void wp_render() {
     if (!g_win.pixels) return;
 
@@ -32,63 +94,84 @@ void wp_render() {
     c.fill(colors::WINDOW_BG);
 
     int sfh = wp_ui_line_height();
+    int cursor_abs = wp_abs_pos(wp, wp->cursor_run, wp->cursor_offset);
+    ParagraphStyle* cur_para = wp_current_paragraph_style(wp);
     Color toolbar_bg = Color::from_rgb(0xF5, 0xF5, 0xF5);
     Color btn_bg = Color::from_rgb(0xE8, 0xE8, 0xE8);
     Color btn_active = Color::from_rgb(0xC0, 0xD0, 0xE8);
 
     c.fill_rect(0, 0, c.w, WP_TOOLBAR_H, toolbar_bg);
 
-    c.fill_rounded_rect(4, 6, 24, 24, 3, btn_bg);
+    c.fill_rounded_rect(WP_BTN_OPEN_X, 6, 24, 24, 3, btn_bg);
     if (g_icon_folder.pixels)
-        c.icon(8, 10, g_icon_folder);
+        c.icon(WP_BTN_OPEN_X + 4, 10, g_icon_folder);
 
-    c.fill_rounded_rect(32, 6, 24, 24, 3, btn_bg);
+    c.fill_rounded_rect(WP_BTN_SAVE_X, 6, 24, 24, 3, btn_bg);
     if (g_icon_save.pixels)
-        c.icon(36, 10, g_icon_save);
+        c.icon(WP_BTN_SAVE_X + 4, 10, g_icon_save);
 
-    c.vline(60, 4, 28, colors::BORDER);
+    c.vline(WP_BTN_SAVE_X + 28, 4, 28, colors::BORDER);
+
+    wp_draw_ui_icon_button(c, WP_BTN_UNDO_X, 6, 24, 24, g_icon_undo, "U", btn_bg, colors::TEXT_COLOR);
+    wp_draw_ui_icon_button(c, WP_BTN_REDO_X, 6, 24, 24, g_icon_redo, "R", btn_bg, colors::TEXT_COLOR);
+
+    c.vline(WP_BTN_REDO_X + 28, 4, 28, colors::BORDER);
 
     Color bold_bg = (wp->cur_flags & STYLE_BOLD) ? btn_active : btn_bg;
-    c.fill_rounded_rect(66, 6, 24, 24, 3, bold_bg);
-    draw_text(c, g_ui_bold ? g_ui_bold : g_ui_font, 73, 8, "B", colors::TEXT_COLOR, fonts::UI_SIZE);
+    c.fill_rounded_rect(WP_BTN_BOLD_X, 6, 24, 24, 3, bold_bg);
+    draw_text(c, g_ui_bold ? g_ui_bold : g_ui_font, WP_BTN_BOLD_X + 7, 8, "B", colors::TEXT_COLOR, fonts::UI_SIZE);
 
     Color italic_bg = (wp->cur_flags & STYLE_ITALIC) ? btn_active : btn_bg;
-    c.fill_rounded_rect(94, 6, 24, 24, 3, italic_bg);
+    c.fill_rounded_rect(WP_BTN_ITALIC_X, 6, 24, 24, 3, italic_bg);
     {
         TrueTypeFont* italic_font = wp_get_font(FONT_ROBOTO, STYLE_ITALIC);
-        draw_text(c, italic_font ? italic_font : g_ui_font, 103, 8, "I", colors::TEXT_COLOR, fonts::UI_SIZE);
+        draw_text(c, italic_font ? italic_font : g_ui_font, WP_BTN_ITALIC_X + 9, 8, "I", colors::TEXT_COLOR, fonts::UI_SIZE);
     }
 
-    c.vline(122, 4, 28, colors::BORDER);
-
-    c.fill_rounded_rect(128, 6, 90, 24, 3, btn_bg);
-    wp_draw_ui_text(c, 134, (WP_TOOLBAR_H - sfh) / 2,
+    c.fill_rounded_rect(WP_FONT_DD_X, 6, WP_FONT_DD_W, 24, 3, btn_bg);
+    wp_draw_ui_text(c, WP_FONT_DD_X + 6, (WP_TOOLBAR_H - sfh) / 2,
                     WP_FONT_NAMES[wp->cur_font_id < FONT_COUNT ? wp->cur_font_id : 0],
                     colors::TEXT_COLOR);
 
-    c.fill_rounded_rect(224, 6, 44, 24, 3, btn_bg);
+    c.fill_rounded_rect(WP_SIZE_DD_X, 6, WP_SIZE_DD_W, 24, 3, btn_bg);
     {
         char sz[8];
         snprintf(sz, sizeof(sz), "%d", (int)wp->cur_size);
-        wp_draw_ui_text(c, 232, (WP_TOOLBAR_H - sfh) / 2, sz, colors::TEXT_COLOR);
+        wp_draw_ui_text(c, WP_SIZE_DD_X + 8, (WP_TOOLBAR_H - sfh) / 2, sz, colors::TEXT_COLOR);
     }
 
-    c.vline(272, 4, 28, colors::BORDER);
+    c.vline(WP_SIZE_DD_X + WP_SIZE_DD_W + 6, 4, 28, colors::BORDER);
 
-    c.fill_rounded_rect(278, 6, 24, 24, 3, btn_bg);
+    wp_draw_ui_icon_button(c, WP_BTN_ALIGN_L_X, 6, 24, 24, g_icon_align_left, "L",
+                           cur_para->align == PARA_ALIGN_LEFT ? btn_active : btn_bg, colors::TEXT_COLOR);
+    wp_draw_ui_icon_button(c, WP_BTN_ALIGN_C_X, 6, 24, 24, g_icon_align_center, "C",
+                           cur_para->align == PARA_ALIGN_CENTER ? btn_active : btn_bg, colors::TEXT_COLOR);
+    wp_draw_ui_icon_button(c, WP_BTN_ALIGN_R_X, 6, 24, 24, g_icon_align_right, "R",
+                           cur_para->align == PARA_ALIGN_RIGHT ? btn_active : btn_bg, colors::TEXT_COLOR);
+    c.vline(WP_BTN_ALIGN_R_X + 28, 4, 28, colors::BORDER);
+    wp_draw_ui_icon_button(c, WP_BTN_BULLET_X, 6, 24, 24, g_icon_list_bullet, "*",
+                           cur_para->list_type == PARA_LIST_BULLET ? btn_active : btn_bg, colors::TEXT_COLOR);
+    wp_draw_ui_icon_button(c, WP_BTN_NUMBER_X, 6, 24, 24, g_icon_list_number, "1.",
+                           cur_para->list_type == PARA_LIST_NUMBER ? btn_active : btn_bg, colors::TEXT_COLOR);
+    c.vline(WP_BTN_NUMBER_X + 28, 4, 28, colors::BORDER);
+    wp_draw_ui_icon_button(c, WP_BTN_OUTDENT_X, 6, 24, 24, g_icon_indent_less, "<", btn_bg, colors::TEXT_COLOR);
+    wp_draw_ui_icon_button(c, WP_BTN_INDENT_X, 6, 24, 24, g_icon_indent_more, ">", btn_bg, colors::TEXT_COLOR);
+    c.vline(WP_BTN_INDENT_X + 28, 4, 28, colors::BORDER);
+
+    {
+        char spacing[12];
+        snprintf(spacing, sizeof(spacing), "%d%%", (int)cur_para->line_spacing);
+        c.fill_rounded_rect(WP_LINE_DD_X, 6, WP_LINE_DD_W, 24, 3, btn_bg);
+        wp_draw_ui_text(c, WP_LINE_DD_X + 8, (WP_TOOLBAR_H - sfh) / 2, spacing, colors::TEXT_COLOR);
+    }
+
+    c.vline(WP_BTN_SECTION_X - 4, 4, 28, colors::BORDER);
+
+    c.fill_rounded_rect(WP_BTN_SECTION_X, 6, 24, 24, 3, btn_bg);
     {
         char section[2] = { (char)0xA7, '\0' };
         TrueTypeFont* font = wp_get_font(FONT_ROBOTO, 0);
-        draw_text(c, font ? font : g_ui_font, 284, 8, section, colors::TEXT_COLOR, fonts::UI_SIZE);
-    }
-
-    {
-        char label[128];
-        if (wp->filename[0])
-            snprintf(label, sizeof(label), "%s%s", wp->filename, wp->modified ? " *" : "");
-        else
-            snprintf(label, sizeof(label), "Untitled%s", wp->modified ? " *" : "");
-        wp_draw_ui_text(c, 312, (WP_TOOLBAR_H - sfh) / 2, label, Color::from_rgb(0x88, 0x88, 0x88));
+        draw_text(c, font ? font : g_ui_font, WP_BTN_SECTION_X + 6, 8, section, colors::TEXT_COLOR, fonts::UI_SIZE);
     }
 
     c.hline(0, WP_TOOLBAR_H - 1, c.w, colors::BORDER);
@@ -143,7 +226,6 @@ void wp_render() {
     wp_ensure_cursor_visible(wp, text_area_h);
 
     int scroll_y = wp->scrollbar.scroll_offset;
-    int cursor_abs = wp_abs_pos(wp, wp->cursor_run, wp->cursor_offset);
     int sel_s = 0;
     int sel_e = 0;
     if (wp->has_selection) wp_sel_range(wp, &sel_s, &sel_e);
@@ -156,10 +238,12 @@ void wp_render() {
         if (py + wl->height <= edit_y) continue;
         if (py >= edit_y + text_area_h) break;
 
+        wp_draw_list_marker(c, wp, wl, py);
+
         int chars_left = wl->char_count;
         int ri = wl->run_idx;
         int ro = wl->run_offset;
-        int x = WP_MARGIN;
+        int x = wl->x;
         int line_abs_start = wp_wrap_line_start(wp, li);
         int char_idx = 0;
 
@@ -244,11 +328,13 @@ void wp_render() {
     c.fill_rect(0, status_y, c.w, WP_STATUS_H, Color::from_rgb(0x2B, 0x3E, 0x50));
     int status_text_y = status_y + (WP_STATUS_H - sfh) / 2;
 
-    char status_left[128];
-    snprintf(status_left, sizeof(status_left), " %s %dpt  %s%s",
+    char status_left[192];
+    const char* name = wp->filename[0] ? wp->filename : "Untitled";
+    snprintf(status_left, sizeof(status_left), " %s%s | %s %dpt | %s | %s | %d%%",
+             name, wp->modified ? " *" : "",
              WP_FONT_NAMES[wp->cur_font_id < FONT_COUNT ? wp->cur_font_id : 0], (int)wp->cur_size,
-             (wp->cur_flags & STYLE_BOLD) ? "Bold " : "",
-             (wp->cur_flags & STYLE_ITALIC) ? "Italic" : "");
+             wp_align_label(cur_para->align), wp_list_label(cur_para->list_type),
+             (int)cur_para->line_spacing);
     wp_draw_ui_text(c, 4, status_text_y, status_left, colors::PANEL_TEXT);
 
     char status_right[32];
@@ -257,7 +343,7 @@ void wp_render() {
     wp_draw_ui_text(c, c.w - sr_w - 4, status_text_y, status_right, colors::PANEL_TEXT);
 
     if (wp->font_dropdown_open) {
-        int dx = 128;
+        int dx = WP_FONT_DD_X;
         int dy = WP_TOOLBAR_H;
         int dw = 110;
         int dh = FONT_COUNT * 26 + 4;
@@ -272,7 +358,7 @@ void wp_render() {
     }
 
     if (wp->size_dropdown_open) {
-        int dx = 224;
+        int dx = WP_SIZE_DD_X;
         int dy = WP_TOOLBAR_H;
         int dw = 56;
         int dh = WP_SIZE_OPTION_COUNT * 26 + 4;
@@ -285,6 +371,23 @@ void wp_render() {
             char sz[8];
             snprintf(sz, sizeof(sz), "%d", WP_SIZE_OPTIONS[i]);
             wp_draw_ui_text(c, dx + 8, iy + (24 - sfh) / 2, sz, colors::TEXT_COLOR);
+        }
+    }
+
+    if (wp->line_spacing_dropdown_open) {
+        int dx = WP_LINE_DD_X;
+        int dy = WP_TOOLBAR_H;
+        int dw = 64;
+        int dh = WP_LINE_SPACING_OPTION_COUNT * 26 + 4;
+        c.fill_rect(dx, dy, dw, dh, colors::MENU_BG);
+        c.rect(dx, dy, dw, dh, colors::BORDER);
+        for (int i = 0; i < WP_LINE_SPACING_OPTION_COUNT; i++) {
+            int iy = dy + 2 + i * 26;
+            if (WP_LINE_SPACING_OPTIONS[i] == cur_para->line_spacing)
+                c.fill_rect(dx + 2, iy, dw - 4, 24, colors::MENU_HOVER);
+            char spacing[12];
+            snprintf(spacing, sizeof(spacing), "%d%%", WP_LINE_SPACING_OPTIONS[i]);
+            wp_draw_ui_text(c, dx + 8, iy + (24 - sfh) / 2, spacing, colors::TEXT_COLOR);
         }
     }
 }
