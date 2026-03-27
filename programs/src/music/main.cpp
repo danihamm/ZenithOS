@@ -45,6 +45,7 @@ static constexpr int TRANSPORT_H    = 44;
 
 static constexpr int MAX_FILES      = 128;
 static constexpr int MAX_PATH       = 256;
+static constexpr int MAX_FILTER     = 64;
 
 // Decode buffer: one MP3 frame = up to 1152 samples * 2 channels
 static constexpr int PCM_BUF_SAMPLES = 1152 * 2;
@@ -62,6 +63,7 @@ static constexpr Color TRACK_BG       = Color::from_rgb(0xDD, 0xDD, 0xDD);
 static constexpr Color WHITE          = Color::from_rgb(0xFF, 0xFF, 0xFF);
 static constexpr Color LIST_HOVER     = Color::from_rgb(0xE8, 0xF0, 0xFD);
 static constexpr Color LIST_PLAYING   = Color::from_rgb(0xD0, 0xE2, 0xFB);
+static constexpr Color LIST_SELECTED  = Color::from_rgb(0xF0, 0xF5, 0xFC);
 static constexpr Color BTN_BG         = Color::from_rgb(0xE8, 0xE8, 0xE8);
 static constexpr Color BTN_HOVER      = Color::from_rgb(0xD8, 0xD8, 0xD8);
 static constexpr Color STOP_COLOR     = Color::from_rgb(0xCC, 0x33, 0x33);
@@ -100,6 +102,11 @@ struct PlayerState {
     // List UI
     int scroll_y;
     int hovered_item;
+    int selected_item;
+    int filtered_indices[MAX_FILES];
+    int filtered_count;
+    char filter_text[MAX_FILTER];
+    bool filter_active;
 
     // Playback
     PlayState play_state;
@@ -165,6 +172,8 @@ struct PlayerState {
 };
 
 static PlayerState g;
+
+static int visible_items();
 
 // ============================================================================
 // Pixel helpers
@@ -366,6 +375,151 @@ static Rect visualizer_button_rect() {
     return {shuffle.x - TOOL_ICON_GAP - TOOL_ICON_W, shuffle.y, TOOL_ICON_W, TOOL_ICON_H};
 }
 
+static char ascii_lower(char c) {
+    return (c >= 'A' && c <= 'Z') ? (char)(c + 32) : c;
+}
+
+static bool is_printable_ascii(char c) {
+    return c >= 32 && c < 127;
+}
+
+static bool str_contains_case_insensitive(const char* text, const char* needle) {
+    if (!needle || !needle[0]) return true;
+    if (!text || !text[0]) return false;
+
+    int text_len = montauk::slen(text);
+    int needle_len = montauk::slen(needle);
+    if (needle_len > text_len) return false;
+
+    for (int i = 0; i <= text_len - needle_len; i++) {
+        bool match = true;
+        for (int j = 0; j < needle_len; j++) {
+            if (ascii_lower(text[i + j]) != ascii_lower(needle[j])) {
+                match = false;
+                break;
+            }
+        }
+        if (match) return true;
+    }
+    return false;
+}
+
+static int filtered_raw_at(int visible_index) {
+    if (visible_index < 0 || visible_index >= g.filtered_count) return -1;
+    return g.filtered_indices[visible_index];
+}
+
+static bool filtered_contains(int raw_index) {
+    if (raw_index < 0) return false;
+    for (int i = 0; i < g.filtered_count; i++) {
+        if (g.filtered_indices[i] == raw_index) return true;
+    }
+    return false;
+}
+
+static int selected_visible_index() {
+    for (int i = 0; i < g.filtered_count; i++) {
+        if (g.filtered_indices[i] == g.selected_item) return i;
+    }
+    return -1;
+}
+
+static void clamp_list_scroll() {
+    int max_scroll = g.filtered_count - visible_items();
+    if (max_scroll < 0) max_scroll = 0;
+    if (g.scroll_y < 0) g.scroll_y = 0;
+    if (g.scroll_y > max_scroll) g.scroll_y = max_scroll;
+}
+
+static void ensure_selected_visible() {
+    int sel = selected_visible_index();
+    if (sel < 0) {
+        clamp_list_scroll();
+        return;
+    }
+
+    int visible = visible_items();
+    if (visible <= 0) {
+        g.scroll_y = 0;
+        return;
+    }
+
+    if (sel < g.scroll_y) g.scroll_y = sel;
+    if (sel >= g.scroll_y + visible) g.scroll_y = sel - visible + 1;
+    clamp_list_scroll();
+}
+
+static void rebuild_filtered_view() {
+    int prev_selected = g.selected_item;
+    g.filtered_count = 0;
+
+    for (int i = 0; i < g.file_count && g.filtered_count < MAX_FILES; i++) {
+        if (str_contains_case_insensitive(g.files[i].name, g.filter_text)) {
+            g.filtered_indices[g.filtered_count++] = i;
+        }
+    }
+
+    if (!filtered_contains(g.hovered_item)) g.hovered_item = -1;
+
+    if (g.filtered_count <= 0) {
+        g.selected_item = -1;
+        g.scroll_y = 0;
+        return;
+    }
+
+    if (filtered_contains(prev_selected)) {
+        g.selected_item = prev_selected;
+    } else if (filtered_contains(g.current_track)) {
+        g.selected_item = g.current_track;
+    } else {
+        g.selected_item = g.filtered_indices[0];
+    }
+
+    clamp_list_scroll();
+    ensure_selected_visible();
+}
+
+static void append_filter_char(char c) {
+    int len = montauk::slen(g.filter_text);
+    if (len >= MAX_FILTER - 1) return;
+    g.filter_text[len] = c;
+    g.filter_text[len + 1] = '\0';
+    rebuild_filtered_view();
+}
+
+static void pop_filter_char() {
+    int len = montauk::slen(g.filter_text);
+    if (len <= 0) return;
+    g.filter_text[len - 1] = '\0';
+    rebuild_filtered_view();
+}
+
+static void clear_filter() {
+    if (!g.filter_text[0]) return;
+    g.filter_text[0] = '\0';
+    rebuild_filtered_view();
+}
+
+static void move_selection(int delta) {
+    if (g.filtered_count <= 0) {
+        g.selected_item = -1;
+        g.scroll_y = 0;
+        return;
+    }
+
+    int sel = selected_visible_index();
+    if (sel < 0) {
+        sel = delta >= 0 ? 0 : g.filtered_count - 1;
+    } else {
+        sel += delta;
+        if (sel < 0) sel = 0;
+        if (sel >= g.filtered_count) sel = g.filtered_count - 1;
+    }
+
+    g.selected_item = g.filtered_indices[sel];
+    ensure_selected_visible();
+}
+
 // ============================================================================
 // Directory scanning
 // ============================================================================
@@ -389,6 +543,8 @@ static void scan_directory() {
         f.is_mp3 = is_mp3;
         g.file_count++;
     }
+
+    rebuild_filtered_view();
 }
 
 // ============================================================================
@@ -680,6 +836,13 @@ static bool start_track(int index) {
     g.mp3_seek_discard_samples = 0;
     music_visualizer::reset(g.visualizer);
 
+    if (filtered_contains(index)) {
+        g.selected_item = index;
+    } else if (g.filtered_count > 0 && selected_visible_index() < 0) {
+        g.selected_item = g.filtered_indices[0];
+    }
+    ensure_selected_visible();
+
     return true;
 }
 
@@ -691,6 +854,16 @@ static void toggle_pause() {
         montauk::audio_resume(g.audio_handle);
         g.play_state = PlayState::Playing;
     }
+}
+
+static bool play_selected_or_default() {
+    if (g.selected_item >= 0 && filtered_contains(g.selected_item)) return start_track(g.selected_item);
+    if (g.filtered_count > 0) return start_track(g.filtered_indices[0]);
+    if (g.filter_text[0]) return false;
+    if (g.selected_item >= 0) return start_track(g.selected_item);
+    if (g.current_track >= 0) return start_track(g.current_track);
+    if (g.file_count > 0) return start_track(0);
+    return false;
 }
 
 static bool next_track(bool auto_advanced = false) {
@@ -880,9 +1053,45 @@ static void render(uint32_t* pixels) {
 
     // Directory path in toolbar
     {
+        int max_dir_w = visualizer_rect.x - 20;
+        if (g.filter_active || g.filter_text[0]) {
+            char filter_query[24];
+            char filter_label[48];
+            const char* query = g.filter_text;
+            int qlen = montauk::slen(query);
+            if (qlen > 15) {
+                montauk::memcpy(filter_query, "...", 3);
+                montauk::memcpy(filter_query + 3, query + qlen - 15, 15);
+                filter_query[18] = '\0';
+                query = filter_query;
+            }
+
+            if (g.filter_text[0]) {
+                snprintf(filter_label, sizeof(filter_label), "%s%s%s",
+                         g.filter_active ? "Find: " : "Filter: ",
+                         query,
+                         g.filter_active ? "_" : "");
+            } else {
+                snprintf(filter_label, sizeof(filter_label), "%s",
+                         g.filter_active ? "Find" : "Filter");
+            }
+
+            int pill_h = TOOL_ICON_H;
+            int pill_w = text_w(filter_label, FONT_SIZE_SM) + 14;
+            int pill_x = visualizer_rect.x - TOOL_ICON_GAP - pill_w;
+            int pill_y = (TOOLBAR_H - pill_h) / 2;
+            Color pill_bg = g.filter_active ? LIST_HOVER : BTN_BG;
+            Color pill_fg = g.filter_active ? ACCENT_DARK : DIM_TEXT;
+            if (pill_x > 80) {
+                px_fill_rounded(pixels, W, H, pill_x, pill_y, pill_w, pill_h, 6, pill_bg);
+                px_text(pixels, W, H, pill_x + 7, pill_y + (pill_h - fh_sm) / 2,
+                        filter_label, pill_fg, FONT_SIZE_SM);
+                max_dir_w = pill_x - 12;
+            }
+        }
+
         const char* display_dir = g.dir_path;
         int dw = text_w(display_dir, FONT_SIZE_SM);
-        int max_dir_w = visualizer_rect.x - 20;
         int dir_len = montauk::slen(g.dir_path);
         if (dw > max_dir_w && dir_len > 20) {
             display_dir = g.dir_path + montauk::slen(g.dir_path) - 20;
@@ -897,18 +1106,24 @@ static void render(uint32_t* pixels) {
     px_hline(pixels, W, H, 0, list_end, W, BORDER_COLOR);
 
     if (!g.show_visualizer) {
-        for (int i = 0; i < visible_count && (i + g.scroll_y) < g.file_count; i++) {
-            int idx = i + g.scroll_y;
+        for (int i = 0; i < visible_count && (i + g.scroll_y) < g.filtered_count; i++) {
+            int idx = filtered_raw_at(i + g.scroll_y);
+            if (idx < 0) break;
             int iy = LIST_TOP + i * LIST_ITEM_H;
 
             Color bg = BG_COLOR;
             if (idx == g.current_track && g.play_state != PlayState::Stopped)
                 bg = LIST_PLAYING;
+            else if (idx == g.selected_item)
+                bg = LIST_SELECTED;
             else if (idx == g.hovered_item)
                 bg = LIST_HOVER;
 
             if (bg.r != BG_COLOR.r || bg.g != BG_COLOR.g || bg.b != BG_COLOR.b)
                 px_fill(pixels, W, H, 0, iy, W, LIST_ITEM_H, bg);
+
+            if (idx == g.selected_item && !(idx == g.current_track && g.play_state != PlayState::Stopped))
+                px_fill(pixels, W, H, 0, iy, 3, LIST_ITEM_H, ACCENT);
 
             if (idx == g.current_track && g.play_state == PlayState::Playing) {
                 px_triangle_right(pixels, W, H, 8, iy + 8, 8, 12, ACCENT);
@@ -928,19 +1143,25 @@ static void render(uint32_t* pixels) {
                     tag, DIM_TEXT, FONT_SIZE_SM);
         }
 
-        if (g.file_count > visible_count && visible_count > 0) {
+        if (g.filtered_count > visible_count && visible_count > 0) {
             int list_h = list_end - LIST_TOP;
-            int sb_h = (visible_count * list_h) / g.file_count;
+            int sb_h = (visible_count * list_h) / g.filtered_count;
             if (sb_h < 20) sb_h = 20;
-            int sb_y = LIST_TOP + (g.scroll_y * (list_h - sb_h)) / (g.file_count - visible_count);
+            int sb_y = LIST_TOP + (g.scroll_y * (list_h - sb_h)) / (g.filtered_count - visible_count);
             px_fill_rounded(pixels, W, H, W - 6, sb_y, 4, sb_h, 2, TRACK_BG);
         }
 
-        if (g.file_count == 0) {
-            const char* msg = "No audio files found";
+        if (g.filtered_count == 0) {
+            const char* msg = g.file_count == 0 ? "No audio files found" : "No matches for filter";
             int mw = text_w(msg);
             int cy = LIST_TOP + (list_end - LIST_TOP) / 2 - fh / 2;
             px_text(pixels, W, H, (W - mw) / 2, cy, msg, DIM_TEXT);
+            if (g.file_count > 0 && g.filter_text[0]) {
+                char detail[96];
+                snprintf(detail, sizeof(detail), "Current filter: %s", g.filter_text);
+                int dw = text_w(detail, FONT_SIZE_SM);
+                px_text(pixels, W, H, (W - dw) / 2, cy + fh_sm + 6, detail, DIM_TEXT, FONT_SIZE_SM);
+            }
         }
     } else {
         px_fill(pixels, W, H, content_panel.x, content_panel.y, content_panel.w, content_panel.h, TOOLBAR_BG);
@@ -1060,8 +1281,8 @@ static bool handle_click(int mx, int my) {
 
     // File list click
     if (!g.show_visualizer && my >= LIST_TOP && my < lb && mx >= 0 && mx < W) {
-        int idx = (my - LIST_TOP) / LIST_ITEM_H + g.scroll_y;
-        if (idx >= 0 && idx < g.file_count) {
+        int idx = filtered_raw_at((my - LIST_TOP) / LIST_ITEM_H + g.scroll_y);
+        if (idx >= 0) {
             start_track(idx);
             return true;
         }
@@ -1095,10 +1316,8 @@ static bool handle_click(int mx, int my) {
 
             // Play/Pause
             if (mx >= bx && mx < bx + btn_w) {
-                if (g.play_state == PlayState::Stopped && g.current_track >= 0) {
-                    start_track(g.current_track);
-                } else if (g.play_state == PlayState::Stopped && g.file_count > 0) {
-                    start_track(0);
+                if (g.play_state == PlayState::Stopped) {
+                    play_selected_or_default();
                 } else {
                     toggle_pause();
                 }
@@ -1118,6 +1337,94 @@ static bool handle_click(int mx, int my) {
     return false;
 }
 
+static bool handle_key(const Montauk::KeyEvent& key, bool& quit) {
+    if (!key.pressed) return false;
+
+    if (key.scancode == 0x01) { // Escape
+        if (g.filter_active) {
+            if (g.filter_text[0]) clear_filter();
+            else g.filter_active = false;
+            return true;
+        }
+        quit = true;
+        return false;
+    }
+
+    if (key.ctrl && (key.ascii == 'f' || key.ascii == 'F' || key.ascii == 6)) {
+        g.filter_active = true;
+        return true;
+    }
+
+    if (!key.ctrl && !key.alt && key.ascii == '/') {
+        g.filter_active = true;
+        return true;
+    }
+
+    if (!g.show_visualizer && key.scancode == 0x48) { // Up
+        move_selection(-1);
+        return true;
+    }
+    if (!g.show_visualizer && key.scancode == 0x50) { // Down
+        move_selection(1);
+        return true;
+    }
+    if (!g.show_visualizer &&
+        (key.ascii == '\n' || key.ascii == '\r' || key.scancode == 0x1C)) {
+        if (g.selected_item >= 0) {
+            start_track(g.selected_item);
+            g.filter_active = false;
+            return true;
+        }
+    }
+
+    if (g.filter_active) {
+        if (key.ascii == '\b' || key.scancode == 0x0E) {
+            if (g.filter_text[0]) pop_filter_char();
+            else g.filter_active = false;
+            return true;
+        }
+        if (!key.ctrl && !key.alt && is_printable_ascii(key.ascii)) {
+            append_filter_char(key.ascii);
+            return true;
+        }
+        return false;
+    }
+
+    if (key.ascii == ' ') {
+        if (g.play_state == PlayState::Stopped)
+            play_selected_or_default();
+        else
+            toggle_pause();
+        return true;
+    }
+    if (key.ascii == 's' || key.ascii == 'S') {
+        stop_playback();
+        return true;
+    }
+    if (key.ascii == 'h' || key.ascii == 'H') {
+        g.shuffle_enabled = !g.shuffle_enabled;
+        return true;
+    }
+    if (key.ascii == 'r' || key.ascii == 'R') {
+        cycle_repeat_mode();
+        return true;
+    }
+    if (key.ascii == 'v' || key.ascii == 'V') {
+        g.show_visualizer = !g.show_visualizer;
+        return true;
+    }
+    if (key.scancode == 0x4D) { // Right arrow
+        next_track(false);
+        return true;
+    }
+    if (key.scancode == 0x4B) { // Left arrow
+        prev_track();
+        return true;
+    }
+
+    return false;
+}
+
 // ============================================================================
 // Entry point
 // ============================================================================
@@ -1131,6 +1438,7 @@ extern "C" void _start() {
     g.current_track = -1;
     g.play_state = PlayState::Stopped;
     g.hovered_item = -1;
+    g.selected_item = -1;
     g.show_visualizer = false;
     g.repeat_mode = RepeatMode::Off;
     g.rng_state = (uint32_t)montauk::get_milliseconds() ^ 0xC0DEFACEu;
@@ -1263,38 +1571,9 @@ extern "C" void _start() {
 
             // Keyboard
             if (ev.type == 0 && ev.key.pressed) {
-                if (ev.key.scancode == 0x01) { quit = true; break; }
-                if (ev.key.ascii == ' ') {
-                    if (g.play_state == PlayState::Stopped && g.file_count > 0)
-                        start_track(g.current_track >= 0 ? g.current_track : 0);
-                    else
-                        toggle_pause();
+                if (handle_key(ev.key, quit))
                     redraw = true;
-                }
-                if (ev.key.ascii == 's' || ev.key.ascii == 'S') {
-                    stop_playback();
-                    redraw = true;
-                }
-                if (ev.key.ascii == 'h' || ev.key.ascii == 'H') {
-                    g.shuffle_enabled = !g.shuffle_enabled;
-                    redraw = true;
-                }
-                if (ev.key.ascii == 'r' || ev.key.ascii == 'R') {
-                    cycle_repeat_mode();
-                    redraw = true;
-                }
-                if (ev.key.ascii == 'v' || ev.key.ascii == 'V') {
-                    g.show_visualizer = !g.show_visualizer;
-                    redraw = true;
-                }
-                if (ev.key.scancode == 0x4D) { // Right arrow
-                    next_track(false);
-                    redraw = true;
-                }
-                if (ev.key.scancode == 0x4B) { // Left arrow
-                    prev_track();
-                    redraw = true;
-                }
+                if (quit) break;
             }
 
             // Mouse
@@ -1325,8 +1604,7 @@ extern "C" void _start() {
                 // Hover tracking for file list
                 int lb = list_bottom();
                 if (!g.show_visualizer && ev.mouse.y >= LIST_TOP && ev.mouse.y < lb) {
-                    int new_hover = (ev.mouse.y - LIST_TOP) / LIST_ITEM_H + g.scroll_y;
-                    if (new_hover >= g.file_count) new_hover = -1;
+                    int new_hover = filtered_raw_at((ev.mouse.y - LIST_TOP) / LIST_ITEM_H + g.scroll_y);
                     if (new_hover != g.hovered_item) {
                         g.hovered_item = new_hover;
                         redraw = true;
@@ -1339,10 +1617,7 @@ extern "C" void _start() {
                 // Scroll
                 if (!g.show_visualizer && ev.mouse.scroll != 0) {
                     g.scroll_y -= ev.mouse.scroll * 2;
-                    int max_scroll = g.file_count - visible_items();
-                    if (max_scroll < 0) max_scroll = 0;
-                    if (g.scroll_y < 0) g.scroll_y = 0;
-                    if (g.scroll_y > max_scroll) g.scroll_y = max_scroll;
+                    clamp_list_scroll();
                     redraw = true;
                 }
             }
@@ -1352,6 +1627,7 @@ extern "C" void _start() {
                 g.win_w = ev.resize.w;
                 g.win_h = ev.resize.h;
                 pixels = (uint32_t*)(uintptr_t)montauk::win_resize(win_id, g.win_w, g.win_h);
+                ensure_selected_visible();
                 redraw = true;
             }
         }

@@ -398,6 +398,16 @@ bool desktop_poll_external_windows(DesktopState* ds) {
         for (int i = 0; i < ds->window_count; i++) {
             if (ds->windows[i].external && ds->windows[i].ext_win_id == extId) {
                 found = true;
+                if (ds->windows[i].content_w != extWins[e].width ||
+                    ds->windows[i].content_h != extWins[e].height) {
+                    ds->windows[i].content_w = extWins[e].width;
+                    ds->windows[i].content_h = extWins[e].height;
+                    ds->windows[i].dirty = true;
+                    if (ds->windows[i].state != WIN_MINIMIZED && ds->windows[i].state != WIN_CLOSED) {
+                        changed = true;
+                    }
+                }
+                montauk::strncpy(ds->windows[i].title, extWins[e].title, MAX_TITLE_LEN);
                 // Update dirty flag and cursor
                 if (extWins[e].dirty) {
                     ds->windows[i].dirty = true;

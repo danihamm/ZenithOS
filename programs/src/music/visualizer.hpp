@@ -5,12 +5,18 @@
 
 namespace music_visualizer {
 
-static constexpr int BAR_COUNT = 24;
+static constexpr int WAVE_HISTORY = 192;
 
 struct State {
-    uint8_t levels[BAR_COUNT];
-    uint8_t peaks[BAR_COUNT];
-    uint8_t peak_hold[BAR_COUNT];
+    int16_t min_samples[WAVE_HISTORY];
+    int16_t max_samples[WAVE_HISTORY];
+    uint8_t energy[WAVE_HISTORY];
+    int write_pos;
+    int history_count;
+    int accum_frames;
+    int accum_abs_sum;
+    int accum_min;
+    int accum_max;
 };
 
 void reset(State& state);
