@@ -373,6 +373,18 @@ static bool desktop_has_visible_dirty_window(const DesktopState* ds) {
     return false;
 }
 
+static bool desktop_has_active_interaction(const DesktopState* ds) {
+    if (ds->vol_dragging) return true;
+
+    for (int i = 0; i < ds->window_count; i++) {
+        const Window& win = ds->windows[i];
+        if (win.state == WIN_CLOSED || win.state == WIN_MINIMIZED) continue;
+        if (win.dragging || win.resizing) return true;
+    }
+
+    return false;
+}
+
 static void desktop_clear_window_dirty(DesktopState* ds) {
     for (int i = 0; i < ds->window_count; i++) {
         ds->windows[i].dirty = false;
@@ -613,7 +625,11 @@ void gui::desktop_run(DesktopState* ds) {
             firstFrame = false;
         }
 
-        montauk::sleep_ms(sceneChanged ? 4 : 16);
+        if (desktop_has_active_interaction(ds)) {
+            montauk::sleep_ms(1);
+        } else {
+            montauk::sleep_ms(sceneChanged ? 4 : 16);
+        }
     }
 }
 
