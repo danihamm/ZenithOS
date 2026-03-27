@@ -115,10 +115,10 @@ static void render(uint32_t* pixels) {
 }
 
 // ============================================================================
-// Entry point
+// App entry
 // ============================================================================
 
-extern "C" void _start() {
+static int app_main() {
     // Load font
     g_font = new TrueTypeFont();
     if (!g_font->init("0:/fonts/Roboto-Medium.ttf"))
@@ -176,5 +176,18 @@ extern "C" void _start() {
 
 done:
     montauk::win_destroy(win_id);
+    return 0;
+}
+
+#if MONTAUK_USE_CRT
+int main(int argc, char** argv) {
+    (void)argc;
+    (void)argv;
+    return app_main();
+}
+#else
+extern "C" void _start() {
+    app_main();
     montauk::exit(0);
 }
+#endif

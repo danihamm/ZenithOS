@@ -32,6 +32,11 @@
 #include <string.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <math.h>
+#include <setjmp.h>
+#include <time.h>
+#include <unistd.h>
+#include <sys/time.h>
 #include "montauk_compat.h"
 
 /* Stubs for functions in libc headers but not relevant here */

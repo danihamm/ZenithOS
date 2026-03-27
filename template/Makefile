@@ -18,8 +18,10 @@ SRCS     := src/main.cpp src/stb_truetype_impl.cpp src/cxxrt.cpp
 # Optional features — set to 1 to enable:
 #   USE_TLS=1    HTTPS/TLS support (libtls + libbearssl)
 #   USE_JPEG=1   JPEG image decoding (libjpeg / stb_image)
+#   USE_CRT=1    Link the shared Montauk CRT and use main(argc, argv)
 USE_TLS  ?= 0
 USE_JPEG ?= 0
+USE_CRT  ?= 0
 
 # ---- Toolchain ----
 # Looks for the cross-compiler via MONTAUKOS, then falls back to system g++.
@@ -67,6 +69,10 @@ CXXFLAGS := \
     -I src \
     -isystem $(SYSROOT)/include/libc
 
+ifeq ($(USE_CRT),1)
+    CXXFLAGS += -DMONTAUK_USE_CRT=1
+endif
+
 # ---- Linker flags ----
 
 LDFLAGS := \
@@ -90,6 +96,13 @@ ifeq ($(USE_JPEG),1)
 endif
 LIBS += $(SYSROOT)/lib/liblibc.a
 
+CRT_PRELUDE :=
+CRT_POSTLUDE :=
+ifeq ($(USE_CRT),1)
+    CRT_PRELUDE := $(SYSROOT)/lib/crt1.o $(SYSROOT)/lib/crti.o
+    CRT_POSTLUDE := $(SYSROOT)/lib/crtn.o
+endif
+
 # ---- Build rules ----
 
 OBJS := $(addprefix $(OBJDIR)/,$(SRCS:.cpp=.o))
@@ -101,7 +114,7 @@ all: $(TARGET)
 
 $(TARGET): $(OBJS) $(LINK_LD) Makefile
 	@mkdir -p $(BINDIR)
-	$(CXX) $(CXXFLAGS) $(LDFLAGS) $(OBJS) $(LIBS) -o $@
+	$(CXX) $(CXXFLAGS) $(LDFLAGS) $(CRT_PRELUDE) $(OBJS) $(LIBS) $(CRT_POSTLUDE) -o $@
 	@echo "Built: $@"
 
 $(OBJDIR)/%.o: %.cpp Makefile

@@ -9,12 +9,19 @@
 #include <stdint.h>
 #include <stdarg.h>
 #include <limits.h>
+#include <dirent.h>
+#include <locale.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <math.h>
 #include <fcntl.h>
+#include <math.h>
+#include <string.h>
+#include <time.h>
 #include <errno.h>
 #include <sys/stat.h>
+#include <sys/time.h>
+#include <unistd.h>
 
 /* ========================================================================
    Raw syscall wrappers (C versions matching kernel ABI)
@@ -79,6 +86,7 @@ static inline long _zos_syscall4(long nr, long a1, long a2, long a3, long a4) {
 
 /* Syscall numbers */
 #define SYS_EXIT    0
+#define SYS_SLEEP_MS 2
 #define SYS_PRINT   4
 #define SYS_PUTCHAR 5
 #define SYS_OPEN    6
@@ -88,14 +96,17 @@ static inline long _zos_syscall4(long nr, long a1, long a2, long a3, long a4) {
 #define SYS_READDIR 10
 #define SYS_ALLOC   11
 #define SYS_FREE    12
+#define SYS_GETMILLISECONDS 14
 #define SYS_GETCHAR 18
 #define SYS_SPAWN   20
 #define SYS_WAITPID 23
 #define SYS_GETARGS 25
+#define SYS_GETTIME 28
 #define SYS_FWRITE  41
 #define SYS_FCREATE 42
 #define SYS_FDELETE 77
 #define SYS_FMKDIR  78
+#define SYS_GETTZ   91
 #define SYS_FRENAME 94
 #define SYS_GETCWD  95
 #define SYS_CHDIR   96
@@ -105,6 +116,209 @@ static inline long _zos_syscall4(long nr, long a1, long a2, long a3, long a4) {
    ======================================================================== */
 
 int errno = 0;
+
+/* ========================================================================
+   Internal helpers
+   ======================================================================== */
+
+struct _mtk_datetime {
+    uint16_t year;
+    uint8_t month;
+    uint8_t day;
+    uint8_t hour;
+    uint8_t minute;
+    uint8_t second;
+};
+
+struct _DIR {
+    int count;
+    int index;
+    struct dirent entry;
+    char names[256][NAME_MAX + 1];
+};
+
+struct _env_entry {
+    char *name;
+    char *value;
+};
+
+static struct _env_entry _env_entries[64];
+static sighandler_t _signal_handlers[32];
+
+static const char *_weekday_short[] = {
+    "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"
+};
+
+static const char *_weekday_long[] = {
+    "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"
+};
+
+static const char *_month_short[] = {
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
+};
+
+static const char *_month_long[] = {
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December"
+};
+
+static int _is_leap_year(int year) {
+    return (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
+}
+
+static int _days_in_month(int year, int month) {
+    static const int days[] = { 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 };
+    if (month == 1 && _is_leap_year(year)) return 29;
+    return days[month];
+}
+
+static int _day_of_year(int year, int month, int day) {
+    int yday = 0;
+    for (int i = 0; i < month; i++) {
+        yday += _days_in_month(year, i);
+    }
+    return yday + day - 1;
+}
+
+static time_t _epoch_from_datetime(int year, int month, int day, int hour, int minute, int second) {
+    time_t days = 0;
+
+    for (int y = 1970; y < year; y++) {
+        days += _is_leap_year(y) ? 366 : 365;
+    }
+
+    for (int m = 1; m < month; m++) {
+        days += _days_in_month(year, m - 1);
+    }
+
+    days += day - 1;
+    return days * 86400 + hour * 3600 + minute * 60 + second;
+}
+
+static void _tm_from_epoch(time_t epoch, struct tm *out) {
+    time_t days = epoch / 86400;
+    time_t rem = epoch % 86400;
+    int year = 1970;
+
+    if (rem < 0) {
+        rem += 86400;
+        days--;
+    }
+
+    while (days < 0) {
+        year--;
+        days += _is_leap_year(year) ? 366 : 365;
+    }
+
+    while (1) {
+        int diy = _is_leap_year(year) ? 366 : 365;
+        if (days < diy) break;
+        days -= diy;
+        year++;
+    }
+
+    int month = 0;
+    while (month < 11) {
+        int dim = _days_in_month(year, month);
+        if (days < dim) break;
+        days -= dim;
+        month++;
+    }
+
+    out->tm_year = year - 1900;
+    out->tm_mon = month;
+    out->tm_mday = (int)days + 1;
+    out->tm_hour = (int)(rem / 3600);
+    rem %= 3600;
+    out->tm_min = (int)(rem / 60);
+    out->tm_sec = (int)(rem % 60);
+    out->tm_yday = _day_of_year(year, month, out->tm_mday);
+    out->tm_wday = (int)(((epoch / 86400) + 4) % 7);
+    if (out->tm_wday < 0) out->tm_wday += 7;
+    out->tm_isdst = 0;
+}
+
+static int _get_tz_offset_minutes(void) {
+    return (int)_zos_syscall0(SYS_GETTZ);
+}
+
+static time_t _current_time_epoch(void) {
+    struct _mtk_datetime dt = {};
+    _zos_syscall1(SYS_GETTIME, (long)&dt);
+    return _epoch_from_datetime((int)dt.year, (int)dt.month, (int)dt.day,
+                                (int)dt.hour, (int)dt.minute, (int)dt.second)
+         - (time_t)_get_tz_offset_minutes() * 60;
+}
+
+static int _append_char(char *buf, size_t max, size_t *pos, char c) {
+    if (*pos + 1 >= max) return 0;
+    buf[(*pos)++] = c;
+    return 1;
+}
+
+static int _append_str(char *buf, size_t max, size_t *pos, const char *s) {
+    while (*s) {
+        if (!_append_char(buf, max, pos, *s++)) return 0;
+    }
+    return 1;
+}
+
+static int _append_num(char *buf, size_t max, size_t *pos, int value, int width, char pad) {
+    char tmp[16];
+    int i = 0;
+
+    if (value < 0) value = -value;
+    do {
+        tmp[i++] = (char)('0' + (value % 10));
+        value /= 10;
+    } while (value > 0 && i < (int)sizeof(tmp));
+
+    while (i < width) {
+        tmp[i++] = pad;
+    }
+
+    while (i > 0) {
+        if (!_append_char(buf, max, pos, tmp[--i])) return 0;
+    }
+    return 1;
+}
+
+static int _path_is_directory(const char *path) {
+    const char *names[1];
+    return (int)_zos_syscall3(SYS_READDIR, (long)path, (long)names, 1L) >= 0;
+}
+
+static int _path_prefix_skip(const char *path) {
+    const char *local = path;
+    for (int i = 0; local[i]; i++) {
+        if (local[i] == ':') {
+            local += i + 1;
+            if (local[0] == '/') local++;
+            break;
+        }
+    }
+
+    int prefix_len = (int)strlen(local);
+    if (prefix_len > 0 && local[prefix_len - 1] != '/') prefix_len++;
+    return prefix_len;
+}
+
+static int _find_env_slot(const char *name) {
+    for (int i = 0; i < (int)(sizeof(_env_entries) / sizeof(_env_entries[0])); i++) {
+        if (_env_entries[i].name != NULL && strcmp(_env_entries[i].name, name) == 0)
+            return i;
+    }
+    return -1;
+}
+
+static int _alloc_env_slot(void) {
+    for (int i = 0; i < (int)(sizeof(_env_entries) / sizeof(_env_entries[0])); i++) {
+        if (_env_entries[i].name == NULL)
+            return i;
+    }
+    return -1;
+}
 
 /* ========================================================================
    string.h functions
@@ -198,6 +412,24 @@ size_t strlen(const char *s) {
     return len;
 }
 
+size_t strspn(const char *s, const char *accept) {
+    size_t n = 0;
+    while (s[n]) {
+        if (strchr(accept, s[n]) == NULL) break;
+        n++;
+    }
+    return n;
+}
+
+size_t strcspn(const char *s, const char *reject) {
+    size_t n = 0;
+    while (s[n]) {
+        if (strchr(reject, s[n]) != NULL) break;
+        n++;
+    }
+    return n;
+}
+
 int strcmp(const char *a, const char *b) {
     while (*a && *a == *b) { a++; b++; }
     return (unsigned char)*a - (unsigned char)*b;
@@ -259,6 +491,15 @@ char *strrchr(const char *s, int c) {
     return (char *)last;
 }
 
+char *strpbrk(const char *s, const char *accept) {
+    while (*s) {
+        if (strchr(accept, *s) != NULL)
+            return (char *)s;
+        s++;
+    }
+    return NULL;
+}
+
 int strcasecmp(const char *a, const char *b) {
     while (*a && ((*a >= 'A' && *a <= 'Z') ? *a + 32 : *a) ==
                  ((*b >= 'A' && *b <= 'Z') ? *b + 32 : *b)) { a++; b++; }
@@ -274,6 +515,10 @@ int strncasecmp(const char *a, const char *b, size_t n) {
         if (ca != cb || ca == 0) return ca - cb;
     }
     return 0;
+}
+
+int strcoll(const char *s1, const char *s2) {
+    return strcmp(s1, s2);
 }
 
 char *strstr(const char *haystack, const char *needle) {
@@ -295,6 +540,25 @@ char *strdup(const char *s) {
     char *d = (char *)malloc(len);
     if (d) memcpy(d, s, len);
     return d;
+}
+
+const char *strerror(int errnum) {
+    switch (errnum) {
+    case 0:      return "success";
+    case EPERM:  return "operation not permitted";
+    case ENOENT: return "no such file or directory";
+    case EIO:    return "input/output error";
+    case EBADF:  return "bad file descriptor";
+    case ENOMEM: return "not enough memory";
+    case EACCES: return "permission denied";
+    case EEXIST: return "file exists";
+    case ENOTDIR:return "not a directory";
+    case EISDIR: return "is a directory";
+    case EINVAL: return "invalid argument";
+    case ERANGE: return "result out of range";
+    case ENOSYS: return "function not implemented";
+    default:     return "error";
+    }
 }
 
 /* ========================================================================
@@ -627,8 +891,92 @@ unsigned long strtoul(const char *nptr, char **endptr, int base) {
 }
 
 char *getenv(const char *name) {
-    (void)name;
-    return NULL;
+    if (name == NULL || name[0] == '\0') return NULL;
+
+    int slot = _find_env_slot(name);
+    if (slot < 0) return NULL;
+    return _env_entries[slot].value;
+}
+
+int setenv(const char *name, const char *value, int overwrite) {
+    if (name == NULL || name[0] == '\0' || strchr(name, '=') != NULL || value == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    int slot = _find_env_slot(name);
+    if (slot >= 0 && !overwrite) {
+        return 0;
+    }
+
+    if (slot < 0) {
+        slot = _alloc_env_slot();
+        if (slot < 0) {
+            errno = ENOMEM;
+            return -1;
+        }
+    } else {
+        free(_env_entries[slot].name);
+        free(_env_entries[slot].value);
+        _env_entries[slot].name = NULL;
+        _env_entries[slot].value = NULL;
+    }
+
+    _env_entries[slot].name = strdup(name);
+    _env_entries[slot].value = strdup(value);
+    if (_env_entries[slot].name == NULL || _env_entries[slot].value == NULL) {
+        free(_env_entries[slot].name);
+        free(_env_entries[slot].value);
+        _env_entries[slot].name = NULL;
+        _env_entries[slot].value = NULL;
+        errno = ENOMEM;
+        return -1;
+    }
+
+    return 0;
+}
+
+int unsetenv(const char *name) {
+    if (name == NULL || name[0] == '\0' || strchr(name, '=') != NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    int slot = _find_env_slot(name);
+    if (slot < 0) return 0;
+
+    free(_env_entries[slot].name);
+    free(_env_entries[slot].value);
+    _env_entries[slot].name = NULL;
+    _env_entries[slot].value = NULL;
+    return 0;
+}
+
+int putenv(char *string) {
+    if (string == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    char *eq = strchr(string, '=');
+    if (eq == NULL || eq == string) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    size_t name_len = (size_t)(eq - string);
+    char *name = (char *)malloc(name_len + 1);
+    if (name == NULL) {
+        errno = ENOMEM;
+        return -1;
+    }
+
+    memcpy(name, string, name_len);
+    name[name_len] = '\0';
+
+    int rc = setenv(name, eq + 1, 1);
+    free(name);
+    return rc;
 }
 
 static void (*_atexit_funcs[32])(void);
@@ -653,12 +1001,104 @@ void abort(void) {
     __builtin_unreachable();
 }
 
-int system(const char *command) {
-    if (command == NULL) return -1;
-    int pid = (int)_zos_syscall2(SYS_SPAWN, (long)command, 0L);
+static int _system_parse_drive_prefix(const char *s) {
+    if (s == NULL || s[0] < '0' || s[0] > '9') return -1;
+    int drive = 0;
+    int i = 0;
+    while (s[i] >= '0' && s[i] <= '9') {
+        drive = drive * 10 + (s[i] - '0');
+        i++;
+    }
+    return (s[i] == ':') ? drive : -1;
+}
+
+static void _system_build_drive_path(int drive, const char *leaf, char *out, size_t out_size) {
+    snprintf(out, out_size, "%d:/%s", drive, (leaf != NULL) ? leaf : "");
+}
+
+static int _system_try_spawn(const char *path, const char *args) {
+    int pid = (int)_zos_syscall2(SYS_SPAWN, (long)path, (long)args);
     if (pid < 0) return -1;
     _zos_syscall1(SYS_WAITPID, (long)pid);
     return 0;
+}
+
+int system(const char *command) {
+    char command_buf[256];
+    char cwd[128] = "";
+    char path[256];
+    char leaf[128];
+    char *args = NULL;
+    int current_drive = 0;
+    int has_slash = 0;
+
+    if (command == NULL) return -1;
+
+    while (*command == ' ' || *command == '\t' || *command == '\n') command++;
+    if (*command == '\0') return 0;
+
+    size_t command_len = strlen(command);
+    if (command_len >= sizeof(command_buf)) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    memcpy(command_buf, command, command_len + 1);
+
+    char *prog = command_buf;
+    while (*prog == ' ' || *prog == '\t' || *prog == '\n') prog++;
+    if (*prog == '\0') return 0;
+
+    char *split = prog;
+    while (*split != '\0' && *split != ' ' && *split != '\t' && *split != '\n') {
+        if (*split == '/') has_slash = 1;
+        split++;
+    }
+    if (*split != '\0') {
+        *split++ = '\0';
+        while (*split == ' ' || *split == '\t' || *split == '\n') split++;
+        if (*split != '\0') args = split;
+    }
+
+    if (getcwd(cwd, sizeof(cwd)) != NULL) {
+        int drive = _system_parse_drive_prefix(cwd);
+        if (drive >= 0) current_drive = drive;
+    }
+
+    if (_system_parse_drive_prefix(prog) >= 0 || prog[0] == '/' || prog[0] == '.' || has_slash) {
+        if (_system_try_spawn(prog, args) == 0) return 0;
+        snprintf(path, sizeof(path), "%s.elf", prog);
+        if (_system_try_spawn(path, args) == 0) return 0;
+        errno = ENOENT;
+        return -1;
+    }
+
+    snprintf(leaf, sizeof(leaf), "%s", prog);
+    if (cwd[0] != '\0') {
+        const char *sep = cwd[strlen(cwd) - 1] == '/' ? "" : "/";
+        snprintf(path, sizeof(path), "%s%s%s", cwd, sep, leaf);
+        if (_system_try_spawn(path, args) == 0) return 0;
+        snprintf(path, sizeof(path), "%s%s%s.elf", cwd, sep, leaf);
+        if (_system_try_spawn(path, args) == 0) return 0;
+    }
+
+    snprintf(path, sizeof(path), "0:/os/%s.elf", leaf);
+    if (_system_try_spawn(path, args) == 0) return 0;
+    snprintf(path, sizeof(path), "0:/os/%s", leaf);
+    if (_system_try_spawn(path, args) == 0) return 0;
+    snprintf(path, sizeof(path), "0:/games/%s.elf", leaf);
+    if (_system_try_spawn(path, args) == 0) return 0;
+
+    if (current_drive != 0) {
+        _system_build_drive_path(current_drive, leaf, path, sizeof(path));
+        if (_system_try_spawn(path, args) == 0) return 0;
+        snprintf(leaf, sizeof(leaf), "%s.elf", prog);
+        _system_build_drive_path(current_drive, leaf, path, sizeof(path));
+        if (_system_try_spawn(path, args) == 0) return 0;
+    }
+
+    errno = ENOENT;
+    return -1;
 }
 
 /* ========================================================================
@@ -937,6 +1377,59 @@ FILE *stdin  = &_stdin_file;
 FILE *stdout = &_stdout_file;
 FILE *stderr = &_stderr_file;
 
+static char _stdin_linebuf[512];
+static size_t _stdin_line_len = 0;
+static size_t _stdin_line_pos = 0;
+
+static void _stdin_echo_char(char c) {
+    if (c == '\b') {
+        _zos_syscall1(SYS_PUTCHAR, '\b');
+        _zos_syscall1(SYS_PUTCHAR, ' ');
+        _zos_syscall1(SYS_PUTCHAR, '\b');
+        return;
+    }
+    _zos_syscall1(SYS_PUTCHAR, (unsigned char)c);
+}
+
+static int _stdin_fill_line(void) {
+    _stdin_line_len = 0;
+    _stdin_line_pos = 0;
+
+    while (_stdin_line_len + 1 < sizeof(_stdin_linebuf)) {
+        int c = (int)_zos_syscall0(SYS_GETCHAR);
+        if (c <= 0) continue;
+
+        if (c == '\r') c = '\n';
+
+        if (c == '\b' || c == 127) {
+            if (_stdin_line_len > 0) {
+                _stdin_line_len--;
+                _stdin_echo_char('\b');
+            }
+            continue;
+        }
+
+        if (c == '\n') {
+            _stdin_linebuf[_stdin_line_len++] = (char)c;
+            _stdin_echo_char((char)c);
+            return 1;
+        }
+
+        if (c >= ' ' || c == '\t') {
+            _stdin_linebuf[_stdin_line_len++] = (char)c;
+            _stdin_echo_char((char)c);
+        }
+    }
+
+    if (_stdin_line_len > 0) {
+        _stdin_linebuf[_stdin_line_len++] = '\n';
+        _stdin_echo_char('\n');
+        return 1;
+    }
+
+    return 0;
+}
+
 FILE *fopen(const char *path, const char *mode) {
     if (path == NULL || mode == NULL) return NULL;
 
@@ -1010,13 +1503,15 @@ size_t fread(void *ptr, size_t size, size_t nmemb, FILE *stream) {
     if (stream == NULL || ptr == NULL || size == 0 || nmemb == 0) return 0;
 
     if (stream->is_std == 1) {
-        /* stdin: read characters via SYS_GETCHAR */
         size_t total = size * nmemb;
         char *dst = (char *)ptr;
-        size_t i;
-        for (i = 0; i < total; i++) {
-            int c = (int)_zos_syscall0(SYS_GETCHAR);
-            if (c <= 0) { stream->eof = 1; break; }
+        size_t i = 0;
+        for (; i < total; i++) {
+            int c = fgetc(stream);
+            if (c == EOF) {
+                stream->eof = 1;
+                break;
+            }
             dst[i] = (char)c;
         }
         return i / size;
@@ -1095,6 +1590,30 @@ int fflush(FILE *stream) {
     return 0;
 }
 
+FILE *freopen(const char *path, const char *mode, FILE *stream) {
+    if (stream == NULL) return NULL;
+    if (path == NULL) return stream;
+
+    FILE *fresh = fopen(path, mode);
+    if (fresh == NULL) return NULL;
+
+    if (!stream->is_std) {
+        _zos_syscall1(SYS_CLOSE, (long)stream->handle);
+    }
+
+    *stream = *fresh;
+    free(fresh);
+    return stream;
+}
+
+int setvbuf(FILE *stream, char *buf, int mode, size_t size) {
+    (void)stream;
+    (void)buf;
+    (void)mode;
+    (void)size;
+    return 0;
+}
+
 int feof(FILE *stream) {
     if (stream == NULL) return 0;
     return stream->eof;
@@ -1122,9 +1641,13 @@ int fgetc(FILE *stream) {
     }
 
     if (stream->is_std == 1) {
-        int c = (int)_zos_syscall0(SYS_GETCHAR);
-        if (c <= 0) { stream->eof = 1; return EOF; }
-        return c;
+        if (_stdin_line_pos >= _stdin_line_len) {
+            if (!_stdin_fill_line()) {
+                stream->eof = 1;
+                return EOF;
+            }
+        }
+        return (unsigned char)_stdin_linebuf[_stdin_line_pos++];
     }
 
     if (stream->pos >= stream->size) {
@@ -1146,6 +1669,12 @@ int fgetc(FILE *stream) {
 
 int getc(FILE *stream) {
     return fgetc(stream);
+}
+
+int fputc(int c, FILE *stream) {
+    unsigned char ch = (unsigned char)c;
+    size_t n = fwrite(&ch, 1, 1, stream);
+    return (n == 1) ? c : EOF;
 }
 
 int ungetc(int c, FILE *stream) {
@@ -1234,12 +1763,20 @@ void perror(const char *s) {
 }
 
 FILE *tmpfile(void) {
-    return NULL;
+    char path[L_tmpnam];
+    if (tmpnam(path) == NULL) return NULL;
+    return fopen(path, "w+");
 }
 
 char *tmpnam(char *s) {
-    (void)s;
-    return NULL;
+    static char internal[L_tmpnam];
+    static unsigned long counter = 0;
+    char *out = (s != NULL) ? s : internal;
+
+    _zos_syscall1(SYS_FMKDIR, (long)"0:/tmp");
+    snprintf(out, L_tmpnam, "0:/tmp/tmp%lu.tmp",
+             (unsigned long)_zos_syscall0(SYS_GETMILLISECONDS) + counter++);
+    return out;
 }
 
 /* ========================================================================
@@ -1336,19 +1873,54 @@ done:
 #define _FD_POS_MAX 64
 static unsigned long _fd_pos[_FD_POS_MAX];
 
-int open(const char *path, int flags, ...) {
-    if (path == NULL) return -1;
-    int h;
-
-    if (flags & 0x40 /* O_CREAT */) {
-        _zos_syscall1(SYS_FDELETE, (long)path);
-        h = (int)_zos_syscall1(SYS_FCREATE, (long)path);
-    } else {
-        h = (int)_zos_syscall1(SYS_OPEN, (long)path);
+int access(const char *path, int mode) {
+    if (path == NULL) {
+        errno = EINVAL;
+        return -1;
     }
 
-    if (h >= 0 && h < _FD_POS_MAX)
+    (void)mode;
+
+    int h = (int)_zos_syscall1(SYS_OPEN, (long)path);
+    if (h >= 0) {
+        _zos_syscall1(SYS_CLOSE, (long)h);
+        return 0;
+    }
+
+    if (_path_is_directory(path)) {
+        return 0;
+    }
+
+    errno = ENOENT;
+    return -1;
+}
+
+int open(const char *path, int flags, ...) {
+    if (path == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    int h = (int)_zos_syscall1(SYS_OPEN, (long)path);
+    int wants_create = (flags & O_CREAT) != 0;
+    int wants_trunc = (flags & O_TRUNC) != 0;
+
+    if (h < 0) {
+        if (wants_create) {
+            h = (int)_zos_syscall1(SYS_FCREATE, (long)path);
+        }
+    } else if (wants_trunc) {
+        _zos_syscall1(SYS_CLOSE, (long)h);
+        _zos_syscall1(SYS_FDELETE, (long)path);
+        h = (int)_zos_syscall1(SYS_FCREATE, (long)path);
+    }
+
+    if (h >= 0 && h < _FD_POS_MAX) {
         _fd_pos[h] = 0;
+    }
+    if (h < 0) {
+        errno = ENOENT;
+    }
     return h;
 }
 
@@ -1373,7 +1945,10 @@ int write(int fd, const void *buf, size_t count) {
 int close(int fd) {
     if (fd >= 0 && fd < _FD_POS_MAX)
         _fd_pos[fd] = 0;
-    _zos_syscall1(SYS_CLOSE, (long)fd);
+    if ((int)_zos_syscall1(SYS_CLOSE, (long)fd) < 0) {
+        errno = EBADF;
+        return -1;
+    }
     return 0;
 }
 
@@ -1422,6 +1997,10 @@ char *getcwd(char *buf, size_t size) {
     return buf;
 }
 
+int isatty(int fd) {
+    return fd >= 0 && fd <= 2;
+}
+
 /* ========================================================================
    sys/stat.h functions
    ======================================================================== */
@@ -1433,18 +2012,108 @@ int mkdir(const char *path, unsigned int mode) {
 }
 
 int stat(const char *path, struct stat *buf) {
-    if (path == NULL || buf == NULL) return -1;
+    if (path == NULL || buf == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    memset(buf, 0, sizeof(*buf));
+
     int h = (int)_zos_syscall1(SYS_OPEN, (long)path);
-    if (h < 0) return -1;
-    buf->st_size = (unsigned long)_zos_syscall1(SYS_GETSIZE, (long)h);
-    _zos_syscall1(SYS_CLOSE, (long)h);
-    return 0;
+    if (h >= 0) {
+        buf->st_mode = S_IFREG;
+        buf->st_size = (unsigned long)_zos_syscall1(SYS_GETSIZE, (long)h);
+        _zos_syscall1(SYS_CLOSE, (long)h);
+        return 0;
+    }
+
+    if (_path_is_directory(path)) {
+        buf->st_mode = S_IFDIR;
+        buf->st_size = 0;
+        return 0;
+    }
+
+    errno = ENOENT;
+    return -1;
 }
 
 int fstat(int fd, struct stat *buf) {
-    if (buf == NULL) return -1;
+    if (buf == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+    memset(buf, 0, sizeof(*buf));
+    buf->st_mode = S_IFREG;
     buf->st_size = (unsigned long)_zos_syscall1(SYS_GETSIZE, (long)fd);
     return 0;
+}
+
+/* ========================================================================
+   dirent.h functions
+   ======================================================================== */
+
+DIR *opendir(const char *name) {
+    if (name == NULL) {
+        errno = EINVAL;
+        return NULL;
+    }
+
+    DIR *dir = (DIR *)malloc(sizeof(DIR));
+    if (dir == NULL) {
+        errno = ENOMEM;
+        return NULL;
+    }
+
+    const char *raw_names[256];
+    int count = (int)_zos_syscall3(SYS_READDIR, (long)name, (long)raw_names, 256L);
+    if (count < 0) {
+        free(dir);
+        errno = ENOTDIR;
+        return NULL;
+    }
+
+    memset(dir, 0, sizeof(*dir));
+    dir->count = count;
+    dir->index = 0;
+
+    int prefix_len = _path_prefix_skip(name);
+    for (int i = 0; i < count && i < 256; i++) {
+        const char *entry = raw_names[i];
+        if ((int)strlen(entry) >= prefix_len) {
+            entry += prefix_len;
+        }
+        strncpy(dir->names[i], entry, NAME_MAX);
+        dir->names[i][NAME_MAX] = '\0';
+    }
+
+    return dir;
+}
+
+struct dirent *readdir(DIR *dirp) {
+    if (dirp == NULL || dirp->index >= dirp->count) {
+        return NULL;
+    }
+
+    memset(&dirp->entry, 0, sizeof(dirp->entry));
+    dirp->entry.d_type = DT_UNKNOWN;
+    strncpy(dirp->entry.d_name, dirp->names[dirp->index], NAME_MAX);
+    dirp->entry.d_name[NAME_MAX] = '\0';
+    dirp->index++;
+    return &dirp->entry;
+}
+
+int closedir(DIR *dirp) {
+    if (dirp == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+    free(dirp);
+    return 0;
+}
+
+void rewinddir(DIR *dirp) {
+    if (dirp == NULL) return;
+    dirp->index = 0;
 }
 
 /* ========================================================================
@@ -1516,6 +2185,92 @@ long atol(const char *s) {
     return strtol(s, NULL, 10);
 }
 
+double strtod(const char *nptr, char **endptr) {
+    double result = 0.0;
+    double sign = 1.0;
+    const char *s = nptr;
+
+    while (isspace((unsigned char)*s)) s++;
+    if (*s == '-') { sign = -1.0; s++; }
+    else if (*s == '+') s++;
+
+    while (*s >= '0' && *s <= '9')
+        result = result * 10.0 + (*s++ - '0');
+
+    if (*s == '.') {
+        s++;
+        double frac = 0.1;
+        while (*s >= '0' && *s <= '9') {
+            result += (*s++ - '0') * frac;
+            frac *= 0.1;
+        }
+    }
+
+    if (*s == 'e' || *s == 'E') {
+        s++;
+        int exp_sign = 1;
+        int exp_val = 0;
+        if (*s == '-') { exp_sign = -1; s++; }
+        else if (*s == '+') s++;
+        while (*s >= '0' && *s <= '9')
+            exp_val = exp_val * 10 + (*s++ - '0');
+        double exp_mult = 1.0;
+        for (int i = 0; i < exp_val; i++)
+            exp_mult *= 10.0;
+        if (exp_sign > 0) result *= exp_mult;
+        else result /= exp_mult;
+    }
+
+    if (nptr[0] == '0' && (nptr[1] == 'x' || nptr[1] == 'X')) {
+        s = nptr + 2;
+        result = 0.0;
+        while (1) {
+            int d;
+            if (*s >= '0' && *s <= '9') d = *s - '0';
+            else if (*s >= 'a' && *s <= 'f') d = *s - 'a' + 10;
+            else if (*s >= 'A' && *s <= 'F') d = *s - 'A' + 10;
+            else break;
+            result = result * 16.0 + d;
+            s++;
+        }
+        if (*s == '.') {
+            s++;
+            double frac = 1.0 / 16.0;
+            while (1) {
+                int d;
+                if (*s >= '0' && *s <= '9') d = *s - '0';
+                else if (*s >= 'a' && *s <= 'f') d = *s - 'a' + 10;
+                else if (*s >= 'A' && *s <= 'F') d = *s - 'A' + 10;
+                else break;
+                result += d * frac;
+                frac /= 16.0;
+                s++;
+            }
+        }
+        if (*s == 'p' || *s == 'P') {
+            s++;
+            int exp_sign = 1;
+            int exp_val = 0;
+            if (*s == '-') { exp_sign = -1; s++; }
+            else if (*s == '+') s++;
+            while (*s >= '0' && *s <= '9')
+                exp_val = exp_val * 10 + (*s++ - '0');
+            result = ldexp(result, exp_sign * exp_val);
+        }
+    }
+
+    if (endptr) *endptr = (char *)s;
+    return sign * result;
+}
+
+float strtof(const char *nptr, char **endptr) {
+    return (float)strtod(nptr, endptr);
+}
+
+long double strtold(const char *nptr, char **endptr) {
+    return (long double)strtod(nptr, endptr);
+}
+
 /* ========================================================================
    math.h functions
    ======================================================================== */
@@ -1527,6 +2282,39 @@ long atol(const char *s) {
 #define M_LOG2E     1.44269504088896340736
 
 double fabs(double x) { return x < 0 ? -x : x; }
+
+double frexp(double x, int *exp) {
+    int e = 0;
+    double ax = fabs(x);
+
+    if (ax == 0.0) {
+        if (exp) *exp = 0;
+        return 0.0;
+    }
+
+    while (ax >= 1.0) {
+        ax *= 0.5;
+        e++;
+    }
+    while (ax < 0.5) {
+        ax *= 2.0;
+        e--;
+    }
+
+    if (exp) *exp = e;
+    return x < 0.0 ? -ax : ax;
+}
+
+double ldexp(double x, int n) {
+    if (x == 0.0 || n == 0) return x;
+    while (n > 0) { x *= 2.0; n--; }
+    while (n < 0) { x *= 0.5; n++; }
+    return x;
+}
+
+long double ldexpl(long double x, int n) {
+    return (long double)ldexp((double)x, n);
+}
 
 double floor(double x) {
     double t = (double)(long long)x;
@@ -1668,8 +2456,32 @@ double tan(double x) {
     return sin(x) / c;
 }
 
+double asin(double x) {
+    if (x < -1.0 || x > 1.0) return 0.0;
+    return atan2(x, sqrt(1.0 - x * x));
+}
+
+double acos(double x) {
+    if (x < -1.0 || x > 1.0) return 0.0;
+    return atan2(sqrt(1.0 - x * x), x);
+}
+
 double log2(double x)  { return log(x) * M_LOG2E; }
 double log10(double x) { return log(x) * 0.43429448190325182765; /* 1/ln(10) */ }
+
+double sinh(double x) {
+    return 0.5 * (exp(x) - exp(-x));
+}
+
+double cosh(double x) {
+    return 0.5 * (exp(x) + exp(-x));
+}
+
+double tanh(double x) {
+    double ex = exp(x);
+    double enx = exp(-x);
+    return (ex - enx) / (ex + enx);
+}
 
 /* ---- atan / atan2 via polynomial approximation ---- */
 
@@ -1775,10 +2587,284 @@ float sinf(float x)   { return (float)sin((double)x); }
 float cosf(float x)   { return (float)cos((double)x); }
 
 /* ========================================================================
+   locale.h / signal.h functions
+   ======================================================================== */
+
+char *setlocale(int category, const char *locale) {
+    static char current[] = "C";
+
+    (void)category;
+
+    if (locale == NULL) return current;
+    if (strcmp(locale, "C") == 0 || strcmp(locale, "POSIX") == 0 || locale[0] == '\0')
+        return current;
+    return NULL;
+}
+
+struct lconv *localeconv(void) {
+    static struct lconv conv = { (char *)"." };
+    return &conv;
+}
+
+sighandler_t signal(int sig, sighandler_t handler) {
+    if (sig <= 0 || sig >= (int)(sizeof(_signal_handlers) / sizeof(_signal_handlers[0]))) {
+        errno = EINVAL;
+        return SIG_ERR;
+    }
+
+    sighandler_t prev = _signal_handlers[sig];
+    _signal_handlers[sig] = handler;
+    return prev ? prev : SIG_DFL;
+}
+
+int raise(int sig) {
+    if (sig <= 0 || sig >= (int)(sizeof(_signal_handlers) / sizeof(_signal_handlers[0]))) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    sighandler_t handler = _signal_handlers[sig];
+    if (handler == NULL || handler == SIG_DFL || handler == SIG_IGN) {
+        return 0;
+    }
+
+    handler(sig);
+    return 0;
+}
+
+/* ========================================================================
+   time.h / sys/time.h functions
+   ======================================================================== */
+
+clock_t clock(void) {
+    return (clock_t)_zos_syscall0(SYS_GETMILLISECONDS);
+}
+
+time_t time(time_t *tloc) {
+    time_t now = _current_time_epoch();
+    if (tloc != NULL) *tloc = now;
+    return now;
+}
+
+double difftime(time_t time1, time_t time0) {
+    return (double)(time1 - time0);
+}
+
+struct tm *gmtime(const time_t *timer) {
+    static struct tm out;
+    if (timer == NULL) return NULL;
+    _tm_from_epoch(*timer, &out);
+    return &out;
+}
+
+struct tm *localtime(const time_t *timer) {
+    static struct tm out;
+    if (timer == NULL) return NULL;
+    _tm_from_epoch(*timer + (time_t)_get_tz_offset_minutes() * 60, &out);
+    return &out;
+}
+
+time_t mktime(struct tm *tm) {
+    if (tm == NULL) return (time_t)-1;
+
+    while (tm->tm_sec < 0) { tm->tm_sec += 60; tm->tm_min--; }
+    while (tm->tm_sec >= 60) { tm->tm_sec -= 60; tm->tm_min++; }
+    while (tm->tm_min < 0) { tm->tm_min += 60; tm->tm_hour--; }
+    while (tm->tm_min >= 60) { tm->tm_min -= 60; tm->tm_hour++; }
+    while (tm->tm_hour < 0) { tm->tm_hour += 24; tm->tm_mday--; }
+    while (tm->tm_hour >= 24) { tm->tm_hour -= 24; tm->tm_mday++; }
+    while (tm->tm_mon < 0) { tm->tm_mon += 12; tm->tm_year--; }
+    while (tm->tm_mon >= 12) { tm->tm_mon -= 12; tm->tm_year++; }
+
+    for (;;) {
+        int dim = _days_in_month(tm->tm_year + 1900, tm->tm_mon);
+        if (tm->tm_mday >= 1 && tm->tm_mday <= dim) break;
+        if (tm->tm_mday <= 0) {
+            tm->tm_mon--;
+            if (tm->tm_mon < 0) {
+                tm->tm_mon = 11;
+                tm->tm_year--;
+            }
+            tm->tm_mday += _days_in_month(tm->tm_year + 1900, tm->tm_mon);
+        } else {
+            tm->tm_mday -= dim;
+            tm->tm_mon++;
+            if (tm->tm_mon >= 12) {
+                tm->tm_mon = 0;
+                tm->tm_year++;
+            }
+        }
+    }
+
+    time_t epoch = _epoch_from_datetime(tm->tm_year + 1900, tm->tm_mon + 1, tm->tm_mday,
+                                        tm->tm_hour, tm->tm_min, tm->tm_sec)
+                 - (time_t)_get_tz_offset_minutes() * 60;
+    _tm_from_epoch(epoch + (time_t)_get_tz_offset_minutes() * 60, tm);
+    return epoch;
+}
+
+size_t strftime(char *s, size_t max, const char *format, const struct tm *tm) {
+    if (s == NULL || max == 0 || format == NULL || tm == NULL) return 0;
+
+    size_t pos = 0;
+    int tz = _get_tz_offset_minutes();
+
+    while (*format) {
+        if (*format != '%') {
+            if (!_append_char(s, max, &pos, *format++)) return 0;
+            continue;
+        }
+
+        format++;
+        if (*format == '\0') break;
+
+        switch (*format) {
+        case '%':
+            if (!_append_char(s, max, &pos, '%')) return 0;
+            break;
+        case 'a':
+            if (!_append_str(s, max, &pos, _weekday_short[tm->tm_wday])) return 0;
+            break;
+        case 'A':
+            if (!_append_str(s, max, &pos, _weekday_long[tm->tm_wday])) return 0;
+            break;
+        case 'b':
+            if (!_append_str(s, max, &pos, _month_short[tm->tm_mon])) return 0;
+            break;
+        case 'B':
+            if (!_append_str(s, max, &pos, _month_long[tm->tm_mon])) return 0;
+            break;
+        case 'c':
+            if (!_append_str(s, max, &pos, _weekday_short[tm->tm_wday])) return 0;
+            if (!_append_char(s, max, &pos, ' ')) return 0;
+            if (!_append_str(s, max, &pos, _month_short[tm->tm_mon])) return 0;
+            if (!_append_char(s, max, &pos, ' ')) return 0;
+            if (!_append_num(s, max, &pos, tm->tm_mday, 2, '0')) return 0;
+            if (!_append_char(s, max, &pos, ' ')) return 0;
+            if (!_append_num(s, max, &pos, tm->tm_hour, 2, '0')) return 0;
+            if (!_append_char(s, max, &pos, ':')) return 0;
+            if (!_append_num(s, max, &pos, tm->tm_min, 2, '0')) return 0;
+            if (!_append_char(s, max, &pos, ':')) return 0;
+            if (!_append_num(s, max, &pos, tm->tm_sec, 2, '0')) return 0;
+            if (!_append_char(s, max, &pos, ' ')) return 0;
+            if (!_append_num(s, max, &pos, tm->tm_year + 1900, 4, '0')) return 0;
+            break;
+        case 'd':
+            if (!_append_num(s, max, &pos, tm->tm_mday, 2, '0')) return 0;
+            break;
+        case 'e':
+            if (!_append_num(s, max, &pos, tm->tm_mday, 2, ' ')) return 0;
+            break;
+        case 'F':
+            if (!_append_num(s, max, &pos, tm->tm_year + 1900, 4, '0')) return 0;
+            if (!_append_char(s, max, &pos, '-')) return 0;
+            if (!_append_num(s, max, &pos, tm->tm_mon + 1, 2, '0')) return 0;
+            if (!_append_char(s, max, &pos, '-')) return 0;
+            if (!_append_num(s, max, &pos, tm->tm_mday, 2, '0')) return 0;
+            break;
+        case 'H':
+            if (!_append_num(s, max, &pos, tm->tm_hour, 2, '0')) return 0;
+            break;
+        case 'I': {
+            int hour = tm->tm_hour % 12;
+            if (hour == 0) hour = 12;
+            if (!_append_num(s, max, &pos, hour, 2, '0')) return 0;
+            break;
+        }
+        case 'j':
+            if (!_append_num(s, max, &pos, tm->tm_yday + 1, 3, '0')) return 0;
+            break;
+        case 'm':
+            if (!_append_num(s, max, &pos, tm->tm_mon + 1, 2, '0')) return 0;
+            break;
+        case 'M':
+            if (!_append_num(s, max, &pos, tm->tm_min, 2, '0')) return 0;
+            break;
+        case 'p':
+            if (!_append_str(s, max, &pos, tm->tm_hour < 12 ? "AM" : "PM")) return 0;
+            break;
+        case 'R':
+            if (!_append_num(s, max, &pos, tm->tm_hour, 2, '0')) return 0;
+            if (!_append_char(s, max, &pos, ':')) return 0;
+            if (!_append_num(s, max, &pos, tm->tm_min, 2, '0')) return 0;
+            break;
+        case 'S':
+            if (!_append_num(s, max, &pos, tm->tm_sec, 2, '0')) return 0;
+            break;
+        case 'T':
+        case 'X':
+            if (!_append_num(s, max, &pos, tm->tm_hour, 2, '0')) return 0;
+            if (!_append_char(s, max, &pos, ':')) return 0;
+            if (!_append_num(s, max, &pos, tm->tm_min, 2, '0')) return 0;
+            if (!_append_char(s, max, &pos, ':')) return 0;
+            if (!_append_num(s, max, &pos, tm->tm_sec, 2, '0')) return 0;
+            break;
+        case 'u': {
+            int wday = tm->tm_wday == 0 ? 7 : tm->tm_wday;
+            if (!_append_num(s, max, &pos, wday, 1, '0')) return 0;
+            break;
+        }
+        case 'w':
+            if (!_append_num(s, max, &pos, tm->tm_wday, 1, '0')) return 0;
+            break;
+        case 'x':
+            if (!_append_num(s, max, &pos, tm->tm_mon + 1, 2, '0')) return 0;
+            if (!_append_char(s, max, &pos, '/')) return 0;
+            if (!_append_num(s, max, &pos, tm->tm_mday, 2, '0')) return 0;
+            if (!_append_char(s, max, &pos, '/')) return 0;
+            if (!_append_num(s, max, &pos, (tm->tm_year + 1900) % 100, 2, '0')) return 0;
+            break;
+        case 'y':
+            if (!_append_num(s, max, &pos, (tm->tm_year + 1900) % 100, 2, '0')) return 0;
+            break;
+        case 'Y':
+            if (!_append_num(s, max, &pos, tm->tm_year + 1900, 4, '0')) return 0;
+            break;
+        case 'z': {
+            int sign = tz >= 0 ? '+' : '-';
+            int abs_tz = tz >= 0 ? tz : -tz;
+            if (!_append_char(s, max, &pos, (char)sign)) return 0;
+            if (!_append_num(s, max, &pos, abs_tz / 60, 2, '0')) return 0;
+            if (!_append_num(s, max, &pos, abs_tz % 60, 2, '0')) return 0;
+            break;
+        }
+        case 'Z':
+            if (!_append_str(s, max, &pos, "UTC")) return 0;
+            break;
+        default:
+            if (!_append_char(s, max, &pos, '%')) return 0;
+            if (!_append_char(s, max, &pos, *format)) return 0;
+            break;
+        }
+        format++;
+    }
+
+    s[pos] = '\0';
+    return pos;
+}
+
+int gettimeofday(struct timeval *tv, struct timezone *tz) {
+    long ms = (long)_zos_syscall0(SYS_GETMILLISECONDS);
+
+    if (tv != NULL) {
+        tv->tv_sec = (long)time(NULL);
+        tv->tv_usec = (ms % 1000) * 1000;
+    }
+
+    if (tz != NULL) {
+        int offset = _get_tz_offset_minutes();
+        tz->tz_minuteswest = -offset;
+        tz->tz_dsttime = 0;
+    }
+
+    return 0;
+}
+
+/* ========================================================================
    unistd.h: sleep
    ======================================================================== */
 
 unsigned int sleep(unsigned int seconds) {
-    (void)seconds;
+    _zos_syscall1(SYS_SLEEP_MS, (long)seconds * 1000L);
     return 0;
 }

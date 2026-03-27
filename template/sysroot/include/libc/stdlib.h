@@ -44,12 +44,18 @@ void   abort(void);
 int    atexit(void (*func)(void));
 
 char  *getenv(const char *name);
+int    setenv(const char *name, const char *value, int overwrite);
+int    unsetenv(const char *name);
+int    putenv(char *string);
 
 void   qsort(void *base, size_t nmemb, size_t size,
               int (*compar)(const void *, const void *));
 
 long          strtol(const char *nptr, char **endptr, int base);
 unsigned long strtoul(const char *nptr, char **endptr, int base);
+double        strtod(const char *nptr, char **endptr);
+float         strtof(const char *nptr, char **endptr);
+long double   strtold(const char *nptr, char **endptr);
 
 int    rand(void);
 void   srand(unsigned int seed);

@@ -19,6 +19,8 @@ endif
 
 LIBC_INC := ../../include/libc
 OBJDIR   := obj
+CRTDIR   := crt
+ASM_OBJS := $(OBJDIR)/setjmp.o
 
 # ---- Compiler flags ----
 
@@ -43,20 +45,49 @@ CFLAGS := \
     -isystem $(LIBC_INC) \
     -isystem $(shell $(CC) -print-file-name=include)
 
+CRT_CFLAGS := \
+    -std=gnu11 \
+    -O2 \
+    -nostdinc \
+    -ffreestanding \
+    -fno-stack-protector \
+    -fno-stack-check \
+    -fno-PIC \
+    -m64 \
+    -march=x86-64 \
+    -mno-red-zone \
+    -fno-tree-loop-distribute-patterns \
+    -isystem $(LIBC_INC) \
+    -isystem $(shell $(CC) -print-file-name=include)
+
 # ---- Target ----
 
 TARGET := liblibc.a
+CRT_OBJS := crt1.o crti.o crtn.o
 
 .PHONY: all clean
 
-all: $(TARGET)
+all: $(TARGET) $(CRT_OBJS)
 
-$(TARGET): $(OBJDIR)/libc.o
+$(TARGET): $(OBJDIR)/libc.o $(ASM_OBJS)
 	$(AR) rcs $@ $^
 
 $(OBJDIR)/libc.o: libc.c Makefile
 	@mkdir -p $(OBJDIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
+$(OBJDIR)/setjmp.o: setjmp.S Makefile
+	@mkdir -p $(OBJDIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+crt1.o: $(CRTDIR)/crt1.c Makefile
+	$(CC) $(CRT_CFLAGS) -c $< -o $@
+
+crti.o: $(CRTDIR)/crti.c Makefile
+	$(CC) $(CRT_CFLAGS) -c $< -o $@
+
+crtn.o: $(CRTDIR)/crtn.c Makefile
+	$(CC) $(CRT_CFLAGS) -c $< -o $@
+
 clean:
-	rm -rf $(OBJDIR) $(TARGET)
+	rm -rf $(OBJDIR) $(TARGET) $(CRT_OBJS)

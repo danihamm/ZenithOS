@@ -12,12 +12,17 @@ extern "C" {
 #define NAN       __builtin_nanf("")
 
 double fabs(double x);
+double frexp(double x, int *exp);
+double ldexp(double x, int n);
+long double ldexpl(long double x, int n);
 double floor(double x);
 double ceil(double x);
 double sqrt(double x);
 double sin(double x);
 double cos(double x);
 double tan(double x);
+double asin(double x);
+double acos(double x);
 double atan(double x);
 double atan2(double y, double x);
 double pow(double base, double exp);
@@ -26,6 +31,9 @@ double log2(double x);
 double log10(double x);
 double exp(double x);
 double fmod(double x, double y);
+double sinh(double x);
+double cosh(double x);
+double tanh(double x);
 double round(double x);
 
 float  floorf(float x);

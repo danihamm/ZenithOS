@@ -48,14 +48,24 @@ namespace Montauk {
         auto* proc = Sched::GetCurrentProcessPtr();
         if (proc && proc->redirected) {
             auto* target = GetRedirTarget(proc);
-            if (target && target->inBuf) {
-                // Wait for data in target's inBuf ring
-                while (target->inTail == target->inHead) {
-                    Sched::Schedule(); // yield until parent writes
+            if (target) {
+                while (true) {
+                    if (target->inBuf && target->inTail != target->inHead) {
+                        uint8_t c = target->inBuf[target->inTail];
+                        target->inTail = (target->inTail + 1) % Sched::Process::IoBufSize;
+                        return (char)c;
+                    }
+
+                    if (target->keyTail != target->keyHead) {
+                        auto ev = target->keyBuf[target->keyTail];
+                        target->keyTail = (target->keyTail + 1) % 64;
+                        if (ev.pressed && ev.ascii != 0) {
+                            return ev.ascii;
+                        }
+                    }
+
+                    Sched::Schedule();
                 }
-                uint8_t c = target->inBuf[target->inTail];
-                target->inTail = (target->inTail + 1) % Sched::Process::IoBufSize;
-                return (char)c;
             }
         }
         return Drivers::PS2::Keyboard::GetChar();

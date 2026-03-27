@@ -16,6 +16,11 @@ extern "C" {
 #define SEEK_END 2
 #define BUFSIZ   1024
 #define FILENAME_MAX 256
+#define L_tmpnam 64
+#define TMP_MAX  10000
+#define _IOFBF   0
+#define _IOLBF   1
+#define _IONBF   2
 
 typedef struct _FILE {
     int           handle;
@@ -50,6 +55,8 @@ size_t fwrite(const void *ptr, size_t size, size_t nmemb, FILE *stream);
 int    fseek(FILE *stream, long offset, int whence);
 long   ftell(FILE *stream);
 int    fflush(FILE *stream);
+FILE  *freopen(const char *path, const char *mode, FILE *stream);
+int    setvbuf(FILE *stream, char *buf, int mode, size_t size);
 
 int    rename(const char *oldpath, const char *newpath);
 int    remove(const char *path);
@@ -62,6 +69,7 @@ void   clearerr(FILE *stream);
 
 int    fgetc(FILE *stream);
 int    getc(FILE *stream);
+int    fputc(int c, FILE *stream);
 int    ungetc(int c, FILE *stream);
 char  *fgets(char *s, int size, FILE *stream);
 int    fputs(const char *s, FILE *stream);

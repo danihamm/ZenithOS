@@ -37,23 +37,8 @@ static inline long _sys2(long nr, long a1, long a2) {
     return ret;
 }
 
-#define SYS_OPEN    6
 #define SYS_GETSIZE 8
-#define SYS_CLOSE   9
 #define SYS_GETARGS 25
-
-/* ====================================================================
-   access() - check if a file exists
-   ==================================================================== */
-
-int access(const char *path, int mode) {
-    (void)mode;
-    if (path == NULL) return -1;
-    int h = (int)_sys1(SYS_OPEN, (long)path);
-    if (h < 0) return -1;
-    _sys1(SYS_CLOSE, (long)h);
-    return 0;
-}
 
 /* ====================================================================
    fdopen - wrap a raw fd in a FILE (needed by tccelf.c)
@@ -76,102 +61,6 @@ FILE *fdopen(int fd, const char *mode) {
     f->is_std = 0;
     f->ungetc_buf = -1;
     return f;
-}
-
-/* ====================================================================
-   Floating point support (needed by TCC for parsing float literals)
-   ==================================================================== */
-
-double ldexp(double x, int n) {
-    /* Use bit manipulation via union for exact results */
-    if (x == 0.0 || n == 0) return x;
-    while (n > 0) { x *= 2.0; n--; }
-    while (n < 0) { x *= 0.5; n++; }
-    return x;
-}
-
-long double ldexpl(long double x, int n) {
-    return (long double)ldexp((double)x, n);
-}
-
-double strtod(const char *nptr, char **endptr) {
-    double result = 0.0;
-    double sign = 1.0;
-    const char *s = nptr;
-
-    while (*s == ' ' || *s == '\t' || *s == '\n') s++;
-    if (*s == '-') { sign = -1.0; s++; }
-    else if (*s == '+') s++;
-
-    /* Integer part */
-    while (*s >= '0' && *s <= '9')
-        result = result * 10.0 + (*s++ - '0');
-
-    /* Fractional part */
-    if (*s == '.') {
-        s++;
-        double frac = 0.1;
-        while (*s >= '0' && *s <= '9') {
-            result += (*s++ - '0') * frac;
-            frac *= 0.1;
-        }
-    }
-
-    /* Exponent */
-    if (*s == 'e' || *s == 'E') {
-        s++;
-        int exp_sign = 1, exp_val = 0;
-        if (*s == '-') { exp_sign = -1; s++; }
-        else if (*s == '+') s++;
-        while (*s >= '0' && *s <= '9')
-            exp_val = exp_val * 10 + (*s++ - '0');
-        double exp_mult = 1.0;
-        for (int i = 0; i < exp_val; i++)
-            exp_mult *= 10.0;
-        if (exp_sign > 0) result *= exp_mult;
-        else result /= exp_mult;
-    }
-
-    /* Hex float (0x...p...) */
-    if (nptr[0] == '0' && (nptr[1] == 'x' || nptr[1] == 'X')) {
-        s = nptr + 2;
-        result = 0.0;
-        while (1) {
-            int d;
-            if (*s >= '0' && *s <= '9') d = *s - '0';
-            else if (*s >= 'a' && *s <= 'f') d = *s - 'a' + 10;
-            else if (*s >= 'A' && *s <= 'F') d = *s - 'A' + 10;
-            else break;
-            result = result * 16.0 + d;
-            s++;
-        }
-        if (*s == '.') {
-            s++;
-            double frac = 1.0 / 16.0;
-            while (1) {
-                int d;
-                if (*s >= '0' && *s <= '9') d = *s - '0';
-                else if (*s >= 'a' && *s <= 'f') d = *s - 'a' + 10;
-                else if (*s >= 'A' && *s <= 'F') d = *s - 'A' + 10;
-                else break;
-                result += d * frac;
-                frac /= 16.0;
-                s++;
-            }
-        }
-        if (*s == 'p' || *s == 'P') {
-            s++;
-            int exp_sign = 1, exp_val = 0;
-            if (*s == '-') { exp_sign = -1; s++; }
-            else if (*s == '+') s++;
-            while (*s >= '0' && *s <= '9')
-                exp_val = exp_val * 10 + (*s++ - '0');
-            result = ldexp(result, exp_sign * exp_val);
-        }
-    }
-
-    if (endptr) *endptr = (char *)s;
-    return sign * result;
 }
 
 /* ====================================================================

@@ -18,6 +18,7 @@ make install   # copy ELF to MontaukOS ramdisk
 make                           # GUI-only app
 make USE_TLS=1                 # With HTTPS/TLS (libtls + libbearssl)
 make USE_JPEG=1                # With JPEG decoding (libjpeg)
+make USE_CRT=1                 # Use the shared CRT and write main(argc, argv)
 make USE_TLS=1 USE_JPEG=1     # Both
 make clean                     # Remove build artifacts
 make install                   # Copy ELF to MontaukOS ramdisk
@@ -50,6 +51,9 @@ myapp/
 │   │   ├── bearssl*.h           BearSSL headers (for USE_TLS=1)
 │   │   └── (freestanding C/C++ standard headers)
 │   └── lib/
+│       ├── crt1.o             Startup shim for main(argc, argv) ports
+│       ├── crti.o             CRT init prologue placeholder
+│       ├── crtn.o             CRT init epilogue placeholder
 │       ├── liblibc.a            C library (always linked)
 │       ├── libtls.a             TLS helper library
 │       ├── libbearssl.a         BearSSL crypto
@@ -61,9 +65,12 @@ myapp/
 
 ## Key Points
 
-- Entry point: `extern "C" void _start()` (not `main`)
+- Default entry point: `extern "C" void _start()`
+- Porting mode: `make USE_CRT=1` lets you use `int main(int argc, char** argv)` instead
 - Memory: `montauk::malloc()` / `montauk::mfree()` (no standard libc)
 - Window: `win_create()` / `win_poll()` / `win_present()` / `win_destroy()`
 - Fonts: `TrueTypeFont::init("0:/fonts/Roboto-Medium.ttf")`
 - HTTP: `#include <http/http.hpp>` with `USE_TLS=1` (see docs/)
 - No exceptions, no RTTI, 32 KiB user stack
+
+`USE_CRT=1` is meant for plain C ports and other code that already expects `main(argc, argv)`. The current CRT does not run global constructors or destructors yet, so keep using `_start()` for the default C++ template flow.

@@ -59,7 +59,7 @@ BINDIR := bin
 PROGRAMS := $(notdir $(wildcard src/*))
 
 # Programs with custom Makefiles (built separately).
-CUSTOM_BUILDS := doom fetch wiki wikipedia weather imageviewer fontpreview spreadsheet wordprocessor pdfviewer disks devexplorer installer volume music bluetooth desktop login shell rpgdemo paint tcc screenshot texteditor
+CUSTOM_BUILDS := doom fetch wiki wikipedia weather imageviewer fontpreview spreadsheet wordprocessor pdfviewer disks devexplorer installer volume music bluetooth desktop login shell rpgdemo paint tcc lua screenshot texteditor
 SYSTEM_PROGRAMS := $(filter-out $(CUSTOM_BUILDS),$(PROGRAMS))
 
 # Build targets: system programs go to bin/os/, apps go to bin/apps/<name>/.
@@ -81,9 +81,9 @@ CA_CERTS := $(BINDIR)/etc/ca-certificates.crt
 # Common shared assets (wallpapers, etc.)
 COMMONKEEP := $(BINDIR)/common/.keep
 
-.PHONY: all clean doom fetch wiki wikipedia weather imageviewer fontpreview spreadsheet wordprocessor pdfviewer disks devexplorer installer volume music bluetooth login desktop shell rpgdemo paint tcc screenshot texteditor icons fonts bearssl libc tls libjpeg libjpegwrite install-apps
+.PHONY: all clean doom fetch wiki wikipedia weather imageviewer fontpreview spreadsheet wordprocessor pdfviewer disks devexplorer installer volume music bluetooth login desktop shell rpgdemo paint tcc lua screenshot texteditor icons fonts bearssl libc tls libjpeg libjpegwrite install-apps
 
-all: bearssl libc libjpeg libjpegwrite tls $(TARGETS) fetch wiki wikipedia weather imageviewer fontpreview spreadsheet wordprocessor pdfviewer disks devexplorer installer volume music bluetooth doom rpgdemo paint tcc screenshot texteditor login desktop shell icons fonts install-apps $(MANDST) $(WWWDST) $(CA_CERTS) $(COMMONKEEP)
+all: bearssl libc libjpeg libjpegwrite tls $(TARGETS) fetch wiki wikipedia weather imageviewer fontpreview spreadsheet wordprocessor pdfviewer disks devexplorer installer volume music bluetooth doom rpgdemo paint tcc lua screenshot texteditor login desktop shell icons fonts install-apps $(MANDST) $(WWWDST) $(CA_CERTS) $(COMMONKEEP)
 
 # Build BearSSL static library (cross-compiled for freestanding x86_64).
 BEARSSL_INCLUDES := -isystem $(shell cd .. && pwd)/kernel/freestnd-c-hdrs/x86_64/include -isystem $(abspath include/libc)
@@ -220,6 +220,10 @@ tcc: libc
 	cp include/libc/*.h $(BINDIR)/lib/tcc/include/
 	mkdir -p $(BINDIR)/lib/tcc/include/sys
 	cp include/libc/sys/*.h $(BINDIR)/lib/tcc/include/sys/
+
+# Build Lua interpreter and static library (depends on libc).
+lua: libc
+	$(MAKE) -C src/lua
 
 # Install app bundles (manifests, icons, data files) into bin/apps/<name>/.
 install-apps: doom rpgdemo paint spreadsheet wordprocessor weather wikipedia imageviewer fontpreview pdfviewer disks devexplorer installer volume music bluetooth screenshot texteditor

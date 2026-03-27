@@ -96,22 +96,9 @@ ALL_OBJS := $(TCC_OBJS) $(COMPAT_OBJS) $(ASM_OBJS)
 
 TARGET := $(BINDIR)/tcc.elf
 
-# ---- CRT objects (compiled for linking by TCC) ----
+# ---- CRT objects (staged from shared libc) ----
 
-CRT_CFLAGS := \
-    -std=gnu11 \
-    -O2 \
-    -nostdinc \
-    -ffreestanding \
-    -fno-stack-protector \
-    -fno-PIC \
-    -m64 \
-    -march=x86-64 \
-    -mno-red-zone \
-    -fno-tree-loop-distribute-patterns \
-    -isystem $(PROG_INC)/libc \
-    -isystem $(shell $(CC) -print-file-name=include)
-
+SHARED_CRT_DIR := $(LIBDIR)/libc
 CRT_DIR := ../../bin/lib/tcc/lib
 CRT_OBJS := $(CRT_DIR)/crt1.o $(CRT_DIR)/crti.o $(CRT_DIR)/crtn.o
 
@@ -133,17 +120,20 @@ $(OBJDIR)/%.o: %.S Makefile
 	@mkdir -p $(OBJDIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(CRT_DIR)/crt1.o: crt/crt1.c
-	@mkdir -p $(CRT_DIR)
-	$(CC) $(CRT_CFLAGS) -c $< -o $@
+$(SHARED_CRT_DIR)/liblibc.a $(SHARED_CRT_DIR)/crt1.o $(SHARED_CRT_DIR)/crti.o $(SHARED_CRT_DIR)/crtn.o:
+	$(MAKE) -C $(SHARED_CRT_DIR)
 
-$(CRT_DIR)/crti.o: crt/crti.c
+$(CRT_DIR)/crt1.o: $(SHARED_CRT_DIR)/crt1.o
 	@mkdir -p $(CRT_DIR)
-	$(CC) $(CRT_CFLAGS) -c $< -o $@
+	cp $< $@
 
-$(CRT_DIR)/crtn.o: crt/crtn.c
+$(CRT_DIR)/crti.o: $(SHARED_CRT_DIR)/crti.o
 	@mkdir -p $(CRT_DIR)
-	$(CC) $(CRT_CFLAGS) -c $< -o $@
+	cp $< $@
+
+$(CRT_DIR)/crtn.o: $(SHARED_CRT_DIR)/crtn.o
+	@mkdir -p $(CRT_DIR)
+	cp $< $@
 
 $(CRT_DIR)/libc.a: $(LIBDIR)/libc/liblibc.a
 	@mkdir -p $(CRT_DIR)

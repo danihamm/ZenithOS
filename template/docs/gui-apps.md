@@ -890,6 +890,9 @@ sysroot/
 │   ├── bearssl*.h   BearSSL headers (for USE_TLS=1)
 │   └── (freestanding C/C++ standard headers)
 └── lib/
+    ├── crt1.o       Startup shim for main(argc, argv) ports
+    ├── crti.o       CRT init prologue placeholder
+    ├── crtn.o       CRT init epilogue placeholder
     ├── liblibc.a    C library (always linked)
     ├── libtls.a     TLS helper library
     ├── libbearssl.a BearSSL crypto
@@ -900,10 +903,12 @@ Key build details:
 - **Toolchain:** `x86_64-elf-g++` cross-compiler (falls back to system g++)
 - **Standard:** C++20 (`-std=gnu++20`), freestanding, no exceptions/RTTI
 - **SSE:** Enabled (`-msse -msse2`) for floating-point / TrueType rendering
-- **Entry point:** `extern "C" void _start()` (not `main`)
+- **Entry point:** `extern "C" void _start()` by default, or `main(argc, argv)` with `USE_CRT=1`
 - **Load address:** `0x400000` (set in `link.ld`)
 - **Runtime support:** `src/cxxrt.cpp` provides `operator new/delete` via `montauk::malloc/mfree`
 - **TrueType support:** `src/stb_truetype_impl.cpp` provides the stb_truetype implementation
+
+`USE_CRT=1` is primarily for plain C ports and other code that already expects `main(argc, argv)`. The shared CRT does not run C++ global constructors or destructors yet, so the default template still uses `_start()`.
 
 ### In-Tree Development
 
