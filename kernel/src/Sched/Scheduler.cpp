@@ -89,6 +89,7 @@ namespace Sched {
             processTable[i].kernelStackTop = 0;
             processTable[i].userStackTop = 0;
             processTable[i].heapNext = 0;
+            processTable[i].readdirCursor = 0;
             processTable[i].args[0] = '\0';
             processTable[i].user[0] = '\0';
             processTable[i].cwd[0] = '\0';
@@ -270,6 +271,7 @@ namespace Sched {
         proc.kernelStackTop = kernelStackTop;
         proc.userStackTop = UserStackTop - 8;
         proc.heapNext = UserHeapBase;
+        proc.readdirCursor = 0;
         proc.runningOnCpu = -1;
         proc.killPending = false;
         proc.waitingForPid = -1;

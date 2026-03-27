@@ -48,16 +48,33 @@ namespace Montauk {
         auto* proc = Sched::GetCurrentProcessPtr();
         if (proc == nullptr) return -1;
 
-        void* page = Memory::g_pfa->AllocateZeroed();
-        if (page == nullptr) return -1;
-        uint64_t physAddr = Memory::SubHHDM((uint64_t)page);
-        uint64_t userVa = proc->heapNext;
-        proc->heapNext += 0x1000;
-        if (!Memory::VMM::Paging::MapUserIn(proc->pml4Phys, physAddr, userVa)) return -1;
+        // Use a rotating ring of scratch pages below the heap instead of
+        // bumping heapNext on every call. This keeps repeated directory scans
+        // from leaking user heap space while still allowing nested callers to
+        // hold multiple readdir results at once.
+        uint32_t slot = proc->readdirCursor % Sched::UserReadDirSlots;
+        proc->readdirCursor = (slot + 1) % Sched::UserReadDirSlots;
+
+        uint64_t userVa = Sched::UserReadDirBase + (uint64_t)slot * 0x1000ULL;
+        uint64_t physAddr = Memory::VMM::Paging::GetPhysAddr(proc->pml4Phys, userVa);
+        uint8_t* pageBuf = nullptr;
+
+        if (physAddr == 0) {
+            void* page = Memory::g_pfa->AllocateZeroed();
+            if (page == nullptr) return -1;
+            physAddr = Memory::SubHHDM((uint64_t)page);
+            if (!Memory::VMM::Paging::MapUserIn(proc->pml4Phys, physAddr, userVa)) {
+                Memory::g_pfa->Free(page);
+                return -1;
+            }
+            pageBuf = (uint8_t*)page;
+        } else {
+            pageBuf = (uint8_t*)Memory::HHDM(physAddr);
+            memset(pageBuf, 0, 0x1000);
+        }
 
         // Copy strings into the user page and write pointers to outNames
         uint64_t offset = 0;
-        uint8_t* pageBuf = (uint8_t*)Memory::HHDM(physAddr);
         int copied = 0;
         for (int i = 0; i < count; i++) {
             int len = Lib::strlen(kernelNames[i]) + 1;

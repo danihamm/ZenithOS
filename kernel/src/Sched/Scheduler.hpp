@@ -17,6 +17,9 @@ namespace Sched {
     static constexpr uint64_t UserStackSize = UserStackPages * 0x1000;
     static constexpr uint64_t UserStackTop = 0x7FFFFFF000ULL;  // User stack top VA
     static constexpr uint64_t UserHeapBase = 0x40000000ULL;    // User heap start VA
+    static constexpr uint32_t UserReadDirSlots = 64;           // rotating scratch pages for SYS_READDIR
+    static constexpr uint64_t UserReadDirBase =
+        UserHeapBase - (uint64_t)UserReadDirSlots * 0x1000ULL;
     static constexpr uint64_t ExitStubAddr = 0x3FF000ULL;     // User-space exit stub page
     static constexpr uint64_t TimeSliceMs = 10; // 10 ms time slice
 
@@ -42,6 +45,7 @@ namespace Sched {
         uint64_t kernelStackTop;  // Top of kernel stack (for TSS RSP0 / SYSCALL)
         uint64_t userStackTop;    // User-space stack top
         uint64_t heapNext;        // Simple bump allocator for user heap
+        uint32_t readdirCursor;   // Next SYS_READDIR scratch slot
         char args[256];           // Command-line arguments (set by parent via Spawn)
         char user[32];            // Owner user name (inherited from parent on spawn)
         char cwd[256];            // Absolute current working directory
