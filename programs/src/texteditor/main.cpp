@@ -2,7 +2,7 @@
  * main.cpp
  * MontaukOS Text Editor - standalone Window Server app
  * Single-buffer text editor with line numbers, cursor, scrolling, file I/O,
- * syntax highlighting for C files
+ * syntax highlighting for C and Lua files
  * Copyright (c) 2026 Daniel Hammer
  */
 
@@ -39,6 +39,7 @@ static constexpr int MAX_CAP        = 262144;  // 256KB
 static constexpr int MAX_LINES      = 16384;
 static constexpr int TAB_WIDTH      = 4;
 static constexpr int FONT_SIZE      = 16;
+static constexpr int SYN_LINE_BUF_CAP = 1024;
 
 // Colors
 static constexpr Color BG_COLOR         = Color::from_rgb(0xFF, 0xFF, 0xFF);
@@ -105,7 +106,7 @@ int  g_pathbar_len = 0;
 int  g_pathbar_cursor = 0;
 
 // Syntax highlighting
-bool g_syntax_active = false;
+SynLanguage g_syntax_language = SYN_LANG_NONE;
 
 // ============================================================================
 // Pixel drawing helpers
@@ -466,7 +467,7 @@ static void load_file(const char* path) {
     else
         montauk::strncpy(g_filename, path, 63);
 
-    g_syntax_active = syn_is_c_file(g_filepath);
+    g_syntax_language = syn_detect_language(g_filepath);
 
     recompute_lines();
     update_cursor_pos();
@@ -613,15 +614,14 @@ static void render(uint32_t* pixels) {
 
     int text_start_x = LINE_NUM_W + 4;
 
-    // Syntax highlighting: compute block comment state up to first visible line
-    bool syn_block_comment = false;
-    SynToken syn_line_buf[1024];
-    if (g_syntax_active) {
+    // Syntax highlighting: compute multi-line syntax state up to the first visible line
+    SynState syn_state = syn_make_state();
+    SynToken syn_line_buf[SYN_LINE_BUF_CAP];
+    if (g_syntax_language != SYN_LANG_NONE) {
         for (int i = 0; i < g_scroll_y && i < g_line_count; i++) {
             int ls = g_line_offsets[i];
             int ll = line_length(i);
-            if (ll > 1024) ll = 1024;
-            syn_highlight_line(g_buffer + ls, ll, syn_line_buf, syn_block_comment);
+            syn_highlight_line(g_buffer + ls, ll, nullptr, 0, g_syntax_language, syn_state);
         }
     }
 
@@ -653,9 +653,10 @@ static void render(uint32_t* pixels) {
         int line_len = line_length(line);
 
         // Syntax highlight this line
-        int syn_len = line_len > 1024 ? 1024 : line_len;
-        if (g_syntax_active)
-            syn_highlight_line(g_buffer + line_start, syn_len, syn_line_buf, syn_block_comment);
+        int syn_len = line_len > SYN_LINE_BUF_CAP ? SYN_LINE_BUF_CAP : line_len;
+        if (g_syntax_language != SYN_LANG_NONE)
+            syn_highlight_line(g_buffer + line_start, line_len, syn_line_buf,
+                               SYN_LINE_BUF_CAP, g_syntax_language, syn_state);
 
         for (int ci = 0; ci < line_len; ci++) {
             int px_x = text_start_x + ci * cell_w - g_scroll_x;
@@ -674,7 +675,7 @@ static void render(uint32_t* pixels) {
             }
 
             Color char_color = TEXT_COLOR;
-            if (g_syntax_active && ci < syn_len)
+            if (g_syntax_language != SYN_LANG_NONE && ci < syn_len)
                 char_color = syn_color(syn_line_buf[ci]);
 
             if (ch >= 32 || ch < 0) {
@@ -768,7 +769,7 @@ static void pathbar_confirm(int win_id) {
         for (int i = 0; g_pathbar_text[i]; i++)
             if (g_pathbar_text[i] == '/') name = g_pathbar_text + i + 1;
         montauk::strncpy(g_filename, name, 63);
-        g_syntax_active = syn_is_c_file(g_filepath);
+        g_syntax_language = syn_detect_language(g_filepath);
         save_file();
     } else {
         load_file(g_pathbar_text);

@@ -1,7 +1,7 @@
 /*
     * syntax_highlight.hpp
-    * C syntax highlighting for the MontaukOS text editor
-    * Activated for .c and .h files
+    * C and Lua syntax highlighting for the MontaukOS text editor
+    * Activated for .c, .h, and .lua files
     * Copyright (c) 2026 Daniel Hammer
 */
 
@@ -10,6 +10,12 @@
 #include <gui/gui.hpp>
 
 using namespace gui;
+
+enum SynLanguage : uint8_t {
+    SYN_LANG_NONE,
+    SYN_LANG_C,
+    SYN_LANG_LUA,
+};
 
 // ============================================================================
 // Token types
@@ -25,6 +31,12 @@ enum SynToken : uint8_t {
     SYN_COMMENT,
     SYN_NUMBER,
     SYN_OPERATOR,
+};
+
+struct SynState {
+    bool in_block_comment;
+    SynToken long_token;
+    int long_bracket_eqs;
 };
 
 // ============================================================================
@@ -65,6 +77,19 @@ inline bool syn_is_hex(char c) {
     return syn_is_digit(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
 }
 
+inline void syn_set_token(SynToken* out, int out_len, int idx, SynToken tok) {
+    if (out && idx >= 0 && idx < out_len)
+        out[idx] = tok;
+}
+
+inline void syn_fill_tokens(SynToken* out, int out_len, int start, int end, SynToken tok) {
+    if (!out) return;
+    if (start < 0) start = 0;
+    if (end > out_len) end = out_len;
+    for (int i = start; i < end; i++)
+        out[i] = tok;
+}
+
 inline bool syn_streq(const char* buf, int len, const char* kw) {
     int i = 0;
     while (i < len && kw[i]) {
@@ -74,7 +99,7 @@ inline bool syn_streq(const char* buf, int len, const char* kw) {
     return i == len && kw[i] == '\0';
 }
 
-inline SynToken syn_classify_word(const char* buf, int len) {
+inline SynToken syn_classify_c_word(const char* buf, int len) {
     // C keywords
     static const char* keywords[] = {
         "auto", "break", "case", "const", "continue", "default", "do",
@@ -102,33 +127,150 @@ inline SynToken syn_classify_word(const char* buf, int len) {
     return SYN_NORMAL;
 }
 
+inline SynToken syn_classify_lua_word(const char* buf, int len) {
+    static const char* keywords[] = {
+        "and", "break", "do", "else", "elseif", "end", "false",
+        "for", "function", "goto", "if", "in", "local", "nil",
+        "not", "or", "repeat", "return", "then", "true",
+        "until", "while",
+    };
+    static const char* builtins[] = {
+        "_ENV", "_G", "_VERSION",
+        "assert", "collectgarbage", "coroutine", "debug", "dofile",
+        "error", "getmetatable", "io", "ipairs", "load", "loadfile",
+        "math", "next", "os", "package", "pairs", "pcall",
+        "print", "rawequal", "rawget", "rawlen", "rawset", "require",
+        "select", "setmetatable", "string", "table", "tonumber",
+        "tostring", "type", "utf8", "warn", "xpcall",
+    };
+
+    for (int i = 0; i < (int)(sizeof(keywords) / sizeof(keywords[0])); i++) {
+        if (syn_streq(buf, len, keywords[i])) return SYN_KEYWORD;
+    }
+    for (int i = 0; i < (int)(sizeof(builtins) / sizeof(builtins[0])); i++) {
+        if (syn_streq(buf, len, builtins[i])) return SYN_TYPE;
+    }
+    return SYN_NORMAL;
+}
+
+inline SynToken syn_classify_word(SynLanguage lang, const char* buf, int len) {
+    switch (lang) {
+    case SYN_LANG_C:   return syn_classify_c_word(buf, len);
+    case SYN_LANG_LUA: return syn_classify_lua_word(buf, len);
+    default:           return SYN_NORMAL;
+    }
+}
+
+inline SynState syn_make_state() {
+    SynState state = {};
+    state.in_block_comment = false;
+    state.long_token = SYN_NORMAL;
+    state.long_bracket_eqs = -1;
+    return state;
+}
+
+inline bool syn_match_lua_long_bracket_open(const char* line, int len, int i,
+                                            int& eqs, int& span) {
+    if (i >= len || line[i] != '[') return false;
+    int j = i + 1;
+    while (j < len && line[j] == '=') j++;
+    if (j < len && line[j] == '[') {
+        eqs = j - i - 1;
+        span = j - i + 1;
+        return true;
+    }
+    return false;
+}
+
+inline bool syn_match_lua_long_bracket_close(const char* line, int len, int i,
+                                             int eqs, int& span) {
+    if (i >= len || line[i] != ']') return false;
+    int j = i + 1;
+    for (int k = 0; k < eqs; k++) {
+        if (j >= len || line[j] != '=') return false;
+        j++;
+    }
+    if (j < len && line[j] == ']') {
+        span = j - i + 1;
+        return true;
+    }
+    return false;
+}
+
+inline void syn_consume_number(const char* line, int len, int& i,
+                               SynToken* out, int out_len, bool c_style_suffixes) {
+    int start = i;
+
+    if (line[i] == '0' && i + 1 < len && (line[i + 1] == 'x' || line[i + 1] == 'X')) {
+        i += 2;
+        while (i < len && syn_is_hex(line[i])) i++;
+        if (i < len && line[i] == '.' && !(i + 1 < len && line[i + 1] == '.')) {
+            i++;
+            while (i < len && syn_is_hex(line[i])) i++;
+        }
+        if (i < len && (line[i] == 'p' || line[i] == 'P')) {
+            int exp = i + 1;
+            if (exp < len && (line[exp] == '+' || line[exp] == '-')) exp++;
+            if (exp < len && syn_is_digit(line[exp])) {
+                i = exp + 1;
+                while (i < len && syn_is_digit(line[i])) i++;
+            }
+        }
+    } else {
+        if (line[i] == '.') i++;
+        while (i < len && syn_is_digit(line[i])) i++;
+        if (i < len && line[i] == '.' && !(i + 1 < len && line[i + 1] == '.')) {
+            i++;
+            while (i < len && syn_is_digit(line[i])) i++;
+        }
+        if (i < len && (line[i] == 'e' || line[i] == 'E')) {
+            int exp = i + 1;
+            if (exp < len && (line[exp] == '+' || line[exp] == '-')) exp++;
+            if (exp < len && syn_is_digit(line[exp])) {
+                i = exp + 1;
+                while (i < len && syn_is_digit(line[i])) i++;
+            }
+        }
+    }
+
+    if (c_style_suffixes) {
+        while (i < len && (line[i] == 'u' || line[i] == 'U' ||
+                           line[i] == 'l' || line[i] == 'L' ||
+                           line[i] == 'f' || line[i] == 'F'))
+            i++;
+    }
+
+    syn_fill_tokens(out, out_len, start, i, SYN_NUMBER);
+}
+
 // ============================================================================
 // Per-line highlighter
 // ============================================================================
 //
 // Fills `out[]` with SynToken values for each character in the line.
-// `in_block_comment` is the multi-line comment state carried across lines:
+// `state` carries the multi-line syntax state across lines:
 //   - pass in the state from the previous line
 //   - on return, updated for the next line
 //
 // `line` points to the first char of the line, `len` is its length
-// (excluding the newline). `out` must have room for `len` entries.
+// (excluding the newline). `out` can be null if only state tracking is needed.
 
-inline void syn_highlight_line(const char* line, int len, SynToken* out, bool& in_block_comment) {
+inline void syn_highlight_line_c(const char* line, int len, SynToken* out, int out_len,
+                                 SynState& state) {
     int i = 0;
 
     while (i < len) {
         // ---- Block comment continuation ----
-        if (in_block_comment) {
+        if (state.in_block_comment) {
             while (i < len) {
                 if (i + 1 < len && line[i] == '*' && line[i + 1] == '/') {
-                    out[i] = SYN_COMMENT;
-                    out[i + 1] = SYN_COMMENT;
+                    syn_set_token(out, out_len, i, SYN_COMMENT);
+                    syn_set_token(out, out_len, i + 1, SYN_COMMENT);
                     i += 2;
-                    in_block_comment = false;
+                    state.in_block_comment = false;
                     break;
                 }
-                out[i] = SYN_COMMENT;
+                syn_set_token(out, out_len, i, SYN_COMMENT);
                 i++;
             }
             continue;
@@ -138,15 +280,15 @@ inline void syn_highlight_line(const char* line, int len, SynToken* out, bool& i
 
         // ---- Line comment ----
         if (c == '/' && i + 1 < len && line[i + 1] == '/') {
-            while (i < len) out[i++] = SYN_COMMENT;
+            syn_fill_tokens(out, out_len, i, len, SYN_COMMENT);
             break;
         }
 
         // ---- Block comment start ----
         if (c == '/' && i + 1 < len && line[i + 1] == '*') {
-            in_block_comment = true;
-            out[i] = SYN_COMMENT;
-            out[i + 1] = SYN_COMMENT;
+            state.in_block_comment = true;
+            syn_set_token(out, out_len, i, SYN_COMMENT);
+            syn_set_token(out, out_len, i + 1, SYN_COMMENT);
             i += 2;
             continue;
         }
@@ -162,30 +304,30 @@ inline void syn_highlight_line(const char* line, int len, SynToken* out, bool& i
                 while (i < len) {
                     // Handle line-comment inside preprocessor
                     if (i + 1 < len && line[i] == '/' && line[i + 1] == '/') {
-                        while (i < len) out[i++] = SYN_COMMENT;
+                        syn_fill_tokens(out, out_len, i, len, SYN_COMMENT);
                         break;
                     }
                     // Handle block comment start inside preprocessor
                     if (i + 1 < len && line[i] == '/' && line[i + 1] == '*') {
-                        in_block_comment = true;
-                        out[i] = SYN_COMMENT;
-                        out[i + 1] = SYN_COMMENT;
+                        state.in_block_comment = true;
+                        syn_set_token(out, out_len, i, SYN_COMMENT);
+                        syn_set_token(out, out_len, i + 1, SYN_COMMENT);
                         i += 2;
                         // Continue consuming as comment
                         while (i < len) {
                             if (i + 1 < len && line[i] == '*' && line[i + 1] == '/') {
-                                out[i] = SYN_COMMENT;
-                                out[i + 1] = SYN_COMMENT;
+                                syn_set_token(out, out_len, i, SYN_COMMENT);
+                                syn_set_token(out, out_len, i + 1, SYN_COMMENT);
                                 i += 2;
-                                in_block_comment = false;
+                                state.in_block_comment = false;
                                 break;
                             }
-                            out[i] = SYN_COMMENT;
+                            syn_set_token(out, out_len, i, SYN_COMMENT);
                             i++;
                         }
                         continue;
                     }
-                    out[i] = SYN_PREPROCESSOR;
+                    syn_set_token(out, out_len, i, SYN_PREPROCESSOR);
                     i++;
                 }
                 continue;
@@ -194,59 +336,51 @@ inline void syn_highlight_line(const char* line, int len, SynToken* out, bool& i
 
         // ---- String literal ----
         if (c == '"') {
-            out[i++] = SYN_STRING;
+            syn_set_token(out, out_len, i, SYN_STRING);
+            i++;
             while (i < len) {
                 if (line[i] == '\\' && i + 1 < len) {
-                    out[i] = SYN_STRING;
-                    out[i + 1] = SYN_STRING;
+                    syn_set_token(out, out_len, i, SYN_STRING);
+                    syn_set_token(out, out_len, i + 1, SYN_STRING);
                     i += 2;
                     continue;
                 }
                 if (line[i] == '"') {
-                    out[i++] = SYN_STRING;
+                    syn_set_token(out, out_len, i, SYN_STRING);
+                    i++;
                     break;
                 }
-                out[i++] = SYN_STRING;
+                syn_set_token(out, out_len, i, SYN_STRING);
+                i++;
             }
             continue;
         }
 
         // ---- Character literal ----
         if (c == '\'') {
-            out[i++] = SYN_CHAR;
+            syn_set_token(out, out_len, i, SYN_CHAR);
+            i++;
             while (i < len) {
                 if (line[i] == '\\' && i + 1 < len) {
-                    out[i] = SYN_CHAR;
-                    out[i + 1] = SYN_CHAR;
+                    syn_set_token(out, out_len, i, SYN_CHAR);
+                    syn_set_token(out, out_len, i + 1, SYN_CHAR);
                     i += 2;
                     continue;
                 }
                 if (line[i] == '\'') {
-                    out[i++] = SYN_CHAR;
+                    syn_set_token(out, out_len, i, SYN_CHAR);
+                    i++;
                     break;
                 }
-                out[i++] = SYN_CHAR;
+                syn_set_token(out, out_len, i, SYN_CHAR);
+                i++;
             }
             continue;
         }
 
         // ---- Numbers ----
         if (syn_is_digit(c) || (c == '.' && i + 1 < len && syn_is_digit(line[i + 1]))) {
-            // Hex
-            if (c == '0' && i + 1 < len && (line[i + 1] == 'x' || line[i + 1] == 'X')) {
-                out[i] = SYN_NUMBER; out[i + 1] = SYN_NUMBER;
-                i += 2;
-                while (i < len && syn_is_hex(line[i])) out[i++] = SYN_NUMBER;
-            } else {
-                // Decimal / float
-                while (i < len && (syn_is_digit(line[i]) || line[i] == '.'))
-                    out[i++] = SYN_NUMBER;
-            }
-            // Suffixes: u, l, f, etc.
-            while (i < len && (line[i] == 'u' || line[i] == 'U' ||
-                               line[i] == 'l' || line[i] == 'L' ||
-                               line[i] == 'f' || line[i] == 'F'))
-                out[i++] = SYN_NUMBER;
+            syn_consume_number(line, len, i, out, out_len, true);
             continue;
         }
 
@@ -254,8 +388,8 @@ inline void syn_highlight_line(const char* line, int len, SynToken* out, bool& i
         if (syn_is_alpha(c)) {
             int start = i;
             while (i < len && syn_is_alnum(line[i])) i++;
-            SynToken tok = syn_classify_word(line + start, i - start);
-            for (int j = start; j < i; j++) out[j] = tok;
+            SynToken tok = syn_classify_word(SYN_LANG_C, line + start, i - start);
+            syn_fill_tokens(out, out_len, start, i, tok);
             continue;
         }
 
@@ -263,12 +397,125 @@ inline void syn_highlight_line(const char* line, int len, SynToken* out, bool& i
         if (c == '+' || c == '-' || c == '*' || c == '/' || c == '%' ||
             c == '=' || c == '!' || c == '<' || c == '>' || c == '&' ||
             c == '|' || c == '^' || c == '~' || c == '?' || c == ':') {
-            out[i++] = SYN_OPERATOR;
+            syn_set_token(out, out_len, i, SYN_OPERATOR);
+            i++;
             continue;
         }
 
         // ---- Everything else (whitespace, braces, parens, etc.) ----
-        out[i++] = SYN_NORMAL;
+        syn_set_token(out, out_len, i, SYN_NORMAL);
+        i++;
+    }
+}
+
+inline void syn_highlight_line_lua(const char* line, int len, SynToken* out, int out_len,
+                                   SynState& state) {
+    int i = 0;
+
+    while (i < len) {
+        if (state.long_token != SYN_NORMAL) {
+            int span = 0;
+            if (syn_match_lua_long_bracket_close(line, len, i, state.long_bracket_eqs, span)) {
+                syn_fill_tokens(out, out_len, i, i + span, state.long_token);
+                i += span;
+                state.long_token = SYN_NORMAL;
+                state.long_bracket_eqs = -1;
+                continue;
+            }
+            syn_set_token(out, out_len, i, state.long_token);
+            i++;
+            continue;
+        }
+
+        char c = line[i];
+
+        if (c == '-' && i + 1 < len && line[i + 1] == '-') {
+            int eqs = 0;
+            int span = 0;
+            if (i + 2 < len && syn_match_lua_long_bracket_open(line, len, i + 2, eqs, span)) {
+                syn_fill_tokens(out, out_len, i, i + 2 + span, SYN_COMMENT);
+                i += 2 + span;
+                state.long_token = SYN_COMMENT;
+                state.long_bracket_eqs = eqs;
+                continue;
+            }
+            syn_fill_tokens(out, out_len, i, len, SYN_COMMENT);
+            break;
+        }
+
+        if (c == '"' || c == '\'') {
+            char quote = c;
+            syn_set_token(out, out_len, i, SYN_STRING);
+            i++;
+            while (i < len) {
+                if (line[i] == '\\' && i + 1 < len) {
+                    syn_set_token(out, out_len, i, SYN_STRING);
+                    syn_set_token(out, out_len, i + 1, SYN_STRING);
+                    i += 2;
+                    continue;
+                }
+                syn_set_token(out, out_len, i, SYN_STRING);
+                if (line[i] == quote) {
+                    i++;
+                    break;
+                }
+                i++;
+            }
+            continue;
+        }
+
+        int eqs = 0;
+        int span = 0;
+        if (syn_match_lua_long_bracket_open(line, len, i, eqs, span)) {
+            syn_fill_tokens(out, out_len, i, i + span, SYN_STRING);
+            i += span;
+            state.long_token = SYN_STRING;
+            state.long_bracket_eqs = eqs;
+            continue;
+        }
+
+        if (syn_is_digit(c) || (c == '.' && i + 1 < len && syn_is_digit(line[i + 1]))) {
+            syn_consume_number(line, len, i, out, out_len, false);
+            continue;
+        }
+
+        if (syn_is_alpha(c)) {
+            int start = i;
+            while (i < len && syn_is_alnum(line[i])) i++;
+            SynToken tok = syn_classify_word(SYN_LANG_LUA, line + start, i - start);
+            syn_fill_tokens(out, out_len, start, i, tok);
+            continue;
+        }
+
+        if (c == '+' || c == '-' || c == '*' || c == '/' || c == '%' ||
+            c == '^' || c == '#' || c == '=' || c == '<' || c == '>' ||
+            c == '~' || c == ':' || c == '.' || c == ',' || c == ';' ||
+            c == '(' || c == ')' || c == '{' || c == '}' ||
+            c == '[' || c == ']') {
+            syn_set_token(out, out_len, i, SYN_OPERATOR);
+            i++;
+            continue;
+        }
+
+        syn_set_token(out, out_len, i, SYN_NORMAL);
+        i++;
+    }
+}
+
+inline void syn_highlight_line(const char* line, int len, SynToken* out, int out_len,
+                               SynLanguage lang, SynState& state) {
+    if (!line || len <= 0) return;
+
+    switch (lang) {
+    case SYN_LANG_C:
+        syn_highlight_line_c(line, len, out, out_len, state);
+        break;
+    case SYN_LANG_LUA:
+        syn_highlight_line_lua(line, len, out, out_len, state);
+        break;
+    default:
+        syn_fill_tokens(out, out_len, 0, len, SYN_NORMAL);
+        break;
     }
 }
 
@@ -276,12 +523,28 @@ inline void syn_highlight_line(const char* line, int len, SynToken* out, bool& i
 // Extension check
 // ============================================================================
 
-inline bool syn_is_c_file(const char* filepath) {
-    if (!filepath || filepath[0] == '\0') return false;
-    int len = 0;
-    while (filepath[len]) len++;
-    if (len >= 2 && filepath[len - 2] == '.' &&
-        (filepath[len - 1] == 'c' || filepath[len - 1] == 'h'))
-        return true;
-    return false;
+inline bool syn_path_ends_with(const char* path, const char* suffix) {
+    if (!path || !suffix) return false;
+
+    int path_len = 0;
+    while (path[path_len]) path_len++;
+
+    int suffix_len = 0;
+    while (suffix[suffix_len]) suffix_len++;
+
+    if (path_len < suffix_len) return false;
+    for (int i = 0; i < suffix_len; i++) {
+        if (path[path_len - suffix_len + i] != suffix[i])
+            return false;
+    }
+    return true;
+}
+
+inline SynLanguage syn_detect_language(const char* filepath) {
+    if (!filepath || filepath[0] == '\0') return SYN_LANG_NONE;
+    if (syn_path_ends_with(filepath, ".c") || syn_path_ends_with(filepath, ".h"))
+        return SYN_LANG_C;
+    if (syn_path_ends_with(filepath, ".lua"))
+        return SYN_LANG_LUA;
+    return SYN_LANG_NONE;
 }
