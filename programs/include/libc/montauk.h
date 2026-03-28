@@ -198,7 +198,7 @@ typedef struct {
 typedef struct {
     int32_t  pid;
     int32_t  parent_pid;
-    uint8_t  state;     /* 0=Free, 1=Ready, 2=Running, 3=Terminated */
+    uint8_t  state;     /* 0=Free, 1=Ready, 2=Running, 3=Blocked, 4=Terminated */
     uint8_t  _pad[3];
     char     name[64];
     uint64_t heap_used;
