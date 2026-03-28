@@ -339,30 +339,40 @@ extern "C" void _start() {
         if (g_should_exit) break;
 
         Montauk::WinEvent ev;
-        int r = g_win.poll(&ev);
-        if (r < 0) break;
+        bool quit = false;
+        int r = 0;
 
-        if (r == 0) {
-            if (redraw && term_render())
-                g_win.present();
-            montauk::sleep_ms(16);
-            continue;
+        while ((r = g_win.poll(&ev)) > 0) {
+            redraw = true;
+
+            if (ev.type == 3) {
+                quit = true;
+                break;
+            }
+
+            if (ev.type == 0) {
+                term_handle_key(ev.key);
+            } else if (ev.type == 1) {
+                term_handle_mouse(ev);
+            } else if (ev.type == 2 || ev.type == 4) {
+                term_request_redraw();
+                if (g_tabs.tab_count > 0)
+                    g_tabs.tabs[g_tabs.active_tab]->dirty = true;
+            }
+
+            if (g_should_exit) {
+                quit = true;
+                break;
+            }
         }
 
-        if (ev.type == 3) break;
+        if (r < 0 || quit) break;
 
-        if (ev.type == 0) {
-            term_handle_key(ev.key);
-        } else if (ev.type == 1) {
-            term_handle_mouse(ev);
-        } else if (ev.type == 2 || ev.type == 4) {
-            term_request_redraw();
-            if (g_tabs.tab_count > 0)
-                g_tabs.tabs[g_tabs.active_tab]->dirty = true;
-        }
-
-        if (!g_should_exit && term_render())
+        if (redraw && term_render())
             g_win.present();
+
+        if (r == 0)
+            montauk::sleep_ms(16);
     }
 
     term_cleanup();

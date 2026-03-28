@@ -193,26 +193,31 @@ extern "C" void _start() {
         bool redraw = klog_poll();
 
         Montauk::WinEvent ev;
-        int r = g_win.poll(&ev);
-        if (r < 0) break;
+        bool quit = false;
+        int r = 0;
 
-        if (r == 0) {
-            if (redraw && klog_render())
-                g_win.present();
-            montauk::sleep_ms(16);
-            continue;
+        while ((r = g_win.poll(&ev)) > 0) {
+            redraw = true;
+
+            if (ev.type == 3) {
+                quit = true;
+                break;
+            }
+
+            if (ev.type == 1) {
+                klog_handle_mouse(ev);
+            } else if (ev.type == 2 || ev.type == 4) {
+                g_klog.term.dirty = true;
+            }
         }
 
-        if (ev.type == 3) break;
+        if (r < 0 || quit) break;
 
-        if (ev.type == 1) {
-            klog_handle_mouse(ev);
-        } else if (ev.type == 2 || ev.type == 4) {
-            g_klog.term.dirty = true;
-        }
-
-        if (klog_render())
+        if (redraw && klog_render())
             g_win.present();
+
+        if (r == 0)
+            montauk::sleep_ms(16);
     }
 
     klog_cleanup();
