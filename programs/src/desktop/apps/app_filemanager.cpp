@@ -159,10 +159,6 @@ static bool is_wordprocessor_file(const char* name) {
     return str_ends_with(name, ".mwp");
 }
 
-static bool is_video_file(const char* name) {
-    return str_ends_with(name, ".mp4") || str_ends_with(name, ".m4v");
-}
-
 static bool is_audio_file(const char* name) {
     return str_ends_with(name, ".mp3") || str_ends_with(name, ".wav");
 }
@@ -1081,8 +1077,6 @@ static void filemanager_open_entry(FileManagerState* fm, int idx) {
         montauk::spawn("0:/apps/spreadsheet/spreadsheet.elf", fullpath);
     } else if (is_wordprocessor_file(fm->entry_names[idx])) {
         montauk::spawn("0:/apps/wordprocessor/wordprocessor.elf", fullpath);
-    } else if (is_video_file(fm->entry_names[idx])) {
-        montauk::spawn("0:/apps/video/video.elf", fullpath);
     } else if (is_audio_file(fm->entry_names[idx])) {
         montauk::spawn("0:/apps/music/music.elf", fullpath);
     } else if (str_ends_with(fm->entry_names[idx], ".elf")) {
