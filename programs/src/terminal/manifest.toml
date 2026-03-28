@@ -1,0 +1,11 @@
+[app]
+name = "Terminal"
+binary = "terminal.elf"
+icon = "utilities-terminal.svg"
+
+[menu]
+category = "Applications"
+visible = true
+
+[launch]
+pass_home_dir = true

@@ -59,7 +59,7 @@ BINDIR := bin
 PROGRAMS := $(notdir $(wildcard src/*))
 
 # Programs with custom Makefiles (built separately).
-CUSTOM_BUILDS := doom fetch wiki wikipedia weather imageviewer fontpreview spreadsheet wordprocessor pdfviewer disks devexplorer installer volume music bluetooth desktop login shell rpgdemo paint tcc lua screenshot texteditor
+CUSTOM_BUILDS := doom fetch wiki wikipedia weather imageviewer fontpreview spreadsheet wordprocessor pdfviewer disks devexplorer installer volume music bluetooth terminal klog desktop login shell rpgdemo paint tcc lua screenshot texteditor
 SYSTEM_PROGRAMS := $(filter-out $(CUSTOM_BUILDS),$(PROGRAMS))
 
 # Build targets: system programs go to bin/os/, apps go to bin/apps/<name>/.
@@ -81,9 +81,9 @@ CA_CERTS := $(BINDIR)/etc/ca-certificates.crt
 # Common shared assets (wallpapers, etc.)
 COMMONKEEP := $(BINDIR)/common/.keep
 
-.PHONY: all clean doom fetch wiki wikipedia weather imageviewer fontpreview spreadsheet wordprocessor pdfviewer disks devexplorer installer volume music bluetooth login desktop shell rpgdemo paint tcc lua screenshot texteditor icons fonts bearssl libc tls libjpeg libjpegwrite install-apps
+.PHONY: all clean doom fetch wiki wikipedia weather imageviewer fontpreview spreadsheet wordprocessor pdfviewer disks devexplorer installer volume music bluetooth terminal klog login desktop shell rpgdemo paint tcc lua screenshot texteditor icons fonts bearssl libc tls libjpeg libjpegwrite install-apps
 
-all: bearssl libc libjpeg libjpegwrite tls $(TARGETS) fetch wiki wikipedia weather imageviewer fontpreview spreadsheet wordprocessor pdfviewer disks devexplorer installer volume music bluetooth doom rpgdemo paint tcc lua screenshot texteditor login desktop shell icons fonts install-apps $(MANDST) $(WWWDST) $(CA_CERTS) $(COMMONKEEP)
+all: bearssl libc libjpeg libjpegwrite tls $(TARGETS) fetch wiki wikipedia weather imageviewer fontpreview spreadsheet wordprocessor pdfviewer disks devexplorer installer volume music bluetooth terminal klog doom rpgdemo paint tcc lua screenshot texteditor login desktop shell icons fonts install-apps $(MANDST) $(WWWDST) $(CA_CERTS) $(COMMONKEEP)
 
 # Build BearSSL static library (cross-compiled for freestanding x86_64).
 BEARSSL_INCLUDES := -isystem $(shell cd .. && pwd)/kernel/freestnd-c-hdrs/x86_64/include -isystem $(abspath include/libc)
@@ -172,6 +172,14 @@ music: libc
 bluetooth: libc
 	$(MAKE) -C src/bluetooth
 
+# Build terminal standalone GUI tool (depends on libc).
+terminal: libc
+	$(MAKE) -C src/terminal
+
+# Build kernel log standalone GUI tool (depends on libc).
+klog: libc
+	$(MAKE) -C src/klog
+
 # Build login screen via its own Makefile (depends on bearssl and libc).
 login: bearssl libc
 	$(MAKE) -C src/login
@@ -226,7 +234,7 @@ lua: libc
 	$(MAKE) -C src/lua
 
 # Install app bundles (manifests, icons, data files) into bin/apps/<name>/.
-install-apps: doom rpgdemo paint spreadsheet wordprocessor weather wikipedia imageviewer fontpreview pdfviewer disks devexplorer installer volume music bluetooth screenshot texteditor
+install-apps: doom rpgdemo paint spreadsheet wordprocessor weather wikipedia imageviewer fontpreview pdfviewer disks devexplorer installer volume music bluetooth terminal klog screenshot texteditor
 	../scripts/install_apps.sh
 
 # Copy man pages into bin/man/ so mkramdisk.sh picks them up.
@@ -280,6 +288,8 @@ clean:
 	$(MAKE) -C src/volume clean
 	$(MAKE) -C src/music clean
 	$(MAKE) -C src/bluetooth clean
+	$(MAKE) -C src/terminal clean
+	$(MAKE) -C src/klog clean
 	$(MAKE) -C src/paint clean
 	$(MAKE) -C src/rpgdemo clean
 	$(MAKE) -C src/screenshot clean

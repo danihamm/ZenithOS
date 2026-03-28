@@ -1,0 +1,11 @@
+[app]
+name = "Kernel Log"
+binary = "klog.elf"
+icon = "utilities-terminal.svg"
+
+[menu]
+category = "System"
+visible = true
+
+[launch]
+pass_home_dir = false

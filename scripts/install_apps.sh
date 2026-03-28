@@ -30,6 +30,8 @@ APPS=(
     "music|apps/scalable/audio-player.svg"
     "video|apps/scalable/multimedia-video-player.svg"
     "bluetooth|apps/scalable/bluetooth.svg"
+    "terminal|apps/scalable/utilities-terminal.svg"
+    "klog|apps/scalable/utilities-terminal.svg"
     "rpgdemo|apps/scalable/utilities-terminal.svg"
     "paint|apps/scalable/kolourpaint.svg"
     "screenshot|apps/scalable/gnome-screenshot.svg"
