@@ -339,8 +339,11 @@ void gui::desktop_handle_mouse(DesktopState* ds) {
                         menu_cat_expanded[cur_cat] = !menu_cat_expanded[cur_cat];
                     } else if (!row.is_category) {
                         if (row.external) {
-                            // Launch external app with user's home dir
-                            montauk::spawn(row.binary_path, ds->home_dir);
+                            if (row.launch_with_home) {
+                                montauk::spawn(row.binary_path, ds->home_dir);
+                            } else {
+                                montauk::spawn(row.binary_path);
+                            }
                         } else {
                             // Dispatch embedded app
                             switch (row.app_id) {

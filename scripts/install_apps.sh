@@ -33,6 +33,7 @@ APPS=(
     "rpgdemo|apps/scalable/utilities-terminal.svg"
     "paint|apps/scalable/kolourpaint.svg"
     "screenshot|apps/scalable/gnome-screenshot.svg"
+    "texteditor|apps/scalable/accessories-text-editor.svg"
 )
 
 installed=0

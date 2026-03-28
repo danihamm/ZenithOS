@@ -26,6 +26,7 @@ struct ExternalApp {
     char category[24];
     SvgIcon icon;
     bool menu_visible;
+    bool launch_with_home;
 };
 
 struct DesktopSettings {
@@ -81,7 +82,6 @@ struct DesktopState {
     SvgIcon icon_computer;
     SvgIcon icon_network;
     SvgIcon icon_calculator;
-    SvgIcon icon_texteditor;
     SvgIcon icon_go_up;
     SvgIcon icon_go_back;
     SvgIcon icon_go_forward;

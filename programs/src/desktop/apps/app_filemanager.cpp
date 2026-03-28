@@ -1028,7 +1028,12 @@ static void filemanager_open_entry(FileManagerState* fm, int idx) {
     if (fm->at_apps_view && fm->entry_types[idx] == 6) {
         DesktopState* ds = fm->desktop;
         if (ds && fm->app_map[idx] >= 0 && fm->app_map[idx] < ds->external_app_count) {
-            montauk::spawn(ds->external_apps[fm->app_map[idx]].binary_path, ds->home_dir);
+            const ExternalApp& app = ds->external_apps[fm->app_map[idx]];
+            if (app.launch_with_home) {
+                montauk::spawn(app.binary_path, ds->home_dir);
+            } else {
+                montauk::spawn(app.binary_path);
+            }
         }
         return;
     }

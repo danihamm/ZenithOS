@@ -1,0 +1,11 @@
+[app]
+name = "Text Editor"
+binary = "texteditor.elf"
+icon = "texteditor.svg"
+
+[menu]
+category = "Applications"
+visible = true
+
+[launch]
+pass_home_dir = false

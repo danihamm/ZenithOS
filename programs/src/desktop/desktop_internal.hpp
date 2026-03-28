@@ -25,6 +25,7 @@ struct MenuRow {
     int  app_id;            // embedded dispatch ID, or -1 for categories/dividers
     bool external;          // true = spawn binary_path
     char binary_path[128];  // full VFS path for external apps
+    bool launch_with_home;  // true = pass home_dir as first argument
     SvgIcon* icon;          // loaded menu icon (null for categories/dividers)
 };
 
@@ -76,6 +77,7 @@ inline int menu_add_category(const char* label) {
     r.app_id = -1;
     r.external = false;
     r.binary_path[0] = '\0';
+    r.launch_with_home = false;
     r.icon = nullptr;
     return menu_row_count - 1;
 }
@@ -88,11 +90,12 @@ inline int menu_add_embedded(const char* label, int app_id, SvgIcon* icon) {
     r.app_id = app_id;
     r.external = false;
     r.binary_path[0] = '\0';
+    r.launch_with_home = false;
     r.icon = icon;
     return menu_row_count - 1;
 }
 
-inline int menu_add_external(const char* label, const char* binary, SvgIcon* icon) {
+inline int menu_add_external(const char* label, const char* binary, SvgIcon* icon, bool launch_with_home) {
     if (menu_row_count >= MAX_MENU_ROWS) return -1;
     MenuRow& r = menu_rows[menu_row_count++];
     r.is_category = false;
@@ -100,6 +103,7 @@ inline int menu_add_external(const char* label, const char* binary, SvgIcon* ico
     r.app_id = -1;
     r.external = true;
     montauk::strncpy(r.binary_path, binary, sizeof(r.binary_path));
+    r.launch_with_home = launch_with_home;
     r.icon = icon;
     return menu_row_count - 1;
 }
