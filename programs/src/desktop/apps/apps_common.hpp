@@ -156,7 +156,7 @@ inline void format_size(char* buf, int size) {
 }
 
 // ============================================================================
-// Forward declarations for app launchers (embedded apps only)
+// Forward declarations for desktop launch entry points
 // ============================================================================
 
 void open_terminal(DesktopState* ds);
@@ -164,10 +164,7 @@ void open_filemanager(DesktopState* ds);
 void open_sysinfo(DesktopState* ds);
 void open_calculator(DesktopState* ds);
 void open_texteditor(DesktopState* ds);
-void open_texteditor_with_file(DesktopState* ds, const char* path);
 void open_klog(DesktopState* ds);
-void open_procmgr(DesktopState* ds);
-void open_mandelbrot(DesktopState* ds);
 void open_settings(DesktopState* ds);
 void open_reboot_dialog(DesktopState* ds);
 void open_wordprocessor(DesktopState* ds);

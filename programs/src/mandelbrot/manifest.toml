@@ -1,0 +1,11 @@
+[app]
+name = "Mandelbrot"
+binary = "mandelbrot.elf"
+icon = "applications-science.svg"
+
+[menu]
+category = "Games"
+visible = true
+
+[launch]
+pass_home_dir = false

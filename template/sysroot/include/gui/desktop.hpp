@@ -17,7 +17,7 @@ namespace gui {
 
 static constexpr int MAX_WINDOWS = 8;
 static constexpr int PANEL_HEIGHT = 32;
-static constexpr int MAX_EXTERNAL_APPS = 16;
+static constexpr int MAX_EXTERNAL_APPS = 32;
 
 // External app discovered from 0:/apps/ manifest
 struct ExternalApp {
@@ -79,16 +79,13 @@ struct DesktopState {
     SvgIcon icon_appmenu;
     SvgIcon icon_folder;
     SvgIcon icon_file;
-    SvgIcon icon_computer;
     SvgIcon icon_network;
     SvgIcon icon_calculator;
     SvgIcon icon_go_up;
     SvgIcon icon_go_back;
     SvgIcon icon_go_forward;
-    SvgIcon icon_save;
     SvgIcon icon_home;
     SvgIcon icon_exec;
-    SvgIcon icon_wikipedia;
 
     SvgIcon icon_folder_lg;
     SvgIcon icon_file_lg;
@@ -100,10 +97,9 @@ struct DesktopState {
     SvgIcon icon_settings;
     SvgIcon icon_reboot;
     SvgIcon icon_shutdown;
+    SvgIcon icon_sleep;
     SvgIcon icon_logout;
 
-    SvgIcon icon_procmgr;
-    SvgIcon icon_mandelbrot;
     SvgIcon icon_volume;
 
     // External apps discovered from 0:/apps/ manifests

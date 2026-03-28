@@ -32,10 +32,12 @@ APPS=(
     "bluetooth|apps/scalable/bluetooth.svg"
     "terminal|apps/scalable/utilities-terminal.svg"
     "klog|apps/scalable/utilities-terminal.svg"
+    "procmgr|apps/scalable/system-monitor.svg"
     "rpgdemo|apps/scalable/utilities-terminal.svg"
     "paint|apps/scalable/kolourpaint.svg"
     "screenshot|apps/scalable/gnome-screenshot.svg"
     "texteditor|apps/scalable/accessories-text-editor.svg"
+    "mandelbrot|apps/scalable/applications-science.svg"
 )
 
 installed=0

@@ -345,16 +345,11 @@ void gui::desktop_handle_mouse(DesktopState* ds) {
                                 montauk::spawn(row.binary_path);
                             }
                         } else {
-                            // Dispatch embedded app
+                            // Dispatch desktop-owned launcher entry
                             switch (row.app_id) {
-                            case 0:  open_terminal(ds); break;
                             case 1:  open_filemanager(ds); break;
                             case 2:  open_sysinfo(ds); break;
                             case 3:  open_calculator(ds); break;
-                            case 4:  open_texteditor(ds); break;
-                            case 5:  open_klog(ds); break;
-                            case 6:  open_procmgr(ds); break;
-                            case 7:  open_mandelbrot(ds); break;
                             case 11: open_settings(ds); break;
                             case 12: open_reboot_dialog(ds); break;
                             case 14: open_shutdown_dialog(ds); break;

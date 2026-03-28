@@ -119,8 +119,6 @@ static const EmbeddedAppDef embedded_apps[] = {
     { "Files",           1,  0 },
     { "Calculator",      3,  0 },
     { "System Info",     2,  2 },
-    { "Processes",       6,  2 },
-    { "Mandelbrot",      7,  3 },
 };
 
 static constexpr int NUM_EMBEDDED = sizeof(embedded_apps) / sizeof(embedded_apps[0]);
@@ -131,8 +129,6 @@ static SvgIcon* icon_for_embedded(DesktopState* ds, int app_id) {
     case 1:  return &ds->icon_filemanager;
     case 2:  return &ds->icon_sysinfo;
     case 3:  return &ds->icon_calculator;
-    case 6:  return &ds->icon_procmgr;
-    case 7:  return &ds->icon_mandelbrot;
     default: return nullptr;
     }
 }
@@ -203,16 +199,13 @@ void gui::desktop_init(DesktopState* ds) {
     ds->icon_appmenu     = svg_load("0:/icons/view-app-grid-symbolic.svg",   20, 20, colors::PANEL_TEXT);
     ds->icon_folder      = svg_load("0:/icons/folder.svg",                   16, 16, defColor);
     ds->icon_file        = svg_load("0:/icons/text-x-generic.svg",           16, 16, defColor);
-    ds->icon_computer    = svg_load("0:/icons/computer.svg",                 20, 20, defColor);
     ds->icon_network     = svg_load("0:/icons/network-wired-symbolic.svg",   16, 16, colors::PANEL_TEXT);
     ds->icon_calculator  = svg_load("0:/icons/accessories-calculator.svg",   20, 20, defColor);
     ds->icon_go_up       = svg_load("0:/icons/go-up-symbolic.svg",           16, 16, defColor);
     ds->icon_go_back     = svg_load("0:/icons/go-previous-symbolic.svg",     16, 16, defColor);
     ds->icon_go_forward  = svg_load("0:/icons/go-next-symbolic.svg",         16, 16, defColor);
-    ds->icon_save        = svg_load("0:/icons/document-save-symbolic.svg",   16, 16, defColor);
     ds->icon_home        = svg_load("0:/icons/user-home.svg",                16, 16, defColor);
     ds->icon_exec        = svg_load("0:/icons/utilities-terminal.svg",        16, 16, defColor);
-    ds->icon_wikipedia   = svg_load("0:/icons/web-browser.svg",              20, 20, defColor);
 
     ds->icon_folder_lg = svg_load("0:/icons/folder.svg",                   48, 48, defColor);
     ds->icon_file_lg   = svg_load("0:/icons/text-x-generic.svg",           48, 48, defColor);
@@ -225,10 +218,8 @@ void gui::desktop_init(DesktopState* ds) {
     ds->icon_sleep    = svg_load("0:/icons/sleep.svg", 20, 20, defColor);
     ds->icon_logout   = svg_load("0:/icons/gnome-logout.svg",    20, 20, defColor);
 
-    ds->icon_procmgr    = svg_load("0:/icons/system-monitor.svg",        20, 20, defColor);
-    ds->icon_mandelbrot = svg_load("0:/icons/applications-science.svg",  20, 20, defColor);
-    ds->icon_volume     = svg_load("0:/icons/audio-volume-high-symbolic.svg", 16, 16, colors::PANEL_TEXT);
-    ds->icon_lock       = svg_load("0:/icons/lock.svg",                  20, 20, defColor);
+    ds->icon_volume   = svg_load("0:/icons/audio-volume-high-symbolic.svg", 16, 16, colors::PANEL_TEXT);
+    ds->icon_lock     = svg_load("0:/icons/lock.svg",                    20, 20, defColor);
 
     // Scan 0:/apps/ for external app manifests and build the menu
     desktop_scan_apps(ds);

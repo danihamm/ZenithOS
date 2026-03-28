@@ -1,0 +1,11 @@
+[app]
+name = "Processes"
+binary = "procmgr.elf"
+icon = "system-monitor.svg"
+
+[menu]
+category = "System"
+visible = true
+
+[launch]
+pass_home_dir = false
